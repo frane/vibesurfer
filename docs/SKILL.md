@@ -1,24 +1,18 @@
-# Agent bootstrap (placeholder)
+# Skill
 
-> This file is the agent's bootstrap — the < 600-token primer that
-> teaches a fresh agent how to talk to vibesurfer. The full draft lands
-> in milestone **M6**, after the protocol and primitives are real and
-> exercised end-to-end.
->
-> Until then, agents reading this file should consult
-> [`PROTOCOL.md`](PROTOCOL.md), [`PRIMITIVES.md`](PRIMITIVES.md), and
-> [`codes.md`](codes.md) directly.
+The skill that gets installed into every detected agent by `vs skill install` lives at:
 
-The M6 SKILL.md will cover, in this order:
+[`skills/vibesurfer/SKILL.md`](../skills/vibesurfer/SKILL.md)
 
-1. Envelope sigils — `@`, `!`, `?`.
-2. Tree format — indentation, role codes, label quoting.
-3. Five delta operations with one example each.
-4. The 19 primitives with one-line signatures.
-5. Viewport presets table.
-6. Wait conditions.
-7. Common error and warning codes.
-8. One worked example end-to-end (login, click, capture).
+That file is the single source of truth — it's what the agent reads, and it's the file `vs skill install` writes (verbatim) into each agent's conventional skill location:
 
-The 600-token budget is a forcing function: if the protocol doesn't fit,
-it is too complex and we redesign before shipping.
+| Agent | Path |
+|---|---|
+| Claude Code | `~/.claude/skills/vibesurfer/SKILL.md` |
+| Codex CLI | `~/.codex/skills/vibesurfer/SKILL.md` |
+| Cursor | `<workspace>/.cursor/skills/vibesurfer/SKILL.md` |
+| Gemini | `~/.gemini/extensions/vibesurfer/GEMINI.md` (renamed) |
+| OpenClaw | `~/.openclaw/workspace/skills/vibesurfer/SKILL.md` |
+| Canonical | `~/.agents/skills/vibesurfer/SKILL.md` |
+
+The same `vs skill install` call also writes an `mcpServers.vibesurfer = {command: "vs", args: ["mcp"]}` entry into each agent's MCP config (`.claude.json`, `~/.codex/config.toml`, `<workspace>/.cursor/mcp.json`, `~/.gemini/settings.json`, `Library/Application Support/Claude/claude_desktop_config.json` on macOS) so the agent can talk to vibesurfer over MCP as well as via the SKILL.md.

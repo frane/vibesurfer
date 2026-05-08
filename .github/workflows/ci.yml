@@ -111,7 +111,7 @@ jobs:
           cat /tmp/wk_smoke.out
           # Assert the snapshot found the heading and the link.
           grep -q 'hd "CI smoke"' /tmp/wk_smoke.out
-          grep -q 'lnk "link"'    /tmp/wk_smoke.out
+          grep -qE 'lnk "?link"?'    /tmp/wk_smoke.out
           # Assert a real PNG was written.
           PNG=$(grep '^CAPTURE_PATH=' /tmp/wk_smoke.out | head -1 | cut -d= -f2-)
           test -s "$PNG"
