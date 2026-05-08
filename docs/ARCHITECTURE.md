@@ -30,9 +30,11 @@ between them is documented separately in [`PROTOCOL.md`](PROTOCOL.md).
 
 - One binary, one subcommand per primitive. Reads `~/.vibesurfer/active-session`
   to find the current session id (override with `--session=<id>`).
-- On invocation, checks for `~/.vibesurfer/daemon.sock`. If missing, spawns
-  `vibesurferd` (double-fork detached), waits up to 2s, prints
-  `! DAEMON_START_FAILED` on timeout.
+- On invocation, probes the daemon's local socket. If unreachable, spawns
+  `vs serve` (detached), waits up to 2s, prints `! DAEMON_START_FAILED`
+  on timeout. Transport is AF_UNIX (`~/.vibesurfer/daemon.sock`) on Unix
+  and a Windows named pipe on Windows; the CLI resolves either from the
+  same path.
 - Default output is the line protocol from [`PROTOCOL.md`](PROTOCOL.md).
   `--json` switches to JSON for humans/debugging; agents never use this.
 - Exit codes: `0` success, `1` error envelope, `2` warnings + success.
@@ -116,7 +118,7 @@ or vice versa.
 
 ```
 ~/.vibesurfer/
-  daemon.sock           # the IPC socket
+  daemon.sock           # the IPC socket (Unix only; Windows uses a namespaced pipe)
   active-session        # one-line file with the active session id
   state.db              # SQLite, WAL mode
   state.db-wal

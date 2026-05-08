@@ -36,7 +36,7 @@ interface any future MCP shim translates to.
 
 ## Framing
 
-- Transport: Unix domain socket at `~/.vibesurfer/daemon.sock`.
+- Transport: AF_UNIX socket at `~/.vibesurfer/daemon.sock` on Unix; a Windows named pipe on Windows. The CLI resolves either from the same `Path`.
 - Encoding: UTF-8.
 - Line terminator: `\n` (LF). No `\r\n`.
 - Request: a single line.
