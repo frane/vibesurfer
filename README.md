@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://github.com/frane/vibesurfer/actions/workflows/ci.yml"><img alt="ci" src="https://img.shields.io/github/actions/workflow/status/frane/vibesurfer/ci.yml?branch=main&label=ci&style=flat-square"></a>
-  <a href="https://github.com/frane/vibesurfer/actions/workflows/m6.yml"><img alt="m6" src="https://img.shields.io/github/actions/workflow/status/frane/vibesurfer/m6.yml?branch=main&label=m6&style=flat-square"></a>
+  <a href="https://github.com/frane/vibesurfer/actions/workflows/engine-tests.yml"><img alt="engine-tests" src="https://img.shields.io/github/actions/workflow/status/frane/vibesurfer/engine-tests.yml?branch=main&label=engine-tests&style=flat-square"></a>
   <a href="https://github.com/frane/vibesurfer/blob/main/LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"></a>
 </p>
 
@@ -139,7 +139,7 @@ cargo test --workspace --lib --bins        # fast unit tests
 cargo test --workspace                     # adds integration tests (real engine)
 ```
 
-For Linux engine tests on a non-Linux host, use the Docker container. WebKitGTK 6's sandbox needs unprivileged user namespaces, which the bare GitHub runners restrict; the M6 Linux job in CI runs the same container with `--privileged`:
+For Linux engine tests on a non-Linux host, use the Docker container. WebKitGTK 6's sandbox needs unprivileged user namespaces, which the bare GitHub runners restrict; the engine-tests Linux job in CI runs the same container with `--privileged`:
 
 ```
 docker build -f Dockerfile.linux-test -t vs-test-linux .

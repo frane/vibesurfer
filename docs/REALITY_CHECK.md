@@ -112,7 +112,7 @@ docker run --rm --privileged \
 Code, tests, and CI workflow all shipped. The Windows column stays
 at `pending-manual-verification` because the M6 work was authored on
 a macOS host with no access to a Windows machine. The full M6 suite
-runs on `windows-latest` via `.github/workflows/m6.yml` (the
+runs on `windows-latest` via `.github/workflows/engine-tests.yml` (the
 `continue-on-error: true` job lets the matrix surface failures
 without blocking PRs); a green run there + a manual confirmation
 flips the column to `yes`.
@@ -139,7 +139,7 @@ What's in place:
   `Backend::Windows::available_on_current_platform()` returns
   `cfg!(target_os = "windows")` so the existing 48 cell tests
   activate on the Windows runner.
-- `.github/workflows/m6.yml` — three-job matrix (mac native, linux
+- `.github/workflows/engine-tests.yml` — three-job matrix (mac native, linux
   docker, windows native). Mac + Linux are required; Windows has
   `continue-on-error: true` per the policy above.
 

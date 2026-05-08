@@ -48,7 +48,7 @@ jobs:
 
   test:
     # Unit + non-engine integration tests on macOS. Engine-driven
-    # cells (`crates/vs-cli/tests/m6/`) live in `m6.yml`, which has
+    # cells live in `engine-tests.yml`, which has
     # the full three-OS matrix against real WebKit / WebKitGTK /
     # WebView2 — running those here would just duplicate flaky
     # real-engine signals.

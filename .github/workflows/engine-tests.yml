@@ -1,4 +1,4 @@
-name: m6
+name: engine-tests
 
 # Three-runner matrix that walks every M6 cell against a real
 # browser engine on its native platform. Mac + Linux must be green
