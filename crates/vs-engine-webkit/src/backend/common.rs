@@ -350,7 +350,10 @@ where
         .ok_or_else(|| EngineError::Other("expected array".into()))?;
     let mut out = Vec::with_capacity(arr.len());
     for entry in arr {
-        let r_v = entry.get("r").and_then(serde_json::Value::as_u64).unwrap_or(0);
+        let r_v = entry
+            .get("r")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
         let r = Ref(u32::try_from(r_v).unwrap_or(0));
         let found = entry
             .get("found")
@@ -361,10 +364,22 @@ where
         }
         out.push(LayoutBox {
             r,
-            x: entry.get("x").and_then(serde_json::Value::as_f64).unwrap_or(0.0),
-            y: entry.get("y").and_then(serde_json::Value::as_f64).unwrap_or(0.0),
-            width: entry.get("w").and_then(serde_json::Value::as_f64).unwrap_or(0.0),
-            height: entry.get("h").and_then(serde_json::Value::as_f64).unwrap_or(0.0),
+            x: entry
+                .get("x")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.0),
+            y: entry
+                .get("y")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.0),
+            width: entry
+                .get("w")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.0),
+            height: entry
+                .get("h")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.0),
             visible: entry
                 .get("visible")
                 .and_then(serde_json::Value::as_bool)

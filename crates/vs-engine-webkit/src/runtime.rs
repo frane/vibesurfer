@@ -342,7 +342,11 @@ mod tests {
             Ok(())
         }
         fn snapshot(&mut self, _page: PageHandle) -> EngineResult<Tree> {
-            Ok(Tree::from_root(Node::leaf(Ref(1), Role::Doc, &self.last_url)))
+            Ok(Tree::from_root(Node::leaf(
+                Ref(1),
+                Role::Doc,
+                &self.last_url,
+            )))
         }
         fn act(&mut self, _: PageHandle, _: ActTarget, _: Action) -> EngineResult<()> {
             Ok(())
@@ -442,9 +446,7 @@ mod tests {
         rt.act(
             page,
             ActTarget::Ref(Ref(3)),
-            Action::Fill {
-                value: "x".into(),
-            },
+            Action::Fill { value: "x".into() },
         )
         .unwrap();
         let auth = rt.save_auth(page).unwrap();

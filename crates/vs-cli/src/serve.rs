@@ -309,7 +309,6 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     Ok(())
 }
 
-
 fn init_tracing() {
     if tracing::dispatcher::has_been_set() {
         return;
