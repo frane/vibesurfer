@@ -56,7 +56,6 @@ pub fn is_listening(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
 
     #[test]
     fn is_listening_false_for_missing_path() {
@@ -126,7 +125,7 @@ mod tests {
     #[test]
     fn local_socket_round_trip() {
         use interprocess::local_socket::{prelude::*, ListenerOptions, Stream};
-        use std::io::BufRead;
+        use std::io::{BufRead, Write};
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("rt.sock");
