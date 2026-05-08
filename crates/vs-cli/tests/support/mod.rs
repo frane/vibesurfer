@@ -105,7 +105,7 @@ pub fn spawn_daemon_with_env(home: &Path, env: &[(&str, &str)]) -> DaemonGuard {
     let socket = home.join("daemon.sock");
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
-        if socket.exists() {
+        if vs_daemon::transport::is_listening(&socket) {
             return guard;
         }
         std::thread::sleep(Duration::from_millis(50));
