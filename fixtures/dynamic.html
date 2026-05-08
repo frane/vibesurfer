@@ -7,37 +7,51 @@
 <body>
   <main>
     <h1>Dynamic page</h1>
-    <p id="anchor">Initial state. Mutations fire on a known schedule.</p>
+    <p id="anchor">Initial state. Click "Run mutations" to schedule changes.</p>
     <ul id="watch-list">
-      <li id="initial-item">initial item — gone after 200ms</li>
+      <li id="initial-item">initial item — gone shortly after click</li>
     </ul>
+    <button id="trigger">Run mutations</button>
   </main>
   <script>
-    // 100ms: add a new element with a known id.
-    setTimeout(function() {
-      var li = document.createElement('li');
-      li.id = 'late-item';
-      li.textContent = 'late arrival';
-      document.getElementById('watch-list').appendChild(li);
-      console.log('dynamic: late-item added');
-    }, 100);
+    // Mutations are click-driven, not load-driven. The previous
+    // load-timer design raced cold WK init on slow CI runners: by
+    // the time `vs view` fired its snapshot, a 200ms `setTimeout`
+    // had already removed the element the test expected to find.
+    // Click-driven mutations are deterministic relative to test
+    // progression — the test calls `vs act <btn> click` and then
+    // `vs wait`, with no race between page-load and view.
+    document.getElementById('trigger').addEventListener('click', function() {
+      // 50ms: add a new element with a known id.
+      setTimeout(function() {
+        var li = document.createElement('li');
+        li.id = 'late-item';
+        li.textContent = 'late arrival';
+        document.getElementById('watch-list').appendChild(li);
+        console.log('dynamic: late-item added');
+      }, 50);
 
-    // 200ms: remove the initial element.
-    setTimeout(function() {
-      var el = document.getElementById('initial-item');
-      if (el) el.remove();
-      console.log('dynamic: initial-item removed');
-    }, 200);
+      // 1000ms: remove the initial element. The relatively long
+      // delay gives the engine's MutationObserver (installed on the
+      // first `wait token-change` poll, which races the engine's
+      // main-thread queue against the test's act → wait sequence)
+      // reliable headroom to land before the mutation fires.
+      setTimeout(function() {
+        var el = document.getElementById('initial-item');
+        if (el) el.remove();
+        console.log('dynamic: initial-item removed');
+      }, 1000);
 
-    // 300ms: emit a fetch so net-idle waits have something to settle.
-    setTimeout(function() {
-      fetch('/echo?dynamic=1')
-        .then(function(r) { return r.text(); })
-        .then(function(t) { console.log('dynamic: fetch ok', t.length); });
-    }, 300);
+      // 150ms: emit a fetch so net-idle waits have something to settle.
+      setTimeout(function() {
+        fetch('/echo?dynamic=1')
+          .then(function(r) { return r.text(); })
+          .then(function(t) { console.log('dynamic: fetch ok', t.length); });
+      }, 150);
 
-    // 600ms: mark the page "stable" by setting a global flag.
-    setTimeout(function() { window.__vsStable = true; }, 600);
+      // 250ms: mark the page "stable" by setting a global flag.
+      setTimeout(function() { window.__vsStable = true; }, 250);
+    });
   </script>
 </body>
 </html>
