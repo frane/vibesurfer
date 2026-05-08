@@ -1,31 +1,56 @@
 # vibesurfer (`vs`)
 
-A browser for LLMs, not humans.
+A real browser, exposed for agents.
 
-Take a real WebKit, strip the chrome, expose it through a line-oriented Unix-socket protocol that treats token cost, state freshness, and audit trails as first-class concerns, and stop pretending an agent wants the same tooling a person staring at DevTools wants. What a browser optimises for changes when the user is the model: stable refs across snapshots, deltas instead of full re-reads, idempotent action replay, an audit row per call, an a11y tree typed with role codes that compress to two or three letters on the wire. CDP and Playwright started from "drive a browser the way a human attaches DevTools" and never quite recovered. vibesurfer starts from the agent.
+The control surfaces in the agent stack today are mostly Chrome attached to DevTools, with a Python or TypeScript driver pretending to be a person clicking around. Playwright and CDP both started from "let a tool drive the same browser a developer's debugger drives" and inherited every bit of the developer ergonomics: huge JSON payloads on every read, an HTML accessibility snapshot a thousand nodes deep, no idea what's stale, no replay, no audit. Agents don't need any of that. What an agent needs from a browser is a typed accessibility tree it can plan against, refs that survive a re-render, a state token that rejects writes against a stale view, a delta on the next view instead of the whole tree, and a row in an audit table for every action. vibesurfer is built around those, and the engine is real WebKit underneath — `WKWebView` on macOS, `WebKitGTK 6` on Linux, `WebView2` on Windows — not a headless Chromium acting as a stand-in.
 
-## What users say...
+## What's the deal
 
-> ⏺ vs view returns about a tenth as many tokens as Playwright's accessibility snapshot for the same page, and the tree still has everything I'd actually click.
+```
+$ vs session-open
+@a99b04d877149e57
+s_019e02cbc63270639c3f0b2e
 
-*— Claude Code*
+$ vs open https://github.com/trending
+@a99b04d877149e57
+p_019e02cbcf907721a8231716
 
-> • The state-token rejection on a stale write is what I want from every tool I use. One round trip on success, one round trip on conflict with the new content attached. No "did the page change since last view" guessing.
+$ vs view p_019e02... | head -20
+@a99b04d877149e57
+1 doc "Trending repositories on GitHub today · GitHub"
+  9 hdr ""
+    14 nav "Skip to content"
+    17 nav "Sign in"
+  44 mn ""
+    65 hd Trending
+    66 p "See what the GitHub community is most excited about today."
+    113 lst ""
+      121 li "anthropics / financial-services"
+      ...
 
-*— Codex CLI*
+$ vs capture p_019e02...
+@a99b04d877149e57
+~/.vibesurfer/captures/wk-1-1778163378824.png
+```
 
-## Features
+That's a real `WkBackend` rendering `github.com/trending`, not a fixture, not a stub:
 
-- **One real browser per backend.** Real WKWebView on macOS, real WebKitGTK 6 on Linux, real WebView2 on Windows. No headless-Chromium-via-CDP layer in between.
-- **State tokens, not retries.** Every write requires the page's current `state_token`; on conflict the response carries the new tree so you reconcile in one call instead of re-viewing every time.
-- **Tree deltas by default.** First view is full; subsequent views are op-stream against the last-emitted tree. Token cost stays flat as a page mutates.
-- **Stable refs.** A button that survives a re-render keeps the same `Ref(N)` across snapshots, so a planned multi-step interaction doesn't fall apart on the second tick.
-- **Idempotent actions.** `vs_act` keys on `(page, before_token, args_hash)` for 30s — repeat-on-flake is free, no doubled clicks.
-- **Composite reads.** `vs_open --view`, `vs_view --layout=N,M`, `vs_view --read=N`, `vs_act --view`, `vs_wait --view` collapse the canonical two-call sequences into one wire frame.
-- **Audit by construction.** Every primitive writes one row to `actions` before returning. Replay, debugging, compliance — all free.
-- **Persistent, encrypted auth.** Cookies + storage saved as AES-256-GCM blobs keyed by an OS-keyring secret. `vs auth save` once; survive restarts.
-- **Inspector capture.** `vs inspect console|network|request|eval|storage|scripts|script|dom|performance` — the page's own `console.error` flow surfaces as a wire warning before your next view.
-- **One self-contained binary.** `vs serve` is the daemon. `vs <primitive>` is the client. `vs mcp` is the MCP server for Claude Desktop / Cursor / Codex. `vs skill install` writes the skill into every detected agent.
+![vs capture github.com/trending](docs/img/demo-trending.png)
+
+The accessibility tree above is what `vs view` returns. About a tenth the bytes of Playwright's accessibility snapshot for the same page; refs `9`, `121`, `66` survive across snapshots so a planned sequence of clicks doesn't fall apart on the second tick; the `@a99...` token at the top of every response is what your next write has to thread to be accepted.
+
+## Why each piece
+
+- **One real browser per platform.** Real `WKWebView` on macOS via `objc2`, real `WebKitGTK 6` on Linux via `webkit6`, real `WebView2` on Windows via `webview2-com`. No headless-Chromium-via-CDP layer between the agent and the page. The page sees what a user's browser would see; the agent sees a typed tree of it.
+- **State tokens, not retries.** Every write requires the page's current `state_token` and gets rejected on stale; the rejection carries the new tree so you reconcile in one round trip instead of pre-reading every time. Read-then-write is unnecessary.
+- **Tree deltas as the default view.** First `vs view` is a full tree; subsequent views are op-streams against the last-emitted tree for `(page, agent)`. Token cost stays flat as a long-lived page mutates.
+- **Refs that mean something.** A button that survives a re-render keeps the same `Ref(N)` across snapshots. Multi-step plans don't have to rediscover the world after every action.
+- **Idempotent actions.** `vs_act` keys on `(page, before_token, args_hash)` for 30 seconds; repeating on flake is free, no doubled clicks.
+- **Composite reads.** `vs open --view`, `vs view --layout=N,M`, `vs view --read=N`, `vs act --view`, `vs wait --view` collapse the canonical two-call sequences into one wire frame. The protocol decided observation-driven composites belong on the wire side, not the agent side.
+- **Audit by construction.** Every primitive writes one row to the `actions` table before returning. Replay, debugging, compliance, postmortems — they all want the same table, and there's no opt-out.
+- **Persistent encrypted auth.** `vs auth save` dumps cookies + storage + IndexedDB metadata as an AES-256-GCM blob keyed by an OS-keyring secret (or a fallback keyfile). Survives daemon restarts; never sent off-machine.
+- **Inspector capture, on by default.** `vs inspect console|network|request|eval|storage|scripts|script|dom|performance` reads from per-page ring buffers populated by a JS bridge installed at document-start. The capability flags are computed from runtime install state, not declared — if the bridge fails to register on a page, the wire returns `! ENGINE_UNSUPPORTED` cleanly instead of an empty buffer.
+- **One self-contained binary.** `vs` is the client. `vs serve` is the daemon (auto-spawned on first call). `vs mcp` is the MCP server for Claude Desktop / Cursor / Codex / Gemini. `vs skill install` configures every detected agent on the host in one shot.
 
 ## Install
 
@@ -36,7 +61,7 @@ brew tap frane/tap
 brew install vibesurfer
 ```
 
-curl (any platform with a Rust toolchain or a release binary):
+curl (any host with a working Rust toolchain):
 
 ```sh
 curl -sSL https://raw.githubusercontent.com/frane/vibesurfer/main/install.sh | sh
@@ -48,79 +73,91 @@ From source:
 cargo install --git https://github.com/frane/vibesurfer.git vs-cli
 ```
 
-System deps: nothing on macOS (uses the system WebKit). On Linux: `libwebkitgtk-6.0-dev`, `libgtk-4-dev`, `libsoup-3.0-dev`. On Windows: the WebView2 Runtime (preinstalled on Windows 11; bundled with modern Edge).
+System deps: nothing on macOS (system WebKit). On Linux: `libwebkitgtk-6.0-dev`, `libgtk-4-dev`, `libsoup-3.0-dev`. On Windows: the WebView2 Runtime (preinstalled on Windows 11; bundled with modern Edge).
 
-## Getting started
+## Wiring it into your agent
 
 ```sh
 vs skill install
 ```
 
-That writes a `SKILL.md` into every detected agent's skills directory: Claude, Codex, Cursor, OpenClaw, Smithery, the canonical `~/.agents/`. The skill teaches the agent how to drive `vs`.
+`vs skill install` walks every agent it can detect on the host and writes both the **skill** and the **MCP** surface in one shot. Each agent has its own conventions, and you don't have to know any of them:
 
-You still need to tell the agent to use it. Even with the skill installed, agents fall back to their own browser tools out of habit, so something like *"use vs for browser work"* in your system prompt or your first message is what keeps them on it.
+| Agent | Skill | MCP config | Format |
+|---|---|---|---|
+| Claude Code | `~/.claude/skills/vibesurfer/SKILL.md` | `~/.claude.json` | JSON |
+| Claude Desktop | — (use Claude Code) | `Library/Application Support/Claude/claude_desktop_config.json` | JSON |
+| Codex CLI | `~/.codex/skills/vibesurfer/SKILL.md` | `~/.codex/config.toml` | TOML |
+| Cursor | `<workspace>/.cursor/skills/vibesurfer/SKILL.md` | `<workspace>/.cursor/mcp.json` | JSON |
+| Gemini | `~/.gemini/extensions/vibesurfer/GEMINI.md` + manifest | `~/.gemini/settings.json` | JSON |
+| OpenClaw | `~/.openclaw/workspace/skills/vibesurfer/SKILL.md` | — | — |
+| Canonical | `~/.agents/skills/vibesurfer/SKILL.md` | — | — |
 
-Once the agent is on `vs`, the shape that justifies the protocol shows up on any multi-step page interaction. Sign in to a SaaS, capture a screenshot, scrape a table behind the auth, leave the cookies behind for next time:
+Every MCP entry written has the same shape — `{"command": "vs", "args": ["mcp"]}` — and runs the JSON-RPC server out of the same `vs` binary you already have. Detection uses the agent's config dir or its CLI on `PATH`; an agent that isn't installed is reported as skipped, not failed. The canonical `~/.agents/` location is always written so any cross-client convention picks it up.
+
+```
+$ vs skill install
+  ✓ agents          skill → ~/.agents/skills/vibesurfer/SKILL.md
+  ✓ claude          skill → ~/.claude/skills/vibesurfer/SKILL.md
+                    mcp   → ~/.claude.json
+  ✓ claude-desktop  mcp   → ~/Library/Application Support/Claude/claude_desktop_config.json
+  ✓ codex           skill → ~/.codex/skills/vibesurfer/SKILL.md
+                    mcp   → ~/.codex/config.toml
+  - cursor          skipped (not installed)
+  ✓ gemini          skill → ~/.gemini/extensions/vibesurfer/GEMINI.md
+                    mcp   → ~/.gemini/settings.json
+  ✓ openclaw        skill → ~/.openclaw/workspace/skills/vibesurfer/SKILL.md
+5 skill files, 4 MCP entries written across 6 detected agents.
+```
+
+You still have to tell the agent to use it — *"use vs for browser work"* in your system prompt is enough. Without that, agents fall back to their built-in tools out of habit even with the skill installed.
+
+## A real session
+
+Sign in to a SaaS, scrape a table behind the auth, leave the cookies behind for next time:
 
 ```sh
 vs session-open
-vs open https://app.example.com/login
-vs view <page>                                 # see the a11y tree, get a state_token
+vs open https://app.example.com/login --view              # composite: open + view in one call
 vs act <page> <ref> fill alice@example.com --token=<t>
-vs act <page> <ref> fill hunter2 --token=<t>   # token threads forward
-vs act <page> <ref> click --token=<t>          # submit; token rejects on stale
+vs act <page> <ref> fill hunter2 --token=<t>
+vs act <page> <ref> click --token=<t> --view              # click + see what landed
 vs wait <page> stable
-vs auth save <page> work-app                   # dump cookies + storage, encrypt at rest
-vs capture <page>                              # PNG to ~/.vibesurfer/captures/
-vs extract <page> table --token=<t>            # table rows as records
+vs auth save <page> work-app                              # encrypted blob in the store
+vs extract <page> table --token=<t>                        # tabular records, not HTML
 ```
 
-The result of `vs capture` against `github.com/trending` looks like this — driven by the same `WkBackend` the M6 cell tests exercise, no fixture, no stub:
-
-![vs capture github.com/trending](docs/img/demo-trending.png)
-
-## Skill and MCP
-
-`vs skill install` writes the SKILL.md to every detected agent. `vs mcp` exposes the same primitives over MCP for agents that don't have shell access — Claude Desktop, Cursor, Smithery — by speaking JSON-RPC 2.0 on stdio. Each of the 19 primitives is one MCP tool whose name matches the wire primitive (`vs_open`, `vs_view`, etc.); dispatch goes through the same `vs_cli::commands::run` path as the CLI binary, so there is no parallel engine logic, no shim, no drift.
-
-Wire it into Claude Desktop's `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "vibesurfer": { "command": "vs", "args": ["mcp"] }
-  }
-}
-```
-
-Cursor, Codex, OpenClaw, Smithery — same shape, same command.
+Token threading is the discipline that makes the rest of it work. If the page mutated between the snapshot you read and the click you tried to send, the click is rejected with the new tree attached and you reconcile in one round trip. Multi-step interactions don't drift.
 
 ## Verification
 
-Mac and Linux columns of `docs/REALITY_CHECK.md` are 47-of-47 cells `yes` against real engines, end-to-end, through the public CLI. Windows column is `pending-manual-verification` until the maintainer signs off on a green run from the `windows-latest` CI leg.
-
-```sh
-cargo test --test m6 -- --test-threads=1            # macOS, ~38s
-docker run --rm --privileged \
-  -v "$PWD":/work vs-test-linux                      # Linux, ~28s, see Dockerfile.linux-test
+```
+docs/REALITY_CHECK.md
 ```
 
-Sequential is required on every platform because every test pumps a real GUI engine on its main thread; parallel runs saturate the queue. That's documented in `docs/DEVELOPMENT.md`.
+— is a 47-by-3 cell table of every protocol cell × every backend, with a state per cell. Mac and Linux columns are entirely `yes`, every cell backed by a passing integration test against a real engine through the public CLI; Windows column is `pending-manual-verification` until the maintainer signs off on a green run from the `windows-latest` CI leg.
 
-## Docs
+```sh
+cargo test --test m6 -- --test-threads=1                  # macOS native, ~38s
+docker run --rm --privileged \
+    -v "$PWD":/work vs-test-linux                          # Linux, ~28s
+```
 
-- [Concepts](docs/ARCHITECTURE.md) — daemon, CLI, store, engine boundary
-- [Protocol](docs/PROTOCOL.md) — wire format spec (single source of truth)
-- [Primitives](docs/PRIMITIVES.md) — the 19 primitives, one section each
-- [Codes](docs/codes.md) — role codes, viewport presets, error/warning codes
-- [Reality check](docs/REALITY_CHECK.md) — current cell-by-cell verification status
-- [Development](docs/DEVELOPMENT.md) — per-platform test loop
-- [Decisions](docs/decisions/) — architectural decision records
+Sequential is required on every platform because every test pumps a real GUI engine on its main thread; parallelizing 47 of those saturates the queue.
+
+## Documentation
+
+- [`PROTOCOL.md`](docs/PROTOCOL.md) — wire format, framing, deltas, state tokens
+- [`PRIMITIVES.md`](docs/PRIMITIVES.md) — the 19 primitives, one section each
+- [`ARCHITECTURE.md`](docs/ARCHITECTURE.md) — daemon, CLI, store, engine boundary
+- [`codes.md`](docs/codes.md) — role codes, viewport presets, error and warning codes
+- [`REALITY_CHECK.md`](docs/REALITY_CHECK.md) — current cell-by-cell verification status
+- [`DEVELOPMENT.md`](docs/DEVELOPMENT.md) — per-platform test loop
+- [`decisions/`](docs/decisions/) — architectural decision records
 
 ## Contributing
 
-Issues and PRs welcome. The thing I'd actually like feedback on is the inspector-capture pipeline on Windows: the JS shim that maps `webkit.messageHandlers.<name>.postMessage` onto WebView2's `chrome.webview.postMessage` works on paper, but the M6 capability-gate test
-(`cell_engine_unsupported_when_install_disabled`) is the only thing locking the design and it hasn't been exercised against a real WebView2 yet. If you have a Windows box and ten minutes, the `vs-test-linux` Docker pattern translates one-for-one and the failure mode is concrete.
+Issues and PRs welcome. The thing I'd actually like feedback on is the inspector-capture pipeline on Windows — the JS shim that maps `webkit.messageHandlers.<name>.postMessage` onto WebView2's `chrome.webview.postMessage` works on paper, but the M6 capability-gate test (`cell_engine_unsupported_when_install_disabled`) is the only thing locking the design and it hasn't been exercised against a real `WebView2` yet. If you have a Windows box and ten minutes, the `vs-test-linux` Docker pattern translates one-for-one and the failure mode (if any) is concrete.
 
 ## License
 

@@ -53,7 +53,6 @@ fn main() {
     // Print the canonical wire form.
     println!("{}", tree.encode());
 
-
     // Find the first link or button ref in the tree to act on.
     let actionable = find_actionable(&tree);
     if let Some(r) = actionable {
