@@ -1,3 +1,9 @@
+// The fake-`vs` shim is a bash script with chmod 755. Both pieces
+// are Unix-only — Windows would need a `.bat` shim and a different
+// permissions API. Gate the whole file so the Windows build skips
+// these tests cleanly.
+#![cfg(unix)]
+
 //! Regression tests for the auto-spawn path in `commands::dispatch`.
 //!
 //! Two bugs landed in `fc99183`:
