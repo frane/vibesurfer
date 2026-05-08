@@ -137,6 +137,13 @@ impl Engine for WpeBackend {
     fn open(&mut self, url: &str) -> EngineResult<PageHandle> {
         let web_view = WebView::new();
 
+        // Pin the User-Agent to a current Safari string so anti-bot
+        // fingerprinters don't flag the WebKitGTK default. See the
+        // commit log for `crate::engine::DEFAULT_USER_AGENT` rationale.
+        if let Some(settings) = WebViewExt::settings(&web_view) {
+            settings.set_user_agent(Some(crate::engine::DEFAULT_USER_AGENT));
+        }
+
         // Inspector capture wiring — install the user script + register
         // both message channels BEFORE load_uri so the bridge is live
         // by document-start.

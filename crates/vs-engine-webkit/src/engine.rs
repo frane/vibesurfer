@@ -13,6 +13,17 @@ use std::time::Duration;
 
 use vs_protocol::{Op, Ref, Tree};
 
+/// Default `User-Agent` the engine sets on each page. Mirrors a recent
+/// shipping Safari on macOS so anti-bot fingerprinters that match on
+/// the WKWebView default (which lacks the `Version/X Safari/X`
+/// suffix) don't flag every request. Backends that support
+/// per-webview UA (WKWebView via `setCustomUserAgent`, WebKitGTK via
+/// `webkit_settings_set_user_agent`, WebView2 via `Profile2` /
+/// `coreWebView2.Settings.UserAgent`) apply this string at construction.
+pub const DEFAULT_USER_AGENT: &str =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 \
+     (KHTML, like Gecko) Version/17.5 Safari/605.1.15";
+
 /// An opaque engine-side handle to a page. The daemon associates each
 /// `PageHandle` with one `pages` row in [`vs-store`](vs_protocol).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -370,3 +381,44 @@ pub trait Engine {
 
 /// The role a node in `Node` would carry — re-exported for convenience.
 pub use vs_protocol::Role as NodeRole;
+
+#[cfg(test)]
+mod tests {
+    use super::DEFAULT_USER_AGENT;
+
+    /// Pins the UA contract: must look like a current shipping
+    /// Safari, including the `Version/X` and `Safari/Y` suffixes.
+    /// The whole reason this constant exists is that the WKWebView
+    /// default UA drops both — sites that fingerprint UAs (Google,
+    /// Cloudflare, etc.) flag every request without them.
+    ///
+    /// If this test fails because you bumped the version, that's
+    /// fine — update the literal. If it fails because the format
+    /// changed, think hard before relaxing it.
+    #[test]
+    fn default_user_agent_has_safari_suffix() {
+        let ua = DEFAULT_USER_AGENT;
+        assert!(
+            ua.starts_with("Mozilla/5.0 "),
+            "UA should start with `Mozilla/5.0 `; got {ua:?}",
+        );
+        assert!(
+            ua.contains("AppleWebKit/"),
+            "UA should advertise WebKit; got {ua:?}",
+        );
+        assert!(
+            ua.contains("Version/"),
+            "UA missing `Version/X` — anti-bot will flag it; got {ua:?}",
+        );
+        assert!(
+            ua.contains("Safari/"),
+            "UA missing `Safari/X` — anti-bot will flag it; got {ua:?}",
+        );
+        // Single-line — extra whitespace inside is fine, but no
+        // newlines / tabs.
+        assert!(
+            !ua.contains('\n') && !ua.contains('\r') && !ua.contains('\t'),
+            "UA must be a single line; got {ua:?}",
+        );
+    }
+}

@@ -131,6 +131,16 @@ impl Engine for WkBackend {
             WKWebView::initWithFrame_configuration(WKWebView::alloc(mtm), frame, &config)
         };
 
+        // Set a current Safari user agent. Default WKWebView UA is
+        // `Mozilla/5.0 (...) AppleWebKit/605.1.15 (KHTML, like Gecko)`
+        // — missing the `Version/X Safari/X` suffix that real Safari
+        // tacks on. Sites that fingerprint UAs flag this immediately
+        // (Google's anti-bot is a regular offender). The string here
+        // matches a recent shipping Safari; override per-page later
+        // if you need to spoof something else.
+        let ua = NSString::from_str(crate::engine::DEFAULT_USER_AGENT);
+        unsafe { web_view.setCustomUserAgent(Some(&ua)) };
+
         let slot: NavSlot = Rc::new(RefCell::new(None));
         let delegate = NavDelegate::new(mtm, slot.clone());
         let proto: &ProtocolObject<dyn WKNavigationDelegate> = ProtocolObject::from_ref(&*delegate);

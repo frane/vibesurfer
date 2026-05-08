@@ -394,6 +394,25 @@ impl Engine for Webview2Backend {
         let web_view: ICoreWebView2 = unsafe { controller.CoreWebView2() }
             .map_err(|e| EngineError::Other(format!("CoreWebView2: {e}")))?;
 
+        // Pin the User-Agent to a current Safari string so anti-bot
+        // fingerprinters don't flag the WebView2 default. Settings2
+        // is the interface that exposes UserAgent — the base
+        // ICoreWebView2Settings doesn't have it.
+        unsafe {
+            use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings2;
+            use windows::core::Interface;
+            let settings = web_view
+                .Settings()
+                .map_err(|e| EngineError::Other(format!("Settings: {e}")))?;
+            if let Ok(s2) = settings.cast::<ICoreWebView2Settings2>() {
+                let ua: Vec<u16> = crate::engine::DEFAULT_USER_AGENT
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect();
+                let _ = s2.SetUserAgent(windows::core::PCWSTR(ua.as_ptr()));
+            }
+        }
+
         // 3. Install inspector bridge BEFORE Navigate so the
         //    document-start hook fires on the loaded page.
         let inspector = InspectorSlots::new(crate::inspector::DEFAULT_BUFFER_CAPACITY);
