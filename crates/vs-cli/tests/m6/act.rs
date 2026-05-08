@@ -228,3 +228,40 @@ fn cell_act_focus() {
         );
     }
 }
+
+// Trust-bit regression — pinned to macOS for now (Linux + Windows
+// keep the JS-driven act path until their native event-injection
+// lands). The fixture's `submit` button records `event.isTrusted`
+// on click; if anyone reverts the WkBackend's NSEvent dispatch back
+// to `el.click()`, the assertion flips to `false` and the test
+// fails before users hit captcha walls.
+#[cfg(target_os = "macos")]
+#[test]
+fn cell_act_click_is_trusted() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        // Dedicated fixture: button has type="button" so clicking
+        // doesn't navigate; the recorded `event.isTrusted` survives
+        // for the eval below.
+        let (_s, page, _t) = open_fixture(&ctx, "/click-trust.html");
+        let r = ctx.vs(&["view", &page, "--full"]);
+        let body = body_rest(&r);
+        let token = token_of(&r);
+        let n = ref_for(&body, "btn", "Click me");
+        let r = ctx.vs(&[
+            "act",
+            &page,
+            &n.to_string(),
+            "click",
+            &format!("--token={token}"),
+        ]);
+        assert_ok("click trust button", &r);
+
+        let trusted = eval_js(&ctx, &page, "String(window.__vsLastClickTrusted)");
+        assert_eq!(
+            trusted.trim(),
+            "true",
+            "vs act click must produce isTrusted=true on macOS; got {trusted:?}",
+        );
+    }
+}

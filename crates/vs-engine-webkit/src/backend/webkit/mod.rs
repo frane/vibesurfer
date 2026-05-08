@@ -17,6 +17,7 @@
 
 mod capture;
 mod eval;
+mod input;
 mod inspector_handler;
 mod nav_delegate;
 
@@ -27,6 +28,7 @@ use std::time::Duration;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{MainThreadMarker, MainThreadOnly};
+use objc2_app_kit::{NSBackingStoreType, NSWindow, NSWindowStyleMask};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSURLRequest, NSURL};
 use objc2_web_kit::{WKNavigationDelegate, WKWebView, WKWebViewConfiguration};
 use vs_protocol::{Ref, Tree};
@@ -42,9 +44,16 @@ use nav_delegate::{NavDelegate, NavSlot};
 // =============================================================================
 // Per-page state
 // =============================================================================
-
 struct WkPage {
     web_view: Retained<WKWebView>,
+    /// Offscreen NSWindow that hosts `web_view` as its content view.
+    /// Required for trusted-event dispatch: synthesized `NSEvent`s
+    /// route through `NSWindow::sendEvent` → responder chain →
+    /// WKWebView, where WebKit promotes them to JS events with
+    /// `event.isTrusted = true`. A free-floating WKWebView (no
+    /// hosting window) silently drops mouse events because there's
+    /// no responder chain for the event to traverse.
+    window: Retained<NSWindow>,
     /// Owned so the webview keeps a strong reference (the delegate
     /// property on `WKWebView` is `weak`).
     _nav_delegate: Retained<NavDelegate>,
@@ -131,6 +140,24 @@ impl Engine for WkBackend {
             WKWebView::initWithFrame_configuration(WKWebView::alloc(mtm), frame, &config)
         };
 
+        // Host the webview in an offscreen NSWindow so synthesized
+        // `NSEvent`s have a responder chain to traverse. Borderless
+        // style with `Buffered` backing keeps the window cheap and
+        // avoids any visible decoration; `setReleasedWhenClosed`
+        // false because we manage the Retained handle ourselves.
+        let window: Retained<NSWindow> = unsafe {
+            let w = NSWindow::initWithContentRect_styleMask_backing_defer(
+                NSWindow::alloc(mtm),
+                frame,
+                NSWindowStyleMask::Borderless,
+                NSBackingStoreType::Buffered,
+                false,
+            );
+            w.setReleasedWhenClosed(false);
+            w.setContentView(Some(&web_view));
+            w
+        };
+
         // Set a current Safari user agent. Default WKWebView UA is
         // `Mozilla/5.0 (...) AppleWebKit/605.1.15 (KHTML, like Gecko)`
         // — missing the `Version/X Safari/X` suffix that real Safari
@@ -174,6 +201,7 @@ impl Engine for WkBackend {
             handle,
             WkPage {
                 web_view,
+                window,
                 _nav_delegate: delegate,
                 inspector,
                 inspector_installed,
@@ -196,6 +224,24 @@ impl Engine for WkBackend {
     fn act(&mut self, page: PageHandle, target: ActTarget, action: Action) -> EngineResult<()> {
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
+        let window = p.window.clone();
+
+        // Route plain `click` on a `Ref` target through native NSEvent
+        // dispatch — produces JS events with `event.isTrusted = true`,
+        // which anti-bot fingerprinters key off. Other actions
+        // (`fill`, `scroll`, `key`, `submit`, `hover`, `focus`) keep
+        // the JS-driven path: they're either text-content mutations
+        // or they don't usually hit a trust check.
+        if let (ActTarget::Ref(r), Action::Click) = (&target, &action) {
+            let r = *r;
+            let rect = input::ref_rect(&web_view, r)?.ok_or_else(|| EngineError::NotFound {
+                kind: "ref",
+                id: r.0.to_string(),
+            })?;
+            let frame = web_view.frame();
+            return input::click_at_rect(&web_view, &window, rect, frame.size.height);
+        }
+
         super::common::run_act(
             move |js, budget| eval_js_string(&web_view, js, budget),
             &target,

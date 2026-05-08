@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Click trust check</title></head>
+<body>
+  <button id="b" type="button">Click me</button>
+  <pre id="log">no click</pre>
+  <script>
+    // Single-purpose fixture for the `vs_act click` trust-bit
+    // regression test. Records `event.isTrusted` to a global the
+    // test reads back via `vs inspect eval`. The button has
+    // `type="button"` so a click never navigates — the test can
+    // re-evaluate without racing a page load.
+    document.getElementById('b').addEventListener('click', function(ev) {
+      window.__vsLastClickTrusted = ev.isTrusted;
+      document.getElementById('log').textContent =
+        'isTrusted=' + ev.isTrusted;
+    });
+  </script>
+</body>
+</html>
