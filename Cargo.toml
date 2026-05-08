@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "crates/vs-cli",
     "crates/vs-daemon",
-    "crates/vs-mcp",
     "crates/vs-protocol",
     "crates/vs-store",
     "crates/vs-engine-webkit",

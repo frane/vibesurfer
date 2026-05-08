@@ -1,16 +1,13 @@
-#![allow(clippy::needless_pass_by_value)]
-//! `vs-mcp` — full MCP (Model Context Protocol) server for vibesurfer.
+//! `vs mcp` — full MCP (Model Context Protocol) server for vibesurfer.
 //!
-//! Speaks JSON-RPC 2.0 over stdio. Each of the 19 vibesurfer primitives
-//! is exposed as one MCP tool whose name matches the wire primitive
-//! (`vs_open`, `vs_view`, etc.). Tool dispatch delegates to
-//! [`vs_cli::commands::run`] — the same code path the CLI uses — so
-//! there is no parallel engine logic, no shim layer, no drift.
+//! Speaks JSON-RPC 2.0 over stdio. Each of the 19 vibesurfer
+//! primitives is exposed as one MCP tool whose name matches the wire
+//! primitive (`vs_open`, `vs_view`, etc.). Tool dispatch delegates to
+//! [`crate::commands::run`] — the same code path the CLI uses — so
+//! there is no parallel engine logic, no shim, no drift.
 //!
-//! Run as: `vs-mcp` (Claude Desktop / Claude Code spawn it via their
-//! MCP server config).
-
-#![forbid(unsafe_code)]
+//! Run as a subcommand: `vs mcp` (Claude Desktop / Claude Code spawn
+//! it via their MCP server config).
 
 mod tools;
 
@@ -21,16 +18,25 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Stdout};
 use tokio::sync::Mutex;
 
-use vs_cli::commands::Cli;
+use crate::commands::Cli;
 
 const MCP_VERSION: &str = "2024-11-05";
 const SERVER_NAME: &str = "vibesurfer";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
-async fn main() -> Result<()> {
+/// Synchronous entry point for `vs mcp`. Owns its own tokio runtime
+/// (the rest of the `vs` binary is sync). Returns when stdin closes.
+pub fn run() -> Result<()> {
     init_tracing();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .context("build tokio runtime for vs mcp")?;
+    rt.block_on(serve())
+}
 
+async fn serve() -> Result<()> {
     let stdin = tokio::io::stdin();
     let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
     let mut reader = BufReader::new(stdin).lines();
@@ -47,13 +53,10 @@ async fn main() -> Result<()> {
                 continue;
             }
         };
-        let stdout = stdout.clone();
-        tokio::spawn(async move {
-            let resp = handle_request(&req).await;
-            if let Some(r) = resp {
-                write_message(&stdout, r).await;
-            }
-        });
+        let resp = handle_request(&req).await;
+        if let Some(r) = resp {
+            write_message(&stdout, r).await;
+        }
     }
     Ok(())
 }
@@ -62,7 +65,7 @@ fn init_tracing() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("vs_mcp=info,info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("vs_cli=info,info")),
         )
         .with_writer(std::io::stderr) // stdout is reserved for protocol
         .try_init();
@@ -156,14 +159,12 @@ async fn call_tool(params: &Value) -> Result<Value, McpError> {
         .cloned()
         .unwrap_or_else(|| json!({}));
 
-    // Build a vs-cli `Cli` from the tool name + arguments. Then run
-    // the same dispatch path the CLI binary uses.
     let cli = tools::build_cli(name, &arguments).map_err(|e| McpError {
         code: -32602,
         message: e.to_string(),
     })?;
 
-    let resp = tokio::task::spawn_blocking(move || run_cli(cli))
+    let resp = tokio::task::spawn_blocking(move || run_cli(&cli))
         .await
         .map_err(|e| McpError {
             code: -32603,
@@ -183,8 +184,7 @@ async fn call_tool(params: &Value) -> Result<Value, McpError> {
     }))
 }
 
-/// Run the CLI dispatch and return the rendered wire response.
-fn run_cli(cli: Cli) -> Result<String> {
-    let resp = vs_cli::commands::run(&cli).context("vs_cli::commands::run")?;
-    Ok(vs_cli::commands::render(&resp, false))
+fn run_cli(cli: &Cli) -> Result<String> {
+    let resp = crate::commands::run(cli).context("vs_cli::commands::run")?;
+    Ok(crate::commands::render(&resp, false))
 }

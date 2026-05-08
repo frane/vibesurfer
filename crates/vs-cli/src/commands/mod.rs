@@ -218,6 +218,11 @@ pub enum Command {
     /// daemon — `vs serve` is what auto-spawn re-execs when the socket
     /// is missing. SIGINT shuts down cleanly.
     Serve,
+    /// Run the MCP (Model Context Protocol) server over stdio.
+    /// Speaks JSON-RPC 2.0; each of the 19 vibesurfer primitives is
+    /// exposed as one MCP tool. Wire to Claude Desktop / Claude Code
+    /// by configuring `vs mcp` as the server command.
+    Mcp,
 }
 
 impl Command {
@@ -466,13 +471,19 @@ impl Command {
             Self::Serve => {
                 anyhow::bail!("vs_serve is local; route via main, not the wire dispatcher");
             }
+            Self::Mcp => {
+                anyhow::bail!("vs_mcp is local; route via main, not the wire dispatcher");
+            }
         })
     }
 
     /// True if this subcommand requires an active session.
     #[must_use]
     pub fn needs_session(&self) -> bool {
-        !matches!(self, Self::SessionOpen { .. } | Self::Status | Self::Serve)
+        !matches!(
+            self,
+            Self::SessionOpen { .. } | Self::Status | Self::Serve | Self::Mcp
+        )
     }
 }
 

@@ -4,13 +4,13 @@
 //! Two responsibilities:
 //! 1. [`list`] — emits the JSON Schema array for `tools/list`.
 //! 2. [`build_cli`] — turns an `(name, arguments)` MCP request into a
-//!    `vs_cli::commands::Cli` so we can dispatch through the same
+//!    `crate::commands::Cli` so we can dispatch through the same
 //!    code path the CLI binary uses. No parallel engine logic.
 
 use anyhow::{anyhow, Context as _, Result};
 use serde_json::{json, Value};
 
-use vs_cli::commands::{Cli, Command};
+use crate::commands::{Cli, Command};
 
 /// JSON Schema list for `tools/list`. Each tool's name matches the
 /// vibesurfer wire primitive (`vs_open`, `vs_view`, …), so an MCP
@@ -110,7 +110,7 @@ pub fn list() -> Vec<Value> {
     ]
 }
 
-/// Build a `vs_cli::commands::Cli` from an MCP tool call. Returns an
+/// Build a `crate::commands::Cli` from an MCP tool call. Returns an
 /// error if the arguments don't match what the primitive needs.
 pub fn build_cli(name: &str, args: &Value) -> Result<Cli> {
     let cmd = match name {

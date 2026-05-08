@@ -35,6 +35,24 @@ fn main() -> std::process::ExitCode {
         return std::process::ExitCode::SUCCESS;
     }
 
+    if matches!(cli.command, Command::Mcp) {
+        if let Err(e) = vs_cli::mcp::run() {
+            eprintln!("error: {e:#}");
+            return std::process::ExitCode::from(1);
+        }
+        return std::process::ExitCode::SUCCESS;
+    }
+
+    if let Command::Skill { sub, .. } = &cli.command {
+        if sub.as_deref() == Some("install") {
+            if let Err(e) = vs_cli::skill_install::run() {
+                eprintln!("error: {e:#}");
+                return std::process::ExitCode::from(1);
+            }
+            return std::process::ExitCode::SUCCESS;
+        }
+    }
+
     let resp = match run(&cli) {
         Ok(r) => r,
         Err(e) => {

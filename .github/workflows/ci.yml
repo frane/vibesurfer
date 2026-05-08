@@ -106,7 +106,7 @@ jobs:
       - name: cargo run --example wk_smoke
         run: |
           cargo run --quiet --example wk_smoke -- \
-            "data:text/html,<h1>CI smoke</h1><button>OK</button><a href=#>link</a>" \
+            "data:text/html,<h1>CI smoke</h1><button>OK</button><a href=%23>link</a>" \
             > /tmp/wk_smoke.out 2>&1
           cat /tmp/wk_smoke.out
           # Assert the snapshot found the heading and the link.

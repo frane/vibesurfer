@@ -1973,19 +1973,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "vs-mcp"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "vs-cli",
- "vs-protocol",
-]
-
-[[package]]
 name = "vs-protocol"
 version = "0.0.1"
 dependencies = [

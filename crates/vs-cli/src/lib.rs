@@ -11,8 +11,10 @@
 pub mod active_session;
 pub mod client;
 pub mod commands;
+pub mod mcp;
 pub mod paths;
 pub mod serve;
+pub mod skill_install;
 pub mod spawn;
 
 pub use client::{Client, Response};
