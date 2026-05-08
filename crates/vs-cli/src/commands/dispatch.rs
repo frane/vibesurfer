@@ -31,11 +31,19 @@ pub fn resolve_session(cli: &Cli, paths: &Paths) -> Result<Option<String>> {
 }
 
 /// Connect to the daemon, auto-spawning if necessary (unless
-/// `--no-spawn`).
+/// `--no-spawn`). When the caller passed `--home`, propagate it to
+/// the spawned daemon — otherwise auto-spawn writes the socket to
+/// the default home and the caller waits forever for it to appear at
+/// the requested home.
 pub fn connect(cli: &Cli, paths: &Paths) -> Result<Client> {
     let socket = cli.socket.clone().unwrap_or_else(|| paths.socket());
-    if !socket.exists() && !cli.no_spawn {
-        spawn::spawn_daemon(&[])?;
+    if !vs_daemon::transport::is_listening(&socket) && !cli.no_spawn {
+        let mut extra: Vec<String> = Vec::new();
+        if let Some(home) = cli.home.as_ref() {
+            extra.push(format!("--home={}", home.display()));
+        }
+        let extra_refs: Vec<&str> = extra.iter().map(String::as_str).collect();
+        spawn::spawn_daemon(&extra_refs)?;
         spawn::wait_for_socket(&socket, std::time::Duration::from_secs(2))?;
     }
     Client::connect(&socket)
