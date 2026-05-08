@@ -59,8 +59,9 @@ fi
 # session-open output's last line is the session id.
 SESSION_OUT=$("$BIN_DIR/vs" session-open)
 SESSION=$(echo "$SESSION_OUT" | tail -1)
-PAGE_OUT=$("$BIN_DIR/vs" open https://example.com)
+PAGE_OUT=$("$BIN_DIR/vs" open https://news.ycombinator.com)
 PAGE=$(echo "$PAGE_OUT" | tail -1)
+"$BIN_DIR/vs" wait "$PAGE" stable 5000 >/dev/null 2>&1 || true
 
 if [[ -z "$SESSION" || -z "$PAGE" ]]; then
     echo "failed to open session+page; daemon log:" >&2
