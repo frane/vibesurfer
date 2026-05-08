@@ -144,11 +144,22 @@ docker build -f Dockerfile.linux-test -t vs-test-linux .
 docker run --rm --privileged -v "$PWD":/work vs-test-linux
 ```
 
-See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for the longer walkthrough. Regenerate the demo gif at the top of this README with [vhs](https://github.com/charmbracelet/vhs):
+See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for the longer walkthrough.
+
+The demo gif at the top of this README is a scripted walk-through of the `vs` CLI. To capture a real interactive Claude Code session driving vibesurfer instead, run `docs/demo/record-claude.sh`:
+
+```
+brew install asciinema agg
+docs/demo/record-claude.sh         # writes docs/demo-claude.gif
+```
+
+The script enforces a TTY guard, isolates the demo home, and locks Claude to Bash so the agent must use the real `vs` binary (no MCP fallback, no built-in file tools). Each render is non-deterministic — model output varies. The cached gif is committed so cloners and CI don't re-render.
+
+Or regenerate the scripted README gif with [vhs](https://github.com/charmbracelet/vhs):
 
 ```
 brew install vhs
-vhs docs/demo/demo.tape       # writes docs/demo.gif
+docs/demo/render.sh                # writes docs/demo.gif
 ```
 
 ## Contributing
