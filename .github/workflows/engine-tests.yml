@@ -36,23 +36,34 @@ jobs:
         run: cargo test --workspace -- --test-threads=1
 
   linux:
-    name: Linux Docker (real WebKitGTK 6)
+    name: Linux (real WebKitGTK 6)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Build container
-        run: docker build -t vs-test-linux -f Dockerfile.linux-test .
-      - name: Run M6 cell suite inside container (sequential, real WebKitGTK)
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install WebKitGTK 6 + Xvfb
         run: |
-          docker volume create vs-target-linux
-          docker volume create vs-cargo-linux
-          docker run --rm --privileged \
-            -v "$PWD":/work \
-            -v vs-target-linux:/work/target-linux \
-            -v vs-cargo-linux:/usr/local/cargo/registry \
-            -e CARGO_TARGET_DIR=/work/target-linux \
-            vs-test-linux
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkitgtk-6.0-dev \
+            libsoup-3.0-dev \
+            libgtk-4-dev \
+            xvfb \
+            dbus-x11 \
+            pkg-config
+      - name: Allow unprivileged user namespaces
+        # WebKitGTK 6's WebProcess uses bubblewrap, which needs
+        # unprivileged user namespaces. Ubuntu 24.04 (the runner
+        # image) restricts those via AppArmor by default; the
+        # WebProcess fails to spawn and the WebView crashes on first
+        # navigation. Flip the sysctl off for the duration of the
+        # job. Equivalent to `--privileged` in Docker without the
+        # container overhead.
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Run M6 cell suite (sequential, real WebKitGTK under Xvfb)
+        run: xvfb-run --auto-servernum cargo test --test m6 -- --test-threads=1
 
   windows:
     name: Windows (real WebView2 — pending manual verification)
