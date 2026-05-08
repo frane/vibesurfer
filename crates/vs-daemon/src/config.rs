@@ -57,8 +57,14 @@ impl Paths {
         self.root.join("key")
     }
 
+    /// Where the daemon writes screenshot PNGs from `vs_capture`.
+    /// Defaults to `<root>/captures`. Overridable per-process via the
+    /// `VS_CAPTURES_DIR` environment variable.
     #[must_use]
     pub fn captures(&self) -> PathBuf {
+        if let Some(p) = std::env::var_os("VS_CAPTURES_DIR") {
+            return PathBuf::from(p);
+        }
         self.root.join("captures")
     }
 

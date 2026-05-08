@@ -296,9 +296,9 @@ pub fn run(args: &ServeArgs) -> Result<()> {
         // (WebView2 callback completions arrive this way).
         let mut msg = MSG::default();
         unsafe {
-            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
+            while PeekMessageW(&raw mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                let _ = TranslateMessage(&raw const msg);
+                DispatchMessageW(&raw const msg);
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
