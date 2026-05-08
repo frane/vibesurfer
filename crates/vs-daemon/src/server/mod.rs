@@ -97,13 +97,17 @@ async fn handle_connection(daemon: Arc<Daemon>, stream: Stream) -> std::io::Resu
         }
         let resp_text = match Request::parse(&line) {
             Ok(req) => {
+                tracing::info!(primitive = %req.primitive, "dispatch start");
+                let primitive = req.primitive.clone();
                 let daemon = daemon.clone();
-                tokio::task::spawn_blocking(move || {
+                let result = tokio::task::spawn_blocking(move || {
                     let mut outcomes = daemon.dispatch(&[req]);
                     outcomes.pop().map_or_else(String::new, |o| o.wire)
                 })
-                .await
-                .unwrap_or_else(|join_err| {
+                .await;
+                tracing::info!(primitive = %primitive, ok = result.is_ok(), "dispatch end");
+                result.unwrap_or_else(|join_err| {
+                    tracing::error!(primitive = %primitive, error = %join_err, "dispatch panic");
                     format_error(
                         ErrorCode::EngineCrash,
                         vec![format!("dispatch panic: {join_err}")],

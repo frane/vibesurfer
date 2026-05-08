@@ -40,6 +40,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     use vs_engine_webkit::{backend::webkit::WkBackend, Engine, EngineRuntime};
 
     init_tracing();
+    install_panic_hook();
     args.paths.ensure_root().context("ensure ~/.vibesurfer")?;
 
     let mtm = MainThreadMarker::new()
@@ -158,6 +159,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     use vs_engine_webkit::{backend::wpe::WpeBackend, Engine, EngineRuntime};
 
     init_tracing();
+    install_panic_hook();
     args.paths.ensure_root().context("ensure ~/.vibesurfer")?;
 
     // GTK init must happen on the OS main thread, before any WebView.
@@ -266,6 +268,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     };
 
     init_tracing();
+    install_panic_hook();
     args.paths.ensure_root().context("ensure ~/.vibesurfer")?;
 
     // SAFETY: required first call on this thread before any
@@ -383,4 +386,27 @@ fn init_tracing() {
         )
         .with_writer(std::io::stderr)
         .try_init();
+}
+
+/// Install a panic hook that logs the panic via tracing::error
+/// before the default hook prints to stderr. The default hook
+/// already writes to stderr, but on Windows a panic on a non-main
+/// thread can sometimes terminate the process before stderr is
+/// flushed; routing through tracing first guarantees the panic
+/// reaches the daemon log file the test harness captures.
+fn install_panic_hook() {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let location = info
+            .location()
+            .map_or_else(|| "<unknown>".to_string(), ToString::to_string);
+        let msg = info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| info.payload().downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("<no message>");
+        tracing::error!(at = %location, "PANIC: {msg}");
+        prev(info);
+    }));
 }
