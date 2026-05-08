@@ -88,12 +88,21 @@ pub fn spawn_daemon(home: &Path) -> DaemonGuard {
 /// gates (e.g. `VS_DISABLE_INSPECTOR=1`) where the engine's behavior
 /// changes based on construction-time env.
 pub fn spawn_daemon_with_env(home: &Path, env: &[(&str, &str)]) -> DaemonGuard {
+    // Pipe daemon stdout/stderr to files inside `home` so test
+    // failures have something to grep. The previous /dev/null setup
+    // hid every panic the daemon emitted on first request — Windows
+    // engine-tests in particular were silent about why every cell
+    // failed.
+    let log = home.join("daemon.log");
+    let log_file = std::fs::File::create(&log).expect("create daemon log");
+    let log_clone = log_file.try_clone().expect("clone daemon log fd");
     let mut cmd = Command::new(VS_BIN);
-    cmd.arg(format!("--home={}", home.display()))
+    cmd.env("RUST_BACKTRACE", "1")
+        .arg(format!("--home={}", home.display()))
         .arg("serve")
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdout(Stdio::from(log_file))
+        .stderr(Stdio::from(log_clone));
     for (k, v) in env {
         cmd.env(k, v);
     }
@@ -133,10 +142,24 @@ pub fn vs(home: &Path, args: &[&str]) -> CliOut {
         .args(args)
         .output()
         .expect("run vs");
+    let mut stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    // If the call failed and the daemon dropped the connection,
+    // append the daemon's own log so the test failure message
+    // surfaces the underlying panic / bind error / engine crash.
+    let code = out.status.code().unwrap_or(-1);
+    if code != 0 && stderr.contains("daemon closed connection") {
+        let log_path = home.join("daemon.log");
+        if let Ok(log) = std::fs::read_to_string(&log_path) {
+            if !log.trim().is_empty() {
+                stderr.push_str("\n--- daemon.log ---\n");
+                stderr.push_str(&log);
+            }
+        }
+    }
     CliOut {
-        code: out.status.code().unwrap_or(-1),
+        code,
         stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        stderr,
     }
 }
 
