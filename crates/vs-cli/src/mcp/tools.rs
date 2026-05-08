@@ -247,8 +247,20 @@ fn obj(props: &[(&str, Value)]) -> Value {
     let mut properties = serde_json::Map::new();
     let mut required = Vec::new();
     for (name, schema) in props {
-        properties.insert((*name).into(), schema.clone());
-        if schema.get("required").and_then(Value::as_bool) == Some(true) {
+        let mut schema = schema.clone();
+        // The `*_prop` helpers tag the property with a sentinel
+        // `required: true`. We hoist that into the parent object's
+        // `required` array (where JSON Schema 2020-12 expects it)
+        // and strip it from the property itself — leaving it inline
+        // produces a schema that the Anthropic API rejects as
+        // invalid.
+        let is_required = schema
+            .as_object_mut()
+            .and_then(|m| m.remove("required"))
+            .and_then(|v| v.as_bool())
+            == Some(true);
+        properties.insert((*name).into(), schema);
+        if is_required {
             required.push(Value::String((*name).into()));
         }
     }
@@ -328,4 +340,39 @@ fn opt_i64(args: &Value, key: &str) -> Option<i64> {
 
 fn opt_bool(args: &Value, key: &str) -> Option<bool> {
     args.get(key).and_then(Value::as_bool)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: every emitted tool schema must be plain JSON
+    /// Schema 2020-12. The `*_prop` helpers used to leak a per-property
+    /// `required: true` sentinel into the published schema, which the
+    /// Anthropic API rejects (`tools.N.custom.input_schema: JSON
+    /// schema is invalid`). The `obj` builder now hoists the sentinel
+    /// into the parent `required` array and removes it from the
+    /// property — this test pins that contract.
+    #[test]
+    fn no_property_carries_required_sentinel() {
+        for tool in list() {
+            let name = tool["name"].as_str().unwrap_or("?");
+            let schema = &tool["inputSchema"];
+            let props = schema["properties"]
+                .as_object()
+                .unwrap_or_else(|| panic!("{name}: properties not an object"));
+            for (prop_name, prop) in props {
+                assert!(
+                    prop.get("required").is_none(),
+                    "{name}.{prop_name} carries an inline `required` key; \
+                     the helpers' sentinel must be stripped by `obj()`",
+                );
+            }
+            // And the parent `required` array exists and is a list.
+            assert!(
+                schema.get("required").and_then(Value::as_array).is_some(),
+                "{name}: parent `required` array missing",
+            );
+        }
+    }
 }
