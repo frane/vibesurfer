@@ -26,17 +26,15 @@
 //! Mac (`webkit/mod.rs`) and Linux (`wpe.rs`) use: `inspector_*`
 //! goes `true` only when the install path actually succeeded.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::Duration;
 
 use vs_protocol::{Ref, Tree};
 
 use webview2_com::Microsoft::Web::WebView2::Win32::{
-    ICoreWebView2, ICoreWebView2Controller, ICoreWebView2Environment, ICoreWebView2_2,
+    ICoreWebView2, ICoreWebView2Controller, ICoreWebView2Environment,
     COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
 };
 use webview2_com::{
@@ -45,7 +43,7 @@ use webview2_com::{
     CreateCoreWebView2EnvironmentCompletedHandler, ExecuteScriptCompletedHandler,
     NavigationCompletedEventHandler, WebMessageReceivedEventHandler,
 };
-use windows::core::{Interface, HSTRING, PWSTR};
+use windows::core::{HSTRING, PWSTR};
 use windows::Win32::Foundation::{E_POINTER, HWND, RECT};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -59,12 +57,11 @@ use crate::engine::{
     ActTarget, Action, AuthBlob, CaptureScope, Engine, EngineCapabilities, EngineError,
     EngineResult, LayoutBox, PageHandle, Viewport, WaitCondition,
 };
-
 // =============================================================================
 // JS payload shared with Mac / Linux backends.
 // =============================================================================
 
-const SNAPSHOT_JS: &str = include_str!("snapshot_dom_walker.js");
+use super::common::SNAPSHOT_DOM_WALKER_JS as SNAPSHOT_JS;
 
 // =============================================================================
 // Per-page state
