@@ -319,6 +319,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "doctest-file"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2db04e74f0a9a93103b50e90b96024c9b2bdca8bce6a632ec71b88736d3d359"
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -793,6 +799,21 @@ dependencies = [
  "hashbrown 0.17.0",
  "serde",
  "serde_core",
+]
+
+[[package]]
+name = "interprocess"
+version = "2.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "069323743400cb7ab06a8fe5c1ed911d36b6919ec531661d034c89083629595b"
+dependencies = [
+ "doctest-file",
+ "futures-core",
+ "libc",
+ "recvmsg",
+ "tokio",
+ "widestring",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1339,6 +1360,12 @@ checksum = "513962919efc330f829edb2535844d1b912b0fbe2ca165d613e4e8788bb05a5a"
 dependencies = [
  "rand_core 0.9.5",
 ]
+
+[[package]]
+name = "recvmsg"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3edd4d5d42c92f0a659926464d4cce56b562761267ecf0f469d85b7de384175"
 
 [[package]]
 name = "regex"
@@ -1920,6 +1947,7 @@ dependencies = [
  "clap",
  "glib",
  "gtk4",
+ "interprocess",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
@@ -1933,6 +1961,7 @@ dependencies = [
  "vs-engine-webkit",
  "vs-protocol",
  "vs-store",
+ "windows",
 ]
 
 [[package]]
@@ -1941,6 +1970,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "blake3",
+ "interprocess",
  "serde_json",
  "tempfile",
  "thiserror",
@@ -2172,6 +2202,12 @@ dependencies = [
  "windows",
  "windows-core",
 ]
+
+[[package]]
+name = "widestring"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72069c3113ab32ab29e5584db3c6ec55d416895e60715417b5b883a357c3e471"
 
 [[package]]
 name = "windows"

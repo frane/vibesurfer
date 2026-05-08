@@ -1,22 +1,24 @@
-//! Synchronous Unix-socket client for the daemon wire protocol.
+//! Synchronous local-socket client for the daemon wire protocol.
 //!
 //! The CLI is short-lived; one connection per invocation, no async.
-//! [`Client`] connects, sends one request line, reads response lines
-//! up to and including the blank-line terminator, and exposes the
-//! parsed warnings + envelope + body to the caller.
+//! [`Client`] connects (AF_UNIX socket on Unix, named pipe on
+//! Windows — both via [`interprocess`]), sends one request line,
+//! reads response lines up to and including the blank-line
+//! terminator, and exposes the parsed warnings + envelope + body to
+//! the caller.
 
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
+use interprocess::local_socket::{prelude::*, Stream};
 use vs_protocol::{Envelope, Request, ResponseHead, Warning};
 
 /// One CLI ↔ daemon connection.
 pub struct Client {
     socket: PathBuf,
-    stream: BufReader<UnixStream>,
+    stream: BufReader<Stream>,
 }
 
 impl Client {
@@ -24,9 +26,10 @@ impl Client {
     /// or an error if the socket is missing / unreachable.
     pub fn connect(socket: impl Into<PathBuf>) -> Result<Self> {
         let socket = socket.into();
-        let stream = UnixStream::connect(&socket)
-            .with_context(|| format!("connect {}", socket.display()))?;
-        stream.set_read_timeout(Some(Duration::from_secs(60)))?;
+        let name = vs_daemon::transport::path_to_name(&socket)
+            .with_context(|| format!("derive ipc name for {}", socket.display()))?;
+        let stream =
+            Stream::connect(name).with_context(|| format!("connect {}", socket.display()))?;
         Ok(Self {
             socket,
             stream: BufReader::new(stream),

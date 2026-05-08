@@ -1,20 +1,20 @@
-//! Drive the daemon over its real Unix socket. Spawns the server in a
-//! tokio runtime, connects, exchanges line-delimited frames.
+//! Drive the daemon over its real local socket. Spawns the server in
+//! a tokio runtime, connects via [`interprocess`] (AF_UNIX on Unix,
+//! named pipe on Windows), exchanges line-delimited frames.
 
 use std::sync::Arc;
 use std::time::Duration;
 
+use interprocess::local_socket::tokio::{prelude::*, RecvHalf, Stream};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
-use tokio::net::unix::OwnedReadHalf;
-use tokio::net::UnixStream;
 
-use vs_daemon::{daemon::Daemon, server};
+use vs_daemon::{daemon::Daemon, server, transport};
 use vs_engine_webkit::{test_support::TestEngine, Engine, EngineRuntime};
 use vs_store::Store;
 
 /// Read one full response from the daemon: every line up to (and
 /// excluding) the blank-line terminator.
-async fn read_response(reader: &mut Lines<BufReader<OwnedReadHalf>>) -> Vec<String> {
+async fn read_response(reader: &mut Lines<BufReader<RecvHalf>>) -> Vec<String> {
     let mut lines = Vec::new();
     loop {
         match reader.next_line().await.unwrap() {
@@ -42,15 +42,15 @@ async fn wire_round_trip() {
 
     // Wait for the socket to bind.
     for _ in 0..40 {
-        if socket.exists() {
+        if transport::is_listening(&socket) {
             break;
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    assert!(socket.exists(), "socket never appeared");
+    assert!(transport::is_listening(&socket), "socket never appeared");
 
-    let stream = UnixStream::connect(&socket).await.unwrap();
-    let (read, mut write) = stream.into_split();
+    let stream = Stream::connect(transport::path_to_name(&socket).unwrap()).await.unwrap();
+    let (read, mut write) = stream.split();
     let mut reader = BufReader::new(read).lines();
 
     // 1. Open a session.
@@ -114,13 +114,13 @@ async fn wire_stale_token_rejected() {
         tokio::spawn(async move { server::serve(daemon, socket_clone, shutdown_rx).await });
 
     for _ in 0..40 {
-        if socket.exists() {
+        if transport::is_listening(&socket) {
             break;
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    let stream = UnixStream::connect(&socket).await.unwrap();
-    let (read, mut write) = stream.into_split();
+    let stream = Stream::connect(transport::path_to_name(&socket).unwrap()).await.unwrap();
+    let (read, mut write) = stream.split();
     let mut reader = BufReader::new(read).lines();
 
     write.write_all(b"vs_session_open\n").await.unwrap();
@@ -173,13 +173,13 @@ async fn wire_idempotent_replay_returns_warning() {
         tokio::spawn(async move { server::serve(daemon, socket_clone, shutdown_rx).await });
 
     for _ in 0..40 {
-        if socket.exists() {
+        if transport::is_listening(&socket) {
             break;
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    let stream = UnixStream::connect(&socket).await.unwrap();
-    let (read, mut write) = stream.into_split();
+    let stream = Stream::connect(transport::path_to_name(&socket).unwrap()).await.unwrap();
+    let (read, mut write) = stream.split();
     let mut reader = BufReader::new(read).lines();
 
     write.write_all(b"vs_session_open\n").await.unwrap();

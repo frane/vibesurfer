@@ -48,13 +48,15 @@ pub fn spawn_daemon(extra_args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-/// Wait until `socket` exists, polling at ~50ms. Returns `Ok(())` on
-/// success, error on timeout.
+/// Wait until a daemon is reachable at `socket`, polling at ~50ms.
+/// On Unix this checks for the AF_UNIX socket file; on Windows it
+/// connect-probes the named pipe (pipes don't appear on the
+/// filesystem). Returns `Ok(())` on success, error on timeout.
 pub fn wait_for_socket(socket: impl AsRef<Path>, timeout: Duration) -> Result<()> {
     let socket = socket.as_ref();
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if socket.exists() {
+        if vs_daemon::transport::is_listening(socket) {
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(50));

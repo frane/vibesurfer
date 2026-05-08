@@ -1,8 +1,10 @@
-//! Unix-socket server: accept connections, dispatch wire requests,
-//! write wire responses.
+//! Cross-platform local-socket server: accept connections, dispatch
+//! wire requests, write wire responses.
 //!
-//! Each connection is a separate Tokio task. Per-primitive handlers
-//! live in submodules; this file owns the listener loop, the
+//! Uses [`interprocess`] to abstract the platform IPC primitive:
+//! AF_UNIX socket files on Unix, named pipes on Windows. Each
+//! connection is a separate Tokio task. Per-primitive handlers live
+//! in submodules; this file owns the listener loop, the
 //! per-connection reader, and the dispatch table.
 
 mod engine_ops;
@@ -14,26 +16,32 @@ mod store_ops;
 use std::path::Path;
 use std::sync::Arc;
 
+use interprocess::local_socket::tokio::{prelude::*, Listener, Stream};
+use interprocess::local_socket::ListenerOptions;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{UnixListener, UnixStream};
 
 use vs_protocol::{ErrorCode, Request};
 
 use crate::daemon::Daemon;
 use helpers::format_error;
 
-/// Bind a Unix socket at `path` and serve `daemon` on it. Loops until
-/// `shutdown` resolves.
+/// Bind a local socket at `path` and serve `daemon` on it. On Unix
+/// `path` is the AF_UNIX socket file; on Windows it's used to derive
+/// a stable namespaced pipe name (see [`crate::transport::path_to_name`]).
+/// Loops until `shutdown` resolves.
 pub async fn serve(
     daemon: Daemon,
     path: impl AsRef<Path>,
     mut shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> std::io::Result<()> {
     let path = path.as_ref();
+    // On Unix, a stale socket file blocks bind. Best-effort cleanup.
+    #[cfg(unix)]
     if path.exists() {
         let _ = std::fs::remove_file(path);
     }
-    let listener = UnixListener::bind(path)?;
+    let name = crate::transport::path_to_name(path)?;
+    let listener: Listener = ListenerOptions::new().name(name).create_tokio()?;
     tracing::info!(?path, "vibesurferd listening");
 
     let daemon = Arc::new(daemon);
@@ -45,7 +53,7 @@ pub async fn serve(
                 break;
             }
             accept = listener.accept() => {
-                let (stream, _peer) = accept?;
+                let stream = accept?;
                 let daemon = daemon.clone();
                 tokio::spawn(async move {
                     if let Err(e) = handle_connection(daemon, stream).await {
@@ -56,13 +64,14 @@ pub async fn serve(
         }
     }
 
+    #[cfg(unix)]
     let _ = std::fs::remove_file(path);
     Ok(())
 }
 
 /// Drive one client connection: read lines, dispatch, write responses.
-async fn handle_connection(daemon: Arc<Daemon>, stream: UnixStream) -> std::io::Result<()> {
-    let (read, mut write) = stream.into_split();
+async fn handle_connection(daemon: Arc<Daemon>, stream: Stream) -> std::io::Result<()> {
+    let (read, mut write) = stream.split();
     let mut reader = BufReader::new(read).lines();
     while let Some(line) = reader.next_line().await? {
         if line.is_empty() {

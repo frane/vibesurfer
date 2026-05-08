@@ -20,6 +20,7 @@ pub mod page_state;
 pub mod redact;
 pub mod server;
 pub mod tokens;
+pub mod transport;
 
 pub use daemon::{
     ActCall, ActResponse, AnnotateResponse, AuthClearResponse, AuthListResponse, AuthLoadResponse,

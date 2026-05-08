@@ -5,8 +5,11 @@
 //! dispatch) so integration tests can construct flows without forking
 //! the binary.
 
-#![cfg_attr(not(target_os = "macos"), forbid(unsafe_code))]
-#![cfg_attr(target_os = "macos", allow(unsafe_code))]
+#![cfg_attr(
+    not(any(target_os = "macos", target_os = "windows")),
+    forbid(unsafe_code)
+)]
+#![cfg_attr(any(target_os = "macos", target_os = "windows"), allow(unsafe_code))]
 
 pub mod active_session;
 pub mod client;
