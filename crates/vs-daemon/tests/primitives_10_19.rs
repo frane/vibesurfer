@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use vs_daemon::{daemon::Daemon, ActCall};
 use vs_engine_webkit::{
-    self as engine, backend::stub::StubEngine, CaptureScope, Engine, EngineRuntime, Viewport,
+    self as engine, test_support::TestEngine, CaptureScope, Engine, EngineRuntime, Viewport,
 };
 use vs_protocol::Ref;
 use vs_store::{AnnotationTarget, MasterKey, Store};
@@ -15,7 +15,7 @@ fn make_daemon() -> (Daemon, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path().join("state.db")).unwrap();
     let runtime =
-        EngineRuntime::spawn(|| Ok(Box::new(StubEngine::new()) as Box<dyn Engine>)).unwrap();
+        EngineRuntime::spawn(|| Ok(Box::new(TestEngine::new()) as Box<dyn Engine>)).unwrap();
     let daemon = Daemon::new(store, Arc::new(runtime))
         .with_captures_dir(dir.path().join("captures"))
         .with_skills_dir(dir.path().join("skills"))
@@ -211,7 +211,7 @@ fn auth_save_without_master_key_errors() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path().join("state.db")).unwrap();
     let runtime =
-        EngineRuntime::spawn(|| Ok(Box::new(StubEngine::new()) as Box<dyn Engine>)).unwrap();
+        EngineRuntime::spawn(|| Ok(Box::new(TestEngine::new()) as Box<dyn Engine>)).unwrap();
     // No master key configured.
     let d = Daemon::new(store, Arc::new(runtime));
     let s = d.session_open(None).unwrap();

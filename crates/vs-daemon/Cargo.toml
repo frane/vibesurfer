@@ -30,3 +30,4 @@ serde_json = "1"
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "io-util", "macros", "time", "test-util"] }
+vs-engine-webkit = { path = "../vs-engine-webkit", features = ["test-support"] }

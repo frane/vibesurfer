@@ -11,6 +11,7 @@
 //! [`Tree`] in the canonical wire format. Proves end-to-end that
 //! `WkBackend::open` and `WkBackend::snapshot` actually work against
 //! the real browser.
+#[cfg(target_os = "macos")]
 use vs_engine_webkit::{
     engine::{ActTarget, Action, Viewport, WaitCondition},
     CaptureScope,

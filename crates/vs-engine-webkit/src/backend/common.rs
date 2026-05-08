@@ -165,8 +165,7 @@ fn build_act_js(r: Ref, action: &Action) -> String {
     )
 }
 
-/// Run an `act` primitive through an `eval_js`-style callable.
-pub(crate) fn run_act<F>(eval: F, target: ActTarget, action: Action) -> EngineResult<()>
+pub(crate) fn run_act<F>(eval: F, target: &ActTarget, action: &Action) -> EngineResult<()>
 where
     F: Fn(&str, Duration) -> EngineResult<String>,
 {
@@ -179,7 +178,7 @@ where
             });
         }
     };
-    let js = build_act_js(r, &action);
+    let js = build_act_js(*r, action);
     let result = eval(&js, Duration::from_secs(5))?;
     let unwrapped = serde_json::from_str::<String>(&result).unwrap_or(result);
     if unwrapped == "ok" {
@@ -286,7 +285,7 @@ fn build_wait_predicate(cond: &WaitCondition) -> String {
 /// between polls so the caller can pump its platform run loop.
 pub(crate) fn run_wait<F, T>(
     eval: F,
-    cond: WaitCondition,
+    cond: &WaitCondition,
     budget: Duration,
     mut tick: T,
 ) -> EngineResult<()>
@@ -294,7 +293,7 @@ where
     F: Fn(&str, Duration) -> EngineResult<String>,
     T: FnMut(),
 {
-    let predicate = build_wait_predicate(&cond);
+    let predicate = build_wait_predicate(cond);
     let deadline = std::time::Instant::now() + budget;
     let slice = Duration::from_millis(150);
     loop {
@@ -351,24 +350,24 @@ where
         .ok_or_else(|| EngineError::Other("expected array".into()))?;
     let mut out = Vec::with_capacity(arr.len());
     for entry in arr {
-        let r_v = entry.get("r").and_then(|x| x.as_u64()).unwrap_or(0);
+        let r_v = entry.get("r").and_then(serde_json::Value::as_u64).unwrap_or(0);
         let r = Ref(u32::try_from(r_v).unwrap_or(0));
         let found = entry
             .get("found")
-            .and_then(|x| x.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         if !found {
             continue;
         }
         out.push(LayoutBox {
             r,
-            x: entry.get("x").and_then(|x| x.as_f64()).unwrap_or(0.0),
-            y: entry.get("y").and_then(|x| x.as_f64()).unwrap_or(0.0),
-            width: entry.get("w").and_then(|x| x.as_f64()).unwrap_or(0.0),
-            height: entry.get("h").and_then(|x| x.as_f64()).unwrap_or(0.0),
+            x: entry.get("x").and_then(serde_json::Value::as_f64).unwrap_or(0.0),
+            y: entry.get("y").and_then(serde_json::Value::as_f64).unwrap_or(0.0),
+            width: entry.get("w").and_then(serde_json::Value::as_f64).unwrap_or(0.0),
+            height: entry.get("h").and_then(serde_json::Value::as_f64).unwrap_or(0.0),
             visible: entry
                 .get("visible")
-                .and_then(|x| x.as_bool())
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false),
             z_index: entry
                 .get("z")
@@ -402,10 +401,8 @@ where
         .map_err(|e| EngineError::Other(format!("auth blob not utf8: {e}")))?;
     let payload_lit = serde_json::to_string(payload)
         .map_err(|e| EngineError::Other(format!("auth blob json-encode: {e}")))?;
-    let js = format!(
-        "(function() {{ const blob = JSON.parse({payload_lit}); {body} }})()",
-        body = AUTH_LOAD_BODY_JS
-    );
+    let body = AUTH_LOAD_BODY_JS;
+    let js = format!("(function() {{ const blob = JSON.parse({payload_lit}); {body} }})()");
     let result = eval(&js, Duration::from_secs(5))?;
     let unwrapped = serde_json::from_str::<String>(&result).unwrap_or(result);
     if unwrapped == "ok" {
@@ -608,7 +605,7 @@ fn parse_storage_entries(json: &str) -> Vec<crate::inspector::StorageEntry> {
             .to_string();
         let sensitive = e
             .get("sensitive")
-            .and_then(|x| x.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         out.push(crate::inspector::StorageEntry {
             key,

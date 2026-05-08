@@ -7,15 +7,12 @@
 //!
 //! # Backends
 //!
-//! - [`backend::stub`] — in-process placeholder. Always available;
-//!   used by daemon tests and as the default until the real backends
-//!   land. M3a.
-//! - **`backend::wpe`** *(M3b)* — WPE WebKit on Linux via FFI (or
-//!   `webkit2gtk-sys` as the documented fallback; see ADR 0001),
-//!   driven from a thread that owns a `GMainLoop`.
-//! - **`backend::webkit`** *(M3c)* — system WebKit framework on macOS
-//!   via `objc2` + `objc2-web-kit`, driven from a thread that owns a
-//!   `CFRunLoop` against an offscreen `WKWebView`.
+//! - [`backend::webkit`] *(macOS)* — system WebKit framework via
+//!   `objc2` + `objc2-web-kit`, driven from the Cocoa main thread.
+//! - [`backend::wpe`] *(Linux)* — WebKitGTK 6 via `webkit6` + `glib`,
+//!   driven from a thread that owns a GLib main context.
+//! - [`backend::webview2`] *(Windows)* — WebView2 via `webview2-com` +
+//!   `windows-rs`, driven from a thread that owns a Win32 message pump.
 //!
 //! All backends implement [`Engine`]; [`EngineRuntime::spawn`] is
 //! generic over the constructor so the daemon can pick a backend at
@@ -45,6 +42,9 @@ pub mod backend;
 pub mod engine;
 pub mod inspector;
 pub mod runtime;
+
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 
 pub use engine::{
     ActTarget, Action, AuthBlob, CaptureScope, Engine, EngineCapabilities, EngineError,

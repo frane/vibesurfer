@@ -1,20 +1,20 @@
 #![allow(clippy::many_single_char_names)]
 //! End-to-end integration: drive primitives 1–9 against a daemon
-//! backed by a temp `Store` and the `StubEngine`. Covers the in-process
+//! backed by a temp `Store` and the `TestEngine`. Covers the in-process
 //! [`Daemon`] API; wire-format dispatch lives in `tests/wire.rs`.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use vs_daemon::{daemon::Daemon, page_state::ViewForm};
-use vs_engine_webkit::{self as engine, backend::stub::StubEngine, Engine, EngineRuntime};
+use vs_engine_webkit::{self as engine, test_support::TestEngine, Engine, EngineRuntime};
 use vs_protocol::Ref;
 use vs_store::Store;
 
 fn make_daemon() -> (Daemon, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path().join("state.db")).expect("store");
-    let runtime = EngineRuntime::spawn(|| Ok(Box::new(StubEngine::new()) as Box<dyn Engine>))
+    let runtime = EngineRuntime::spawn(|| Ok(Box::new(TestEngine::new()) as Box<dyn Engine>))
         .expect("engine");
     let daemon = Daemon::new(store, Arc::new(runtime));
     (daemon, dir)
@@ -61,7 +61,7 @@ fn full_primitive_sequence() {
     assert_eq!(after_act.warnings.len(), 0);
 
     // The token returned by act is the post-action token.
-    let f = d.find(&s.session_id, "Stub").unwrap();
+    let f = d.find(&s.session_id, "Test").unwrap();
     assert!(!f.hits.is_empty());
 
     d.wait(
@@ -255,7 +255,7 @@ fn open_with_view_returns_tree() {
         view_section.starts_with('@'),
         "view envelope after separator: {view_section:?}"
     );
-    // StubEngine's tree includes a `doc` root.
+    // TestEngine's tree includes a `doc` root.
     assert!(
         view_section.contains("doc"),
         "view body should include `doc` role: {view_section:?}"
@@ -449,7 +449,7 @@ fn view_layout_unknown_ref_warns() {
     let s = d.session_open(None).unwrap();
     let p = d.open(&s.session_id, "https://x").unwrap();
 
-    // Ref 999 doesn't exist in StubEngine's tree.
+    // Ref 999 doesn't exist in TestEngine's tree.
     let req = Request::new("vs_view")
         .arg(p.page_id.clone())
         .flag_value("session", s.session_id.clone())

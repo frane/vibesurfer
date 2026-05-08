@@ -12,6 +12,13 @@ build = "build.rs"
 [lints]
 workspace = true
 
+[features]
+# Exposes `vs_engine_webkit::test_support::TestEngine` — an in-memory
+# fake `Engine` used by daemon-layer tests to exercise audit / store
+# / ref-resolution code without booting WebKit. Sealed: production
+# builds (which never enable this feature) cannot link the fake.
+test-support = []
+
 [dependencies]
 vs-protocol = { path = "../vs-protocol" }
 thiserror = "2"

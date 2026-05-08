@@ -86,8 +86,7 @@ pub fn ingest_console(buf: &mut RingBuffer<ConsoleEntry>, body: &str) {
     let ts = v
         .get("ts_ms")
         .and_then(serde_json::Value::as_i64)
-        .map(ts_from_ms)
-        .unwrap_or_else(SystemTime::now);
+        .map_or_else(SystemTime::now, ts_from_ms);
     buf.push(ConsoleEntry {
         timestamp: ts,
         level,
@@ -128,6 +127,7 @@ pub struct NetworkIngestSlot<'a> {
 /// Parse a `vsNetwork` body and update buffers. Two phases:
 /// `start` records the request side; `end` finalizes status/latency
 /// and writes the [`NetworkEntry`] + [`RequestDetail`].
+#[allow(clippy::needless_pass_by_value)] // slot bundles &mut borrows; moving is intentional
 pub fn ingest_network(slot: NetworkIngestSlot<'_>, body: &str) {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else {
         return;

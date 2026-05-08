@@ -9,7 +9,7 @@ use tokio::net::unix::OwnedReadHalf;
 use tokio::net::UnixStream;
 
 use vs_daemon::{daemon::Daemon, server};
-use vs_engine_webkit::{backend::stub::StubEngine, Engine, EngineRuntime};
+use vs_engine_webkit::{test_support::TestEngine, Engine, EngineRuntime};
 use vs_store::Store;
 
 /// Read one full response from the daemon: every line up to (and
@@ -32,7 +32,7 @@ async fn wire_round_trip() {
 
     let store = Store::open(dir.path().join("state.db")).unwrap();
     let runtime =
-        EngineRuntime::spawn(|| Ok(Box::new(StubEngine::new()) as Box<dyn Engine>)).unwrap();
+        EngineRuntime::spawn(|| Ok(Box::new(TestEngine::new()) as Box<dyn Engine>)).unwrap();
     let daemon = Daemon::new(store, Arc::new(runtime));
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
@@ -105,7 +105,7 @@ async fn wire_stale_token_rejected() {
 
     let store = Store::open(dir.path().join("state.db")).unwrap();
     let runtime =
-        EngineRuntime::spawn(|| Ok(Box::new(StubEngine::new()) as Box<dyn Engine>)).unwrap();
+        EngineRuntime::spawn(|| Ok(Box::new(TestEngine::new()) as Box<dyn Engine>)).unwrap();
     let daemon = Daemon::new(store, Arc::new(runtime));
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
@@ -164,7 +164,7 @@ async fn wire_idempotent_replay_returns_warning() {
 
     let store = Store::open(dir.path().join("state.db")).unwrap();
     let runtime =
-        EngineRuntime::spawn(|| Ok(Box::new(StubEngine::new()) as Box<dyn Engine>)).unwrap();
+        EngineRuntime::spawn(|| Ok(Box::new(TestEngine::new()) as Box<dyn Engine>)).unwrap();
     let daemon = Daemon::new(store, Arc::new(runtime));
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();

@@ -1,10 +1,10 @@
-//! In-process stub backend.
+//! In-process `TestEngine` — a fake `Engine` impl used by tests.
 //!
-//! [`StubEngine`] satisfies the [`Engine`](crate::engine::Engine) trait
+//! [`TestEngine`] satisfies the [`Engine`](crate::engine::Engine) trait
 //! without any FFI. It maintains an in-memory map of pages and serves
-//! a canned a11y tree on `snapshot`. The daemon uses it for unit tests
-//! that don't need pixels; production code paths use the real WebKit
-//! backends from M3b / M3c.
+//! a canned a11y tree on `snapshot`. Daemon tests use it to exercise
+//! request/response, audit, store, and ref-resolution code paths
+//! without booting a real WebKit. Sealed behind the `test-support` Cargo feature so production binaries cannot link it.
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -18,7 +18,7 @@ use crate::engine::{
     EngineResult, LayoutBox, PageHandle, Viewport, WaitCondition,
 };
 
-/// 1×1 transparent PNG. Used by the stub backend so the protocol's
+/// 1×1 transparent PNG. Used by the test engine so the protocol's
 /// `vs_capture` path can be exercised end-to-end without a real
 /// renderer; meaningful pixels arrive with M3b/M3c.
 const ONE_BY_ONE_PNG: &[u8] = &[
@@ -28,12 +28,12 @@ const ONE_BY_ONE_PNG: &[u8] = &[
     0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
     0x42, 0x60, 0x82,
 ];
-/// Per-page state held by [`StubEngine`].
+/// Per-page state held by [`TestEngine`].
 #[derive(Debug, Clone)]
-struct StubPage {
+struct TestPage {
     url: String,
     viewport: Viewport,
-    /// Auth blob "applied" to this page. The stub doesn't actually do
+    /// Auth blob "applied" to this page. TestEngine doesn't actually do
     /// anything with it — round-trip only.
     auth: Option<AuthBlob>,
     /// Wall-clock when the page was opened. Used as the base for
@@ -42,16 +42,16 @@ struct StubPage {
     opened_at: std::time::SystemTime,
 }
 
-/// In-process engine for tests and daemon plumbing.
+/// In-process engine for tests and daemon plumbing. Sealed behind the `test-support` feature.
 #[derive(Debug, Default)]
-pub struct StubEngine {
+pub struct TestEngine {
     next_handle: u64,
-    pages: BTreeMap<PageHandle, StubPage>,
+    pages: BTreeMap<PageHandle, TestPage>,
     capture_dir: Option<std::path::PathBuf>,
     capture_seq: u64,
 }
 
-impl StubEngine {
+impl TestEngine {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -71,14 +71,14 @@ impl StubEngine {
         PageHandle(self.next_handle)
     }
 
-    fn page(&self, page: PageHandle) -> EngineResult<&StubPage> {
+    fn page(&self, page: PageHandle) -> EngineResult<&TestPage> {
         self.pages.get(&page).ok_or(EngineError::NotFound {
             kind: "page",
             id: page.0.to_string(),
         })
     }
 
-    fn page_mut(&mut self, page: PageHandle) -> EngineResult<&mut StubPage> {
+    fn page_mut(&mut self, page: PageHandle) -> EngineResult<&mut TestPage> {
         self.pages.get_mut(&page).ok_or(EngineError::NotFound {
             kind: "page",
             id: page.0.to_string(),
@@ -88,7 +88,7 @@ impl StubEngine {
     /// Build the canned a11y tree we serve from `snapshot`. The tree
     /// reflects the current page's URL in the document label.
     fn canned_tree(url: &str) -> Tree {
-        let mut hd = Node::leaf(Ref(2), Role::Hd, "Stub Page");
+        let mut hd = Node::leaf(Ref(2), Role::Hd, "Test Page");
         hd.attrs.insert("level".into(), "1".into());
 
         let mut input = Node::leaf(Ref(3), Role::Tf, "");
@@ -106,7 +106,7 @@ impl StubEngine {
         let doc = Node {
             r: Ref(1),
             role: Role::Doc,
-            label: format!("Stub: {url}"),
+            label: format!("Test: {url}"),
             ops: BTreeSet::new(),
             attrs: BTreeMap::new(),
             children: vec![hd, input, button, link],
@@ -115,12 +115,12 @@ impl StubEngine {
     }
 }
 
-impl Engine for StubEngine {
+impl Engine for TestEngine {
     fn open(&mut self, url: &str) -> EngineResult<PageHandle> {
         let handle = self.alloc_handle();
         self.pages.insert(
             handle,
-            StubPage {
+            TestPage {
                 url: url.to_string(),
                 viewport: Viewport::DESKTOP,
                 auth: None,
@@ -159,7 +159,7 @@ impl Engine for StubEngine {
                 });
             }
         }
-        // The stub doesn't actually mutate anything in response to
+        // TestEngine doesn't actually mutate anything in response to
         // actions; it just acknowledges the call. `Fill` and `Key` carry
         // payload but we don't store them.
         let _ = action;
@@ -180,7 +180,7 @@ impl Engine for StubEngine {
             WaitCondition::RefAppears(r) if (1..=5).contains(&r.0) => Ok(()),
             WaitCondition::RefGone(r) if !(1..=5).contains(&r.0) => Ok(()),
             WaitCondition::Text(t) => {
-                if t.contains("Stub") {
+                if t.contains("Test") {
                     Ok(())
                 } else {
                     Err(EngineError::Timeout {
@@ -204,7 +204,7 @@ impl Engine for StubEngine {
         std::fs::create_dir_all(&dir)
             .map_err(|e| EngineError::Other(format!("create capture dir: {e}")))?;
         self.capture_seq += 1;
-        let filename = format!("stub-{}-{}.png", page.0, self.capture_seq);
+        let filename = format!("test-engine-{}-{}.png", page.0, self.capture_seq);
         let path = dir.join(filename);
         std::fs::write(&path, ONE_BY_ONE_PNG)
             .map_err(|e| EngineError::Other(format!("write capture: {e}")))?;
@@ -283,20 +283,20 @@ impl Engine for StubEngine {
             crate::inspector::ConsoleEntry {
                 timestamp: s1,
                 level: crate::inspector::ConsoleLevel::Log,
-                message: "stub: page loaded".into(),
+                message: "test: page loaded".into(),
                 stack: None,
             },
             crate::inspector::ConsoleEntry {
                 timestamp: s2,
                 level: crate::inspector::ConsoleLevel::Warn,
-                message: "stub: deprecation warning".into(),
+                message: "test: deprecation warning".into(),
                 stack: None,
             },
             crate::inspector::ConsoleEntry {
                 timestamp: s3,
                 level: crate::inspector::ConsoleLevel::Error,
-                message: "stub: synthetic error".into(),
-                stack: Some("at stubBackend (stub:1:1)".into()),
+                message: "test: synthetic error".into(),
+                stack: Some("at testEngine (test:1:1)".into()),
             },
         ])
     }
@@ -368,7 +368,7 @@ impl Engine for StubEngine {
                     name: "Content-Type".into(),
                     value: "text/html".into(),
                 }],
-                response_body: Some("<!doctype html><h1>stub</h1>".into()),
+                response_body: Some("<!doctype html><h1>test</h1>".into()),
             },
             2 => crate::inspector::RequestDetail {
                 seq: 2,
@@ -416,12 +416,12 @@ impl Engine for StubEngine {
         if expr.contains("throw ") {
             return Ok(crate::inspector::EvalResult::Thrown {
                 kind: "TypeError".into(),
-                message: "stub: simulated throw".into(),
+                message: "test: simulated throw".into(),
             });
         }
         if expr.contains("###") {
             return Ok(crate::inspector::EvalResult::Syntax {
-                message: "stub: simulated syntax error".into(),
+                message: "test: simulated syntax error".into(),
             });
         }
         Ok(crate::inspector::EvalResult::Ok {
@@ -516,7 +516,7 @@ impl Engine for StubEngine {
             1 => Some(crate::inspector::ScriptSource {
                 seq: 1,
                 source_url: format!("{}/static/app.js", p.url),
-                body: "// stub: synthetic app.js\nfunction main() {}\n".into(),
+                body: "// test-engine: synthetic app.js\nfunction main() {}\n".into(),
             }),
             2 => Some(crate::inspector::ScriptSource {
                 seq: 2,
@@ -547,11 +547,11 @@ impl Engine for StubEngine {
             ("z-index".to_string(), "auto".to_string()),
         ];
         for p in extra_props {
-            computed.push((p.clone(), format!("(stub:{})", p)));
+            computed.push((p.clone(), format!("(test:{p})")));
         }
         Ok(Some(crate::inspector::DomDetail {
             r: r.0,
-            outer_html: format!("<div data-vs-ref=\"{}\">stub</div>", r.0),
+            outer_html: format!("<div data-vs-ref=\"{}\">test</div>", r.0),
             computed,
         }))
     }
@@ -574,7 +574,7 @@ impl Engine for StubEngine {
         })
     }
     fn capabilities(&self) -> EngineCapabilities {
-        EngineCapabilities::STUB
+        EngineCapabilities::TEST
     }
 }
 
@@ -585,19 +585,19 @@ mod tests {
 
     #[test]
     fn open_and_snapshot() {
-        let mut e = StubEngine::new();
+        let mut e = TestEngine::new();
         let page = e.open("https://example.com").unwrap();
         let tree = e.snapshot(page).unwrap();
         assert_eq!(tree.roots.len(), 1);
         assert_eq!(tree.roots[0].r, Ref(1));
-        assert!(tree.roots[0].label.contains("Stub: https://example.com"));
+        assert!(tree.roots[0].label.contains("Test: https://example.com"));
         // Children: hd, input, button, link
         assert_eq!(tree.roots[0].children.len(), 4);
     }
 
     #[test]
     fn close_idempotent() {
-        let mut e = StubEngine::new();
+        let mut e = TestEngine::new();
         let page = e.open("about:blank").unwrap();
         e.close(page).unwrap();
         // Closing again is a no-op (the page is just gone).
@@ -606,7 +606,7 @@ mod tests {
 
     #[test]
     fn snapshot_after_close_errors() {
-        let mut e = StubEngine::new();
+        let mut e = TestEngine::new();
         let page = e.open("about:blank").unwrap();
         e.close(page).unwrap();
         let err = e.snapshot(page).unwrap_err();
@@ -615,7 +615,7 @@ mod tests {
 
     #[test]
     fn act_known_ref_succeeds() {
-        let mut e = StubEngine::new();
+        let mut e = TestEngine::new();
         let p = e.open("about:blank").unwrap();
         e.act(p, ActTarget::Ref(Ref(4)), Action::Click).unwrap();
         e.act(
@@ -628,7 +628,7 @@ mod tests {
 
     #[test]
     fn act_unknown_ref_errors() {
-        let mut e = StubEngine::new();
+        let mut e = TestEngine::new();
         let p = e.open("about:blank").unwrap();
         let err = e
             .act(p, ActTarget::Ref(Ref(99)), Action::Click)
@@ -638,7 +638,7 @@ mod tests {
 
     #[test]
     fn wait_stable_returns_immediately() {
-        let mut e = StubEngine::new();
+        let mut e = TestEngine::new();
         let p = e.open("about:blank").unwrap();
         e.wait(p, WaitCondition::Stable, Duration::from_millis(0))
             .unwrap();
@@ -646,7 +646,7 @@ mod tests {
 
     #[test]
     fn wait_token_change_times_out() {
-        let mut e = StubEngine::new();
+        let mut e = TestEngine::new();
         let p = e.open("about:blank").unwrap();
         let err = e
             .wait(p, WaitCondition::TokenChange, Duration::from_millis(1))
@@ -657,7 +657,7 @@ mod tests {
     #[test]
     fn capture_writes_a_one_by_one_png() {
         let dir = tempfile::tempdir().unwrap();
-        let mut e = StubEngine::new().with_capture_dir(dir.path());
+        let mut e = TestEngine::new().with_capture_dir(dir.path());
         let p = e.open("https://example.com").unwrap();
         let path = e.capture(p, CaptureScope::Viewport).unwrap();
         assert!(path.exists(), "capture file missing: {path:?}");
@@ -670,7 +670,7 @@ mod tests {
 
     #[test]
     fn layout_returns_one_box_per_ref() {
-        let mut e = StubEngine::new();
+        let mut e = TestEngine::new();
         let p = e.open("about:blank").unwrap();
         let boxes = e.layout(p, &[Ref(2), Ref(4)]).unwrap();
         assert_eq!(boxes.len(), 2);
@@ -681,7 +681,7 @@ mod tests {
 
     #[test]
     fn auth_round_trip() {
-        let mut e = StubEngine::new();
+        let mut e = TestEngine::new();
         let p = e.open("https://example.com").unwrap();
         let blob = e.save_auth(p).unwrap();
         assert_eq!(blob.bytes, b"https://example.com");
@@ -690,7 +690,7 @@ mod tests {
 
     #[test]
     fn viewport_persists() {
-        let mut e = StubEngine::new();
+        let mut e = TestEngine::new();
         let p = e.open("about:blank").unwrap();
         e.set_viewport(p, Viewport::MOBILE).unwrap();
         // No public getter, but the page's viewport is updated; verify
@@ -699,9 +699,9 @@ mod tests {
     }
 
     #[test]
-    fn capabilities_are_stub() {
-        let e = StubEngine::new();
-        assert_eq!(e.capabilities().name, "stub");
+    fn capabilities_are_test() {
+        let e = TestEngine::new();
+        assert_eq!(e.capabilities().name, "test");
         assert!(e.capabilities().renders);
         assert!(e.capabilities().persists_auth);
     }

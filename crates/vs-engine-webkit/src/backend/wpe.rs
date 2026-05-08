@@ -21,12 +21,11 @@
 //! installed; this file is not built on macOS.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
-use glib::object::Cast;
 use glib::prelude::*;
 use webkit6::prelude::*;
 use webkit6::{LoadEvent, UserContentInjectedFrames, UserScript, UserScriptInjectionTime, WebView};
@@ -128,9 +127,7 @@ fn run_loop_until<F: FnMut() -> bool>(mut done: F, budget: Duration) -> bool {
 // Shared payloads + parsers
 // =============================================================================
 
-use super::common::{
-    parse_snapshot, AUTH_LOAD_BODY_JS, AUTH_SAVE_JS, SNAPSHOT_DOM_WALKER_JS as SNAPSHOT_JS,
-};
+use super::common::{parse_snapshot, SNAPSHOT_DOM_WALKER_JS as SNAPSHOT_JS};
 
 // =============================================================================
 // Engine impl
@@ -151,11 +148,10 @@ impl Engine for WpeBackend {
         // Wait for LoadEvent::Finished or LoadEvent::Failed via signal.
         let slot: Rc<RefCell<Option<Result<(), String>>>> = Rc::new(RefCell::new(None));
         let slot_for_signal = slot.clone();
-        let signal_id = web_view.connect_load_changed(move |_view, event| match event {
-            LoadEvent::Finished => {
+        let signal_id = web_view.connect_load_changed(move |_view, event| {
+            if event == LoadEvent::Finished {
                 *slot_for_signal.borrow_mut() = Some(Ok(()));
             }
-            _ => {}
         });
         let slot_fail = slot.clone();
         let fail_id = web_view.connect_load_failed(move |_view, _event, _uri, err| {
@@ -214,8 +210,8 @@ impl Engine for WpeBackend {
         let web_view = p.web_view.clone();
         super::common::run_act(
             move |js, budget| eval_js_string(&web_view, js, budget),
-            target,
-            action,
+            &target,
+            &action,
         )
     }
 
@@ -229,7 +225,7 @@ impl Engine for WpeBackend {
         let web_view = p.web_view.clone();
         super::common::run_wait(
             |js, budget| eval_js_string(&web_view, js, budget),
-            cond,
+            &cond,
             budget,
             || {
                 let _ = run_loop_until(|| false, Duration::from_millis(50));
@@ -249,8 +245,10 @@ impl Engine for WpeBackend {
         // WebKitGTK doesn't expose a per-WebView viewport API the way
         // WKWebView's setFrame does on macOS. Resize via the GTK widget
         // size request — the WebView is itself a Widget.
-        p.web_view
-            .set_size_request(viewport.width as i32, viewport.height as i32);
+        p.web_view.set_size_request(
+            i32::try_from(viewport.width).unwrap_or(i32::MAX),
+            i32::try_from(viewport.height).unwrap_or(i32::MAX),
+        );
         Ok(())
     }
 

@@ -188,8 +188,8 @@ impl Engine for WkBackend {
         let web_view = p.web_view.clone();
         super::common::run_act(
             move |js, budget| eval_js_string(&web_view, js, budget),
-            target,
-            action,
+            &target,
+            &action,
         )
     }
 
@@ -203,7 +203,7 @@ impl Engine for WkBackend {
         let web_view = p.web_view.clone();
         super::common::run_wait(
             |js, budget| eval_js_string(&web_view, js, budget),
-            cond,
+            &cond,
             budget,
             || {
                 let _ = run_loop_until(|| false, Duration::from_millis(50));

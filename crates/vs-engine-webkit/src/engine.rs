@@ -168,17 +168,17 @@ pub struct EngineCapabilities {
 }
 
 impl EngineCapabilities {
-    /// Capabilities of the in-memory stub backend.
-    pub const STUB: Self = Self {
+    /// Capabilities advertised by the in-memory `TestEngine` (in
+    /// `test_support`). Sealed behind the `test-support` Cargo
+    /// feature; production builds of the daemon never see this.
+    pub const TEST: Self = Self {
         renders: true,
         honors_viewport: true,
         measures_layout: true,
         persists_auth: true,
-        // The stub returns synthetic console/network entries so the
-        // protocol path can be exercised without a real browser.
         inspector_console: true,
         inspector_network: true,
-        name: "stub",
+        name: "test",
         version: "",
     };
 }

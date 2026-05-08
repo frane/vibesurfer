@@ -25,9 +25,8 @@ fn smoke_open_static_html_against_real_engine() {
         let r = ctx.vs(&["view", &page]);
         assert_ok("view", &r);
         // A real WebKit-rendered static.html must contain at least our
-        // h1 text. The StubEngine never sees this label so a "Stub"
-        // result here would prove the harness is talking to the wrong
-        // engine.
+        // h1 text. If this assertion fails, the harness is talking to
+        // the wrong engine.
         assert!(
             r.stdout.contains("Static fixture"),
             "view body should contain h1 text:\n{}",

@@ -14,17 +14,14 @@
 //! channel back to main, where they're drained between NSRunLoop
 //! ticks. See [`vs_engine_webkit::runtime::MainThreadDispatcher`].
 //!
-//! On **non-macOS** platforms we keep the M5-era path: tokio owns main,
-//! engine is the `StubEngine` running on a worker. The Linux WPE port
-//! will replace this when it lands.
+//! On **Linux**, the same shape applies with a GLib main context and
+//! WebKitGTK 6. On **Windows**, with a Win32 message pump and
+//! WebView2.
 
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use vs_daemon::{config::Paths as DaemonPaths, server, Daemon};
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-use vs_engine_webkit::{backend::stub::StubEngine, Engine, EngineRuntime};
 
 /// Args specific to `vs serve`. `paths` is the resolved daemon home.
 pub struct ServeArgs {
@@ -312,55 +309,6 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     Ok(())
 }
 
-// =============================================================================
-// Other targets (BSD etc.): tokio owns main, StubEngine on a worker.
-// =============================================================================
-
-#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
-pub async fn run(args: &ServeArgs) -> Result<()> {
-    init_tracing();
-    args.paths.ensure_root().context("ensure ~/.vibesurfer")?;
-    let store = vs_store::Store::open(args.paths.db()).context("open state.db")?;
-    let captures_dir = args.paths.captures();
-    let skills_dir = args.paths.root.join("skills");
-    let captures_for_engine = captures_dir.clone();
-
-    let engine = EngineRuntime::spawn(move || {
-        Ok(
-            Box::new(StubEngine::new().with_capture_dir(captures_for_engine.clone()))
-                as Box<dyn Engine>,
-        )
-    })
-    .context("spawn engine runtime")?;
-
-    let mut daemon = Daemon::new(store, Arc::new(engine))
-        .with_captures_dir(captures_dir)
-        .with_skills_dir(skills_dir);
-
-    if let Ok(k) = vs_store::MasterKey::resolve(args.paths.key_file()) {
-        daemon = daemon.with_master_key(k);
-    } else {
-        tracing::warn!(
-            "no master key (keyring entry missing and {} not present); vs_auth save|load will fail",
-            args.paths.key_file().display()
-        );
-    }
-
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-    let socket = args.paths.socket();
-    let socket_clone = socket.clone();
-    let server_task =
-        tokio::spawn(async move { server::serve(daemon, socket_clone, shutdown_rx).await });
-
-    tokio::signal::ctrl_c()
-        .await
-        .context("install ctrl-c handler")?;
-    tracing::info!("ctrl-c received, shutting down");
-    let _ = shutdown_tx.send(());
-    let _ = server_task.await;
-    Ok(())
-}
 
 fn init_tracing() {
     if tracing::dispatcher::has_been_set() {

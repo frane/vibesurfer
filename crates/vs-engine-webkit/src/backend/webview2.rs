@@ -453,8 +453,8 @@ impl Engine for Webview2Backend {
         let web_view = p.web_view.clone();
         super::common::run_act(
             move |js, _budget| execute_script(&web_view, js),
-            target,
-            action,
+            &target,
+            &action,
         )
     }
 
@@ -468,7 +468,7 @@ impl Engine for Webview2Backend {
         let web_view = p.web_view.clone();
         super::common::run_wait(
             |js, _budget| execute_script(&web_view, js),
-            cond,
+            &cond,
             budget,
             || {
                 // No labeled-break loop here — the wait body polls
