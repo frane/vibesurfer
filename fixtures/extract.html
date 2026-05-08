@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Extract fixtures</title>
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "Product",
+      "name": "Demo Widget",
+      "sku": "demo-001",
+      "offers": { "@type": "Offer", "price": "19.99", "priceCurrency": "USD" }
+    }
+  </script>
+  <script type="application/x-webmcp">
+    {
+      "version": "0.1",
+      "tools": [
+        { "name": "lookup", "description": "Look up a record by id." },
+        { "name": "create", "description": "Create a record." }
+      ]
+    }
+  </script>
+</head>
+<body>
+  <main>
+    <h1>Extract page</h1>
+
+    <table id="people">
+      <thead>
+        <tr><th>Name</th><th>Role</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Ada</td><td>Engineer</td></tr>
+        <tr><td>Grace</td><td>Admiral</td></tr>
+      </tbody>
+    </table>
+
+    <form id="contact" action="/echo" method="post">
+      <label for="email">Email</label>
+      <input type="email" id="email" name="email">
+      <label for="message">Message</label>
+      <textarea id="message" name="message"></textarea>
+      <button type="submit">Send</button>
+    </form>
+
+    <ul id="todo">
+      <li>Buy bread</li>
+      <li>Walk dog</li>
+      <li>Ship code</li>
+    </ul>
+  </main>
+</body>
+</html>

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Responsive</title>
+  <style>
+    nav.full { display: block; }
+    nav.hamburger { display: none; }
+    @media (max-width: 600px) {
+      nav.full { display: none; }
+      nav.hamburger { display: block; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <nav class="full" id="nav-desktop">Home · Pricing · Sign in</nav>
+    <nav class="hamburger" id="nav-mobile">
+      <button id="nav-toggle">&#9776; Menu</button>
+    </nav>
+  </header>
+  <main>
+    <h1>Responsive page</h1>
+    <p>Resize the viewport: below 600px wide, the desktop nav hides and
+       the hamburger nav shows.</p>
+  </main>
+</body>
+</html>

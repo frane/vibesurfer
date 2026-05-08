@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Static fixture — every role</title>
+</head>
+<body>
+  <header>
+    <nav><a href="/static.html#top">Top</a> · <a href="/form.html">Login</a></nav>
+  </header>
+  <main>
+    <h1>Static fixture — every role</h1>
+    <p>This page exercises every role code in the protocol so a snapshot can be diffed cell-by-cell.</p>
+
+    <section>
+      <h2>Forms + inputs</h2>
+      <form id="example-form" action="/echo" method="post">
+        <label for="name">Name</label>
+        <input type="text" id="name" name="name" placeholder="your name">
+        <label for="bio">Bio</label>
+        <textarea id="bio" name="bio" placeholder="about you"></textarea>
+        <label for="role">Role</label>
+        <select id="role" name="role">
+          <option value="dev">Developer</option>
+          <option value="ops">Operations</option>
+        </select>
+        <label><input type="checkbox" id="terms" name="terms"> Accept terms</label>
+        <fieldset>
+          <legend>Tier</legend>
+          <label><input type="radio" name="tier" value="free" id="tier-free"> Free</label>
+          <label><input type="radio" name="tier" value="pro" id="tier-pro"> Pro</label>
+        </fieldset>
+        <button type="submit" id="primary-cta">Submit</button>
+      </form>
+    </section>
+
+    <section>
+      <h2>Lists</h2>
+      <ul>
+        <li>Alpha</li>
+        <li>Bravo</li>
+        <li>Charlie</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Tables</h2>
+      <table>
+        <thead>
+          <tr><th>Country</th><th>Cities</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>France</td><td>3</td></tr>
+          <tr><td>Japan</td><td>5</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Media + dialog</h2>
+      <img src="/img/pixel.gif" alt="example pixel">
+      <dialog id="confirm-dialog" open>
+        <p>Confirm action?</p>
+        <button id="dialog-yes">Yes</button>
+      </dialog>
+    </section>
+
+    <article>
+      <h2>Article</h2>
+      <p>This article paragraph is here for `art` + `p` role coverage.</p>
+    </article>
+  </main>
+  <footer>
+    <p>Footer line — `sec` role coverage via FOOTER mapping.</p>
+  </footer>
+</body>
+</html>

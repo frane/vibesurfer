@@ -1,0 +1,32 @@
+[package]
+name = "vs-daemon"
+description = "vibesurferd — long-running daemon that owns the engine and exposes the protocol."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+vs-protocol = { path = "../vs-protocol" }
+vs-store = { path = "../vs-store" }
+vs-engine-webkit = { path = "../vs-engine-webkit" }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "io-util", "macros", "signal", "time"] }
+blake3 = "1"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v7", "fast-rng"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "io-util", "macros", "time", "test-util"] }

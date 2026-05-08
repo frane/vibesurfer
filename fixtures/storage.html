@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Storage</title>
+</head>
+<body>
+  <h1>Storage fixture</h1>
+  <p id="status">Storage written.</p>
+  <script>
+    // Cookie (non-secret).
+    document.cookie = 'consent=accepted; path=/; SameSite=Lax';
+    // Synthetic session-id-like cookie so redaction can be exercised.
+    document.cookie = 'session_id=ssid-' + Math.floor(Math.random() * 1e9) + '; path=/; SameSite=Lax';
+
+    // localStorage — one normal entry + one sensitive-looking key.
+    localStorage.setItem('theme', 'dark');
+    localStorage.setItem('auth_token', 'fake-jwt-' + Math.floor(Math.random() * 1e9));
+
+    // sessionStorage.
+    sessionStorage.setItem('csrf', 'csrf-token-' + Math.floor(Math.random() * 1e9));
+
+    // IndexedDB — open vibesurfer_demo_db with an object store.
+    var openReq = indexedDB.open('vibesurfer_demo_db', 1);
+    openReq.onupgradeneeded = function() {
+      openReq.result.createObjectStore('items', { keyPath: 'id' });
+    };
+    openReq.onsuccess = function() {
+      var db = openReq.result;
+      var tx = db.transaction('items', 'readwrite');
+      tx.objectStore('items').put({ id: 1, name: 'first item' });
+      tx.oncomplete = function() {
+        document.getElementById('status').textContent = 'Storage ready.';
+        window.__storageReady = true;
+      };
+    };
+  </script>
+</body>
+</html>

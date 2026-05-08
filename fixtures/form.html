@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Login — form fixture</title>
+</head>
+<body>
+  <main>
+    <h1>Sign in</h1>
+    <form id="login-form" method="post" action="/login">
+      <label for="email">Email</label>
+      <input type="email" id="email" name="email">
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password">
+      <label><input type="checkbox" id="remember" name="remember"> Remember me</label>
+      <button type="submit" id="submit-btn">Sign in</button>
+    </form>
+    <p id="login-status">Awaiting sign-in.</p>
+  </main>
+  <script>
+    // Surface a real submit handler so click-then-submit interactions
+    // the agent might issue can be observed via console capture.
+    document.getElementById('login-form').addEventListener('submit', function(ev) {
+      console.info('login submitted', this.email.value);
+    });
+  </script>
+</body>
+</html>

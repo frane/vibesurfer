@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Marks persistence</title>
+</head>
+<body>
+  <main>
+    <h1>Marks fixture</h1>
+    <button id="primary-cta" data-test="primary-cta">Initial CTA label</button>
+    <p id="status">Click the button or wait — it relabels every 250ms.</p>
+  </main>
+  <script>
+    // Re-label the button every 250ms; the DOM element identity is
+    // preserved (no remove/insert), so a mark's DOM-path anchor stays valid.
+    var labels = ['Initial CTA label', 'Updated CTA', 'Final CTA'];
+    var i = 0;
+    setInterval(function() {
+      i = (i + 1) % labels.length;
+      document.getElementById('primary-cta').textContent = labels[i];
+    }, 250);
+  </script>
+</body>
+</html>

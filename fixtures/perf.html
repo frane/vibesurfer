@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Perf characteristics</title>
+  <style>
+    body { padding: 0; margin: 0; }
+    .reflow-block { height: 0; transition: height 0.1s ease; background: #f80; }
+    .reflow-block.expanded { height: 200px; }
+  </style>
+</head>
+<body>
+  <h1 id="lcp-target">Performance fixture (large heading is the LCP candidate)</h1>
+  <p>The image below is delayed; layout shifts after first paint.</p>
+  <img id="late-image" alt="late" width="320" height="240" src="">
+  <div id="reflow" class="reflow-block"></div>
+  <p>Bottom paragraph.</p>
+  <script>
+    // CLS contributor: expand the reflow block 200ms after first paint.
+    setTimeout(function() {
+      document.getElementById('reflow').classList.add('expanded');
+    }, 200);
+
+    // Late image — flips its src 150ms after onload, forcing a reflow.
+    window.addEventListener('load', function() {
+      setTimeout(function() {
+        document.getElementById('late-image').src = '/img/pixel.gif';
+      }, 150);
+    });
+  </script>
+</body>
+</html>

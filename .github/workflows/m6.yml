@@ -1,0 +1,85 @@
+name: m6
+
+# Three-runner matrix that walks every M6 cell against a real
+# browser engine on its native platform. Mac + Linux must be green
+# on every push; Windows is `pending-manual-verification` per
+# `docs/REALITY_CHECK.md` until the maintainer confirms a green run.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+
+  mac:
+    name: Mac (real WKWebView)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --tests --workspace
+      - name: Clippy
+        run: cargo clippy --workspace --all-features --tests -- -D warnings
+      - name: M6 cell suite (sequential, real WKWebView)
+        run: cargo test --test m6 -- --test-threads=1
+      - name: Workspace tests
+        run: cargo test --workspace -- --test-threads=1
+
+  linux:
+    name: Linux Docker (real WebKitGTK 6)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build container
+        run: docker build -t vs-test-linux -f Dockerfile.linux-test .
+      - name: Run M6 cell suite inside container (sequential, real WebKitGTK)
+        run: |
+          docker volume create vs-target-linux
+          docker volume create vs-cargo-linux
+          docker run --rm --privileged \
+            -v "$PWD":/work \
+            -v vs-target-linux:/work/target-linux \
+            -v vs-cargo-linux:/usr/local/cargo/registry \
+            -e CARGO_TARGET_DIR=/work/target-linux \
+            vs-test-linux
+
+  windows:
+    name: Windows (real WebView2 — pending manual verification)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    # Allow the matrix to surface known Windows-side breakage without
+    # blocking PRs. Per docs/REALITY_CHECK.md, Windows cells stay at
+    # `pending-manual-verification` until the maintainer signs off on
+    # a green run from this leg.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install WebView2 Runtime
+        # windows-latest images already ship the Evergreen Runtime,
+        # but include the install-if-missing path for self-hosted
+        # runners.
+        run: |
+          $exe = "$env:RUNNER_TEMP\MicrosoftEdgeWebView2Setup.exe"
+          if (-not (Test-Path "C:\Program Files (x86)\Microsoft\EdgeWebView\Application")) {
+            Invoke-WebRequest "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile $exe
+            Start-Process -FilePath $exe -ArgumentList "/silent","/install" -Wait
+          }
+      - name: Build
+        run: cargo build --tests --workspace
+      - name: Clippy (Windows)
+        run: cargo clippy --workspace --all-features --tests -- -D warnings
+      - name: M6 cell suite (sequential, real WebView2)
+        run: cargo test --test m6 -- --test-threads=1

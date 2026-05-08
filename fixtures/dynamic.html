@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Dynamic mutations</title>
+</head>
+<body>
+  <main>
+    <h1>Dynamic page</h1>
+    <p id="anchor">Initial state. Mutations fire on a known schedule.</p>
+    <ul id="watch-list">
+      <li id="initial-item">initial item — gone after 200ms</li>
+    </ul>
+  </main>
+  <script>
+    // 100ms: add a new element with a known id.
+    setTimeout(function() {
+      var li = document.createElement('li');
+      li.id = 'late-item';
+      li.textContent = 'late arrival';
+      document.getElementById('watch-list').appendChild(li);
+      console.log('dynamic: late-item added');
+    }, 100);
+
+    // 200ms: remove the initial element.
+    setTimeout(function() {
+      var el = document.getElementById('initial-item');
+      if (el) el.remove();
+      console.log('dynamic: initial-item removed');
+    }, 200);
+
+    // 300ms: emit a fetch so net-idle waits have something to settle.
+    setTimeout(function() {
+      fetch('/echo?dynamic=1')
+        .then(function(r) { return r.text(); })
+        .then(function(t) { console.log('dynamic: fetch ok', t.length); });
+    }, 300);
+
+    // 600ms: mark the page "stable" by setting a global flag.
+    setTimeout(function() { window.__vsStable = true; }, 600);
+  </script>
+</body>
+</html>

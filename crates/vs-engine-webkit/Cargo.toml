@@ -1,0 +1,53 @@
+[package]
+name = "vs-engine-webkit"
+description = "WebKit engine binding for vibesurfer; WPE WebKit on Linux, system WebKit on macOS."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+build = "build.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+vs-protocol = { path = "../vs-protocol" }
+thiserror = "2"
+serde_json = "1"
+[target.'cfg(target_os = "linux")'.dependencies]
+# WebKitGTK 6.0 + GLib for the Linux backend. Heavy system deps
+# (libwebkitgtk-6.0, libgtk-4, libsoup-3.0) — only pulled when
+# targeting Linux. Compilation requires the matching -dev packages on
+# the build host.
+webkit6 = "0.6"
+glib = "0.22"
+# gtk4 pulled transitively via webkit6; specifying it directly causes a `links = "gtk-4"` conflict.
+[target.'cfg(target_os = "macos")'.dependencies]
+# objc2 ecosystem — Rust bindings to the Apple Objective-C runtime and
+# the AppKit / Foundation / WebKit frameworks. Most call sites are safe
+# at our level; a small unsafe surface remains for delegate-class
+# definitions and a few message sends.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSURL", "NSURLRequest", "NSString", "NSError", "NSDictionary", "NSValue", "NSArray", "NSData", "NSThread", "NSDate", "NSRunLoop"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "NSView", "NSWindow", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphics"] }
+objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKWebViewConfiguration", "WKNavigation", "WKNavigationDelegate", "WKUserContentController", "WKUserScript", "WKScriptMessage", "WKScriptMessageHandler", "WKContentWorld", "WKWebsiteDataStore", "WKSnapshotConfiguration", "WKFrameInfo"] }
+block2 = "0.6"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Microsoft WebView2 (Edge-based) bindings + the Windows COM runtime.
+# Heavy system dep — requires the WebView2 Runtime installed on the
+# build/target host. Compilation requires the Windows SDK on the host.
+webview2-com = "0.39"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+] }
+
+[dev-dependencies]
+tempfile = "3"

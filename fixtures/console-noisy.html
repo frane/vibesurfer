@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Noisy console</title>
+</head>
+<body>
+  <h1>Console-noisy fixture</h1>
+  <p id="status">Watch the console.</p>
+  <script>
+    console.log('hello from console.log');
+    console.info('info-level message');
+    console.warn('warn-level message');
+    console.error('error-level message');
+    console.debug('debug-level message');
+
+    // Uncaught synchronous exception.
+    setTimeout(function() {
+      throw new Error('uncaught synchronous exception');
+    }, 50);
+
+    // Unhandled promise rejection.
+    setTimeout(function() {
+      Promise.reject(new Error('unhandled rejection'));
+    }, 80);
+  </script>
+</body>
+</html>

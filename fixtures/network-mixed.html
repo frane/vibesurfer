@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Mixed network</title>
+</head>
+<body>
+  <h1>Network-mixed fixture</h1>
+  <p id="status">Watch the network panel.</p>
+  <script>
+    // 200 GET — JSON.
+    fetch('/api/ok').then(r => r.json()).then(j => console.log('ok', j));
+
+    // 404 GET.
+    fetch('/api/missing').then(r => console.log('missing', r.status));
+
+    // 500 POST.
+    fetch('/api/explode', { method: 'POST', body: 'crash=1' })
+      .then(r => console.log('explode', r.status));
+
+    // Slow 200 (500ms server-side delay).
+    fetch('/api/slow').then(r => r.text()).then(t => console.log('slow', t.length));
+  </script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+name = "debug-failed-action"
+version = "0.0.1"
+
+[[steps]]
+primitive = "vs_inspect"
+args = ["console"]
+flags = { since = "{{ token }}", level = "error,warn", page = "{{ page }}" }
+
+[[steps]]
+primitive = "vs_inspect"
+args = ["network"]
+flags = { since = "{{ token }}", status = "4xx,5xx", page = "{{ page }}" }
+
+[[steps]]
+primitive = "vs_inspect"
+args = ["performance"]
+flags = { page = "{{ page }}" }

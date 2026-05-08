@@ -1,0 +1,100 @@
+# Linux verification environment for M6.
+#
+# Builds a self-contained image with WebKitGTK 6, GTK 4, libsoup 3,
+# xvfb, and the Rust toolchain pinned to the workspace MSRV. The M6
+# integration suite (`tests/m6/*.rs`) drives the `vs serve` binary
+# against real WebKitGTK inside this container — no host-OS deps
+# required.
+#
+# Build:
+#   docker build -t vs-test-linux -f Dockerfile.linux-test .
+#
+# Run the M6 suite (cargo cache lives in a named volume so iteration
+# is fast):
+#   docker volume create vs-target-linux
+#   docker volume create vs-cargo-linux
+#   docker run --rm \
+#     -v "$PWD":/work \
+#     -v vs-target-linux:/work/target-linux \
+#     -v vs-cargo-linux:/usr/local/cargo/registry \
+#     -e CARGO_TARGET_DIR=/work/target-linux \
+#     vs-test-linux
+#
+# The default CMD runs `xvfb-run cargo test --test m6 --
+# --test-threads=1` so each invocation re-runs the M6 suite. Override
+# CMD for an interactive shell: `docker run -it ... vs-test-linux bash`.
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# System deps:
+#   build-essential + pkg-config + libssl-dev + libsqlite3-dev:
+#     for Rust crate native builds.
+#   libwebkitgtk-6.0-dev + libsoup-3.0-dev + libgtk-4-dev:
+#     the Linux backend's runtime — webkit6, soup3, gtk4.
+#   libxml2-dev + libxslt1-dev: webkit transitive needs.
+#   xvfb + dbus-x11: provide a virtual display so WebKitGTK can
+#     attach to a fake X server. xvfb-run wraps any cargo test.
+#   ca-certificates + curl + git: rustup install + crate fetch.
+#   libwebkit2gtk-4.1-dev: still required because some webkit6 ffi
+#     re-exports against the gobject layer Webkit ships in 4.x; the
+#     two dev packages coexist on Ubuntu 24.04.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        pkg-config \
+        libssl-dev \
+        libsqlite3-dev \
+        libwebkitgtk-6.0-dev \
+        libsoup-3.0-dev \
+        libgtk-4-dev \
+        libxml2-dev \
+        libxslt1-dev \
+        xvfb \
+        dbus-x11 \
+        ca-certificates \
+        curl \
+        git \
+        libwebkit2gtk-4.1-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install rustup + the workspace MSRV (1.78). The host runs 1.93;
+# Install rustup + a recent stable toolchain. Workspace MSRV is
+# 1.78 but transitive deps now require edition2024 — pin to 1.93 so
+# the container matches the host.
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH \
+    RUST_VERSION=1.93.1
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+        sh -s -- -y --no-modify-path --default-toolchain $RUST_VERSION \
+            --profile minimal --component rustfmt --component clippy \
+    && rustup --version \
+    && cargo --version \
+    && rustc --version
+
+
+# WebKitGTK runtime knobs for headless containers.
+#   GTK_A11Y=none — skip the accessibility bus (no dbus a11y daemon).
+#   WEBKIT_FORCE_SANDBOX=0 + WEBKIT_DISABLE_DMABUF_RENDERER=1 —
+#     WebKit's bubblewrap sandbox needs unprivileged user namespaces,
+#     which Docker's default seccomp profile blocks. Disable the
+#     sandbox; this is acceptable for fixture-driven test workloads
+#     that load only local 127.0.0.1 URLs.
+#   GDK_BACKEND=x11 — pin to xvfb's X server instead of probing
+#     Wayland (which isn't running in the container).
+ENV GTK_A11Y=none \
+    WEBKIT_FORCE_SANDBOX=0 \
+    WEBKIT_DISABLE_DMABUF_RENDERER=1 \
+    GDK_BACKEND=x11
+WORKDIR /work
+
+# Default: run the M6 suite under a virtual X display.
+# `--test-threads=1` is required — one shared GLib main context per
+# `vs serve` process; running 47 in parallel saturates it and
+# produces flaky timing failures (same constraint as Cocoa main
+# thread on macOS).
+CMD ["bash", "-lc", "xvfb-run -a cargo test --test m6 -- --test-threads=1 --nocapture"]
