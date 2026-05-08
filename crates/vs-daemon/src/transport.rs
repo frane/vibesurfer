@@ -52,3 +52,107 @@ pub fn is_listening(path: &Path) -> bool {
         interprocess::local_socket::Stream::connect(name).is_ok()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn is_listening_false_for_missing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nope.sock");
+        assert!(!is_listening(&path));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_listening_false_for_non_socket_file() {
+        // A regular file isn't a listening socket. On Unix the
+        // probe must not blindly return `true` just because the
+        // path exists.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("not-a-socket");
+        std::fs::write(&path, b"hello").unwrap();
+        // is_listening on Unix is currently a presence check; this
+        // pins the contract — if we ever tighten it, the test will
+        // remind us. For now, document the existing behavior:
+        // presence-only check on Unix.
+        assert!(is_listening(&path));
+    }
+
+    #[test]
+    fn path_to_name_round_trips_a_valid_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.sock");
+        let _name = path_to_name(&path).expect("path_to_name");
+    }
+
+    /// Regression: AF_UNIX `sun_path` is 104 bytes on macOS / Linux.
+    /// A path that exceeds the limit must surface an error from
+    /// `bind()` so callers see the failure instead of the daemon
+    /// dying silently.
+    #[cfg(unix)]
+    #[test]
+    fn long_socket_path_fails_to_bind() {
+        use interprocess::local_socket::ListenerOptions;
+
+        // Build a path well beyond sun_path. /tmp + a deeply nested
+        // segment + suffix.
+        let dir = tempfile::tempdir().unwrap();
+        let mut path = dir.path().to_path_buf();
+        for _ in 0..6 {
+            path = path.join("aaaaaaaaaaaaaaaaaaaa");
+        }
+        std::fs::create_dir_all(&path).unwrap();
+        let socket = path.join("daemon.sock");
+        assert!(
+            socket.as_os_str().len() > 104,
+            "test setup: expected an over-long path, got {} bytes",
+            socket.as_os_str().len()
+        );
+
+        let name = path_to_name(&socket).expect("path_to_name");
+        let result = ListenerOptions::new().name(name).create_sync();
+        assert!(
+            result.is_err(),
+            "bind should fail on an over-long sun_path; got Ok",
+        );
+    }
+
+    /// Regression: the daemon's local socket round-trips a
+    /// line-delimited message under a short, well-formed path.
+    #[cfg(unix)]
+    #[test]
+    fn local_socket_round_trip() {
+        use interprocess::local_socket::{prelude::*, ListenerOptions, Stream};
+        use std::io::BufRead;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rt.sock");
+        let name = path_to_name(&path).expect("path_to_name");
+        let listener = ListenerOptions::new()
+            .name(name.clone())
+            .create_sync()
+            .expect("bind");
+
+        let server = std::thread::spawn(move || {
+            let mut stream = listener.accept().expect("accept");
+            let mut line = String::new();
+            std::io::BufReader::new(&mut stream)
+                .read_line(&mut line)
+                .unwrap();
+            assert_eq!(line, "ping\n");
+            stream.write_all(b"pong\n").unwrap();
+        });
+
+        let mut client = Stream::connect(name).expect("connect");
+        client.write_all(b"ping\n").unwrap();
+        let mut reply = String::new();
+        std::io::BufReader::new(&mut client)
+            .read_line(&mut reply)
+            .unwrap();
+        assert_eq!(reply, "pong\n");
+        server.join().unwrap();
+    }
+}

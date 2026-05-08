@@ -46,8 +46,13 @@ if [[ ! -x target/release/vs ]]; then
     exit 1
 fi
 
-# 4. Tempdir for the demo workspace + cast.
-DEMO_DIR=$(mktemp -d -t vs-demo-claude.XXXXXX)
+# 4. Tempdir for the demo workspace + cast. Use a short path under
+# /tmp instead of the default $TMPDIR (which on macOS is
+# /var/folders/.../T/, ~50 chars before the random suffix). With the
+# `.vibesurfer/daemon.sock` suffix, the default path runs over
+# AF_UNIX's 104-byte sun_path limit and the daemon's bind() fails
+# silently with ENAMETOOLONG.
+DEMO_DIR=$(mktemp -d /tmp/vs-demo.XXXXXX)
 CAST="$DEMO_DIR/demo.cast"
 
 # Daemon lifecycle is owned by this script, not auto-spawn:
@@ -77,17 +82,30 @@ chmod +x "$DEMO_DIR/bin/vs"
 
 # 5. Boot the daemon now so Claude's first `vs` call connects
 # immediately to a daemon that's already bound to the demo socket.
+# RUST_BACKTRACE so a panic during init lands in the log.
+RUST_BACKTRACE=1 \
 "$PWD/target/release/vs" --home "$DEMO_DIR/.vibesurfer" serve \
     > "$DEMO_DIR/.vibesurfer/daemon.log" 2>&1 &
 DAEMON_PID=$!
 
-for _ in $(seq 1 20); do
+# Cold WKWebView init can take 5–10s on a slow box. Wait 30 quarter-
+# second ticks (7.5s) before giving up. If the daemon process died
+# before binding, fail fast with the log + exit signal.
+for _ in $(seq 1 30); do
     [[ -S "$DEMO_DIR/.vibesurfer/daemon.sock" ]] && break
+    if ! kill -0 "$DAEMON_PID" 2>/dev/null; then
+        wait "$DAEMON_PID" 2>/dev/null
+        rc=$?
+        echo "daemon exited with status $rc before binding; log:" >&2
+        cat "$DEMO_DIR/.vibesurfer/daemon.log" >&2
+        exit 1
+    fi
     sleep 0.25
 done
 if [[ ! -S "$DEMO_DIR/.vibesurfer/daemon.sock" ]]; then
-    echo "daemon failed to start; see $DEMO_DIR/.vibesurfer/daemon.log" >&2
+    echo "daemon never bound the socket within 7.5s; log:" >&2
     cat "$DEMO_DIR/.vibesurfer/daemon.log" >&2
+    echo "(daemon process is still alive at PID $DAEMON_PID — likely hanging on Cocoa init)" >&2
     exit 1
 fi
 

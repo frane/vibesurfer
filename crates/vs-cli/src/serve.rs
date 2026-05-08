@@ -90,12 +90,33 @@ pub fn run(args: &ServeArgs) -> Result<()> {
                 .context("build tokio runtime")?;
             rt.block_on(async move {
                 let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-                let server =
+                let mut server =
                     tokio::spawn(async move { server::serve(daemon, socket, shutdown_rx).await });
-                let _ = tokio::signal::ctrl_c().await;
-                tracing::info!("ctrl-c received, shutting down");
-                let _ = shutdown_tx.send(());
-                let _ = server.await;
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {
+                        tracing::info!("ctrl-c received, shutting down");
+                        let _ = shutdown_tx.send(());
+                        if let Ok(Err(e)) = server.await {
+                            tracing::error!(error = %e, "server task ended with error");
+                        }
+                    }
+                    res = &mut server => {
+                        // server::serve returned without ctrl-c — most
+                        // commonly a bind failure on the local socket.
+                        // Surface it before the run loop exits.
+                        match res {
+                            Ok(Err(e)) => tracing::error!(
+                                error = %e,
+                                "server task failed before ctrl-c"
+                            ),
+                            Err(e) => tracing::error!(
+                                error = %e,
+                                "server task panicked"
+                            ),
+                            Ok(Ok(())) => {}
+                        }
+                    }
+                }
             });
             // Dropping `rt` and the moved `engine_runtime` (held by the
             // daemon) closes the engine channel, which signals the main
@@ -176,12 +197,33 @@ pub fn run(args: &ServeArgs) -> Result<()> {
                 .context("build tokio runtime")?;
             rt.block_on(async move {
                 let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-                let server =
+                let mut server =
                     tokio::spawn(async move { server::serve(daemon, socket, shutdown_rx).await });
-                let _ = tokio::signal::ctrl_c().await;
-                tracing::info!("ctrl-c received, shutting down");
-                let _ = shutdown_tx.send(());
-                let _ = server.await;
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {
+                        tracing::info!("ctrl-c received, shutting down");
+                        let _ = shutdown_tx.send(());
+                        if let Ok(Err(e)) = server.await {
+                            tracing::error!(error = %e, "server task ended with error");
+                        }
+                    }
+                    res = &mut server => {
+                        // server::serve returned without ctrl-c — most
+                        // commonly a bind failure on the local socket.
+                        // Surface it before the run loop exits.
+                        match res {
+                            Ok(Err(e)) => tracing::error!(
+                                error = %e,
+                                "server task failed before ctrl-c"
+                            ),
+                            Err(e) => tracing::error!(
+                                error = %e,
+                                "server task panicked"
+                            ),
+                            Ok(Ok(())) => {}
+                        }
+                    }
+                }
             });
             drop(rt);
             Ok(())
@@ -266,12 +308,33 @@ pub fn run(args: &ServeArgs) -> Result<()> {
                 .context("build tokio runtime")?;
             rt.block_on(async move {
                 let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-                let server =
+                let mut server =
                     tokio::spawn(async move { server::serve(daemon, socket, shutdown_rx).await });
-                let _ = tokio::signal::ctrl_c().await;
-                tracing::info!("ctrl-c received, shutting down");
-                let _ = shutdown_tx.send(());
-                let _ = server.await;
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {
+                        tracing::info!("ctrl-c received, shutting down");
+                        let _ = shutdown_tx.send(());
+                        if let Ok(Err(e)) = server.await {
+                            tracing::error!(error = %e, "server task ended with error");
+                        }
+                    }
+                    res = &mut server => {
+                        // server::serve returned without ctrl-c — most
+                        // commonly a bind failure on the local socket.
+                        // Surface it before the run loop exits.
+                        match res {
+                            Ok(Err(e)) => tracing::error!(
+                                error = %e,
+                                "server task failed before ctrl-c"
+                            ),
+                            Err(e) => tracing::error!(
+                                error = %e,
+                                "server task panicked"
+                            ),
+                            Ok(Ok(())) => {}
+                        }
+                    }
+                }
             });
             drop(rt);
             Ok(())

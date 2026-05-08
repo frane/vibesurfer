@@ -40,8 +40,26 @@ pub async fn serve(
     if path.exists() {
         let _ = std::fs::remove_file(path);
     }
-    let name = crate::transport::path_to_name(path)?;
-    let listener: Listener = ListenerOptions::new().name(name).create_tokio()?;
+    let name = crate::transport::path_to_name(path).map_err(|e| {
+        tracing::error!(?path, error = %e, "could not derive ipc name from socket path");
+        e
+    })?;
+    let listener: Listener = ListenerOptions::new()
+        .name(name)
+        .create_tokio()
+        .map_err(|e| {
+            // On Unix, AF_UNIX sun_path is 104 bytes — paths beyond
+            // that fail with ENAMETOOLONG. Log the path + the OS
+            // error so callers can see why the socket never
+            // appeared instead of the daemon dying silently.
+            tracing::error!(
+                ?path,
+                len = path.as_os_str().len(),
+                error = %e,
+                "failed to bind local socket"
+            );
+            e
+        })?;
     tracing::info!(?path, "vibesurferd listening");
 
     let daemon = Arc::new(daemon);
