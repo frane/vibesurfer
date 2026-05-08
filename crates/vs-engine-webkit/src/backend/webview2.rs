@@ -47,7 +47,7 @@ use windows::core::{HSTRING, PWSTR};
 use windows::Win32::Foundation::{E_POINTER, HWND, RECT};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, RegisterClassW, HWND_MESSAGE, WNDCLASSW, WS_OVERLAPPED,
+    CreateWindowExW, RegisterClassW, HWND_MESSAGE, WINDOW_EX_STYLE, WNDCLASSW, WS_OVERLAPPED,
 };
 
 use crate::backend::inspector_bridge::{
@@ -157,14 +157,14 @@ impl Webview2Backend {
         // SAFETY: registering an idempotent class — duplicate
         // registrations under the same name are harmless on Windows.
         unsafe {
-            let _atom = RegisterClassW(&class);
+            let _atom = RegisterClassW(&raw const class);
         }
         // SAFETY: creating a message-only window (HWND_MESSAGE
         // parent) — never visible, never gets focus, used only as a
         // host for the WebView2 controller.
         let hwnd = unsafe {
             CreateWindowExW(
-                Default::default(),
+                WINDOW_EX_STYLE::default(),
                 windows::core::PCWSTR(class_name.as_ptr()),
                 windows::core::PCWSTR::null(),
                 WS_OVERLAPPED,
@@ -287,7 +287,7 @@ fn install_inspector(web_view: &ICoreWebView2, slots: &InspectorSlots) -> bool {
             return Ok(());
         };
         let mut raw = PWSTR(std::ptr::null_mut());
-        if unsafe { args.WebMessageAsJson(&mut raw) }.is_err() {
+        if unsafe { args.WebMessageAsJson(&raw mut raw) }.is_err() {
             return Ok(());
         }
         let outer = take_pwstr(raw);
@@ -322,7 +322,7 @@ fn install_inspector(web_view: &ICoreWebView2, slots: &InspectorSlots) -> bool {
         Ok(())
     }));
     let mut token: i64 = 0;
-    if unsafe { web_view.add_WebMessageReceived(&handler, &mut token) }.is_err() {
+    if unsafe { web_view.add_WebMessageReceived(&handler, &raw mut token) }.is_err() {
         return false;
     }
     true
@@ -406,7 +406,7 @@ impl Engine for Webview2Backend {
             Ok(())
         }));
         let mut token: i64 = 0;
-        unsafe { web_view.add_NavigationCompleted(&handler, &mut token) }
+        unsafe { web_view.add_NavigationCompleted(&handler, &raw mut token) }
             .map_err(|e| EngineError::Other(format!("add_NavigationCompleted: {e}")))?;
         let url_pwstr = pwstr_from_str(url);
         unsafe { web_view.Navigate(windows::core::PCWSTR(url_pwstr.0)) }
@@ -479,8 +479,8 @@ impl Engine for Webview2Backend {
                 };
                 let mut msg = MSG::default();
                 unsafe {
-                    while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
-                        DispatchMessageW(&msg);
+                    while PeekMessageW(&raw mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                        DispatchMessageW(&raw const msg);
                     }
                 }
                 std::thread::sleep(Duration::from_millis(20));
@@ -538,8 +538,8 @@ impl Engine for Webview2Backend {
             let res = unsafe {
                 stream.Read(
                     chunk.as_mut_ptr().cast(),
-                    chunk.len() as u32,
-                    Some(&mut read),
+                    u32::try_from(chunk.len()).unwrap_or(u32::MAX),
+                    Some(&raw mut read),
                 )
             };
             res.ok()

@@ -49,7 +49,9 @@ async fn wire_round_trip() {
     }
     assert!(transport::is_listening(&socket), "socket never appeared");
 
-    let stream = Stream::connect(transport::path_to_name(&socket).unwrap()).await.unwrap();
+    let stream = Stream::connect(transport::path_to_name(&socket).unwrap())
+        .await
+        .unwrap();
     let (read, mut write) = stream.split();
     let mut reader = BufReader::new(read).lines();
 
@@ -119,7 +121,9 @@ async fn wire_stale_token_rejected() {
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    let stream = Stream::connect(transport::path_to_name(&socket).unwrap()).await.unwrap();
+    let stream = Stream::connect(transport::path_to_name(&socket).unwrap())
+        .await
+        .unwrap();
     let (read, mut write) = stream.split();
     let mut reader = BufReader::new(read).lines();
 
@@ -178,7 +182,9 @@ async fn wire_idempotent_replay_returns_warning() {
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    let stream = Stream::connect(transport::path_to_name(&socket).unwrap()).await.unwrap();
+    let stream = Stream::connect(transport::path_to_name(&socket).unwrap())
+        .await
+        .unwrap();
     let (read, mut write) = stream.split();
     let mut reader = BufReader::new(read).lines();
 
