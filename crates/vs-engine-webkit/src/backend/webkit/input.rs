@@ -46,8 +46,12 @@ pub(super) struct ClientRect {
     pub height: f64,
 }
 
-/// Resolve the bounding rect of `data-vs-ref="r"` via JS. Returns
-/// `None` if the element isn't in the DOM.
+/// Resolve the bounding rect of `data-vs-ref="r"` via JS, scrolling
+/// the element into view first so the rect is inside the viewport.
+/// A real user clicks something they can see; if the element is
+/// below the fold, the WebKit input pipeline no-ops the click
+/// because hit-testing at the synthesized location finds nothing.
+/// Returns `None` if the element isn't in the DOM.
 pub(super) fn ref_rect(
     web_view: &Retained<WKWebView>,
     r: vs_protocol::Ref,
@@ -56,6 +60,14 @@ pub(super) fn ref_rect(
         r#"(function() {{
             var el = document.querySelector('[data-vs-ref="{r}"]');
             if (!el) return 'null';
+            // Scroll into the viewport's vertical center if it's
+            // off-screen. `instant` keeps the test deterministic
+            // (no smooth-scroll animation racing the rect read).
+            try {{
+                el.scrollIntoView({{behavior: 'instant', block: 'center', inline: 'center'}});
+            }} catch (e) {{
+                el.scrollIntoView();
+            }}
             var b = el.getBoundingClientRect();
             return JSON.stringify({{x: b.x, y: b.y, w: b.width, h: b.height}});
         }})()"#,
