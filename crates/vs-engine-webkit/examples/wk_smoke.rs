@@ -11,6 +11,10 @@
 //! [`Tree`] in the canonical wire format. Proves end-to-end that
 //! `WkBackend::open` and `WkBackend::snapshot` actually work against
 //! the real browser.
+use vs_engine_webkit::{
+    engine::{ActTarget, Action, Viewport, WaitCondition},
+    CaptureScope,
+};
 
 #[cfg(target_os = "macos")]
 fn main() {
@@ -49,10 +53,6 @@ fn main() {
     // Print the canonical wire form.
     println!("{}", tree.encode());
 
-    use vs_engine_webkit::{
-        engine::{ActTarget, Action, Viewport, WaitCondition},
-        CaptureScope,
-    };
 
     // Find the first link or button ref in the tree to act on.
     let actionable = find_actionable(&tree);

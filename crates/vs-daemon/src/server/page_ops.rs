@@ -110,8 +110,7 @@ fn count_new_console_errors(daemon: &Daemon, session_id: &str, page_id: &str) ->
         .filter(|e| {
             e.timestamp
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0)
+                .map_or(0, |d| d.as_secs() as i64)
                 > prior_finished_at
         })
         .count() as u32

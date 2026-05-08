@@ -380,8 +380,7 @@ fn render_console(daemon: &Daemon, session_id: &str, page_id: &str, req: &Reques
         let ts = e
             .timestamp
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_secs() as i64);
         if let Some(since_secs) = since {
             if ts < since_secs {
                 continue;
@@ -442,8 +441,7 @@ fn render_network(daemon: &Daemon, session_id: &str, page_id: &str, req: &Reques
         let ts = e
             .timestamp
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_secs() as i64);
         if let Some(since_secs) = since {
             if ts < since_secs {
                 continue;
