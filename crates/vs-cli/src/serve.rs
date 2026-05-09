@@ -458,9 +458,51 @@ fn install_seh_handler() {
         let mut err = std::io::stderr().lock();
         let _ = writeln!(
             err,
-            "VIBESURFER_SEH code=0x{:08x} address={:p} flags=0x{:x} params={}",
+            "VIBESURFER_SEH code=0x{:08x} ip={:p} flags=0x{:x} params={}",
             code, rec.ExceptionAddress, rec.ExceptionFlags, rec.NumberParameters,
         );
+        // For STATUS_ACCESS_VIOLATION, ExceptionInformation carries
+        // [access_kind, faulting_va] — log both. access_kind: 0=read,
+        // 1=write, 8=DEP/execute. faulting_va is the address that was
+        // being read / written / executed at the time of the fault.
+        if code == 0xC0000005 && rec.NumberParameters >= 2 {
+            let kind = rec.ExceptionInformation[0];
+            let va = rec.ExceptionInformation[1];
+            let kind_str = match kind {
+                0 => "read",
+                1 => "write",
+                8 => "execute",
+                _ => "?",
+            };
+            let _ = writeln!(
+                err,
+                "VIBESURFER_SEH access={} (kind={}) faulting_va=0x{:x}",
+                kind_str, kind, va,
+            );
+        }
+        // Also dump RIP / RSP / a few callee-saved registers from the
+        // ContextRecord. RIP confirms the IP from ExceptionAddress;
+        // RSP + return-address-on-stack often points at the caller
+        // even when ExceptionAddress is 0x0.
+        if !info.ContextRecord.is_null() {
+            let ctx = unsafe { &*info.ContextRecord };
+            #[cfg(target_arch = "x86_64")]
+            {
+                let _ = writeln!(
+                    err,
+                    "VIBESURFER_SEH rip=0x{:x} rsp=0x{:x} rbp=0x{:x} rcx=0x{:x} rdx=0x{:x}",
+                    ctx.Rip, ctx.Rsp, ctx.Rbp, ctx.Rcx, ctx.Rdx,
+                );
+            }
+            #[cfg(target_arch = "aarch64")]
+            {
+                let _ = writeln!(
+                    err,
+                    "VIBESURFER_SEH pc=0x{:x} sp=0x{:x} fp=0x{:x}",
+                    ctx.Pc, ctx.Sp, ctx.Fp,
+                );
+            }
+        }
         let _ = err.flush();
         0
     }
