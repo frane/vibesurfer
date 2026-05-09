@@ -103,6 +103,23 @@ impl Default for Webview2Backend {
     }
 }
 
+/// `WNDCLASSW::lpfnWndProc` defaults to `None` — a NULL function
+/// pointer in the registered class. WebView2's controller posts
+/// messages to our hidden host HWND during `CreateCoreWebView2Controller`,
+/// at which point Windows dispatches by calling that NULL pointer
+/// (CPU jumps to address 0, daemon dies with STATUS_ACCESS_VIOLATION).
+/// This stateless shim forwards every message to `DefWindowProcW`,
+/// the standard "do the default thing" handler.
+unsafe extern "system" fn wnd_proc(
+    hwnd: windows::Win32::Foundation::HWND,
+    msg: u32,
+    wparam: windows::Win32::Foundation::WPARAM,
+    lparam: windows::Win32::Foundation::LPARAM,
+) -> windows::Win32::Foundation::LRESULT {
+    use windows::Win32::UI::WindowsAndMessaging::DefWindowProcW;
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+}
+
 impl Webview2Backend {
     /// Build a backend. Caller must already have initialized COM
     /// (`CoInitializeEx` STA) on this thread before constructing.
@@ -149,8 +166,12 @@ impl Webview2Backend {
         unsafe {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         }
+        // `wnd_proc` (module-level) is what makes `lpfnWndProc`
+        // non-NULL — see its docstring for why a NULL there crashes
+        // the daemon with STATUS_ACCESS_VIOLATION.
         let class_name: HSTRING = HSTRING::from("vs-webview2-host");
         let class = WNDCLASSW {
+            lpfnWndProc: Some(wnd_proc),
             lpszClassName: windows::core::PCWSTR(class_name.as_ptr()),
             ..Default::default()
         };
