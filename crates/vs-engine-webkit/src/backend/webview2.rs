@@ -288,8 +288,13 @@ fn install_inspector(web_view: &ICoreWebView2, slots: &InspectorSlots) -> bool {
             return {
                 postMessage: function(msg) {
                     var s = (typeof msg === 'string') ? msg : JSON.stringify(msg);
-                    var wrapped = JSON.stringify({ __channel: name, body: s });
-                    window.chrome.webview.postMessage(wrapped);
+                    // Pass an object, not a string. postMessage of a
+                    // string makes WebMessageAsJson on the host side
+                    // return a JSON-encoded string literal that our
+                    // host parser cannot field-access. The object
+                    // form makes WebMessageAsJson return the object,
+                    // and our handler reads __channel + body off it.
+                    window.chrome.webview.postMessage({ __channel: name, body: s });
                 },
             };
         }
