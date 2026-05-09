@@ -66,22 +66,9 @@ jobs:
         run: xvfb-run --auto-servernum cargo test --test m6 -- --test-threads=1
 
   windows:
-    # Re-added for SEH diagnostic capture. The daemon's vectored
-    # exception handler (in `vs-cli/src/serve.rs::install_seh_handler`)
-    # logs the exception code + faulting address to stderr, which
-    # the test harness captures to <home>/daemon.log and inlines on
-    # failure. Until `Webview2Backend::open` stops dying with an
-    # access violation the cells fail — the failure now carries
-    # actionable info instead of being silent.
-    #
-    # `continue-on-error: true` so the workflow conclusion stays
-    # honest about the actual fixed-platform requirement (mac +
-    # linux). Remove this flag once the SEH-driven fix lands and
-    # Windows is reliably green.
-    name: Windows (real WebView2 — diagnostic capture)
+    name: Windows (real WebView2)
     runs-on: windows-latest
     timeout-minutes: 30
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
