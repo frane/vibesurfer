@@ -24,7 +24,7 @@ So vibesurfer. A native browser daemon in Rust with a wire designed for LLM call
 
 ## Status
 
-Beta. Protocol is stable. macOS and Linux verified by 49 cells of integration tests against real fixture pages, plus a regression that pins `vs act click` produces `event.isTrusted = true`. Windows runs the same suite on `windows-latest` CI as `pending-manual-verification` until a maintainer signs off on a green run. Real sites work. Open an issue with URL and steps when something breaks.
+Beta. Protocol is stable. macOS and Linux verified by 49 cells of integration tests against real fixture pages, plus a regression that pins `vs act click` produces `event.isTrusted = true`. Windows code ships and cross-compiles clean, but runtime verification is open: the daemon dies during `Webview2Backend::open` from a Win32 structured exception that Rust panic handling does not catch — diagnosing needs a maintainer with real Windows hardware. Real sites work on macOS and Linux. Open an issue with URL and steps when something breaks.
 
 See [docs/REALITY_CHECK.md](docs/REALITY_CHECK.md) for the per-platform per-primitive verification matrix.
 
