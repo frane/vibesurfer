@@ -41,6 +41,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
 
     init_tracing();
     install_panic_hook();
+    install_seh_handler();
     args.paths.ensure_root().context("ensure ~/.vibesurfer")?;
 
     let mtm = MainThreadMarker::new()
@@ -160,6 +161,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
 
     init_tracing();
     install_panic_hook();
+    install_seh_handler();
     args.paths.ensure_root().context("ensure ~/.vibesurfer")?;
 
     // GTK init must happen on the OS main thread, before any WebView.
@@ -269,6 +271,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
 
     init_tracing();
     install_panic_hook();
+    install_seh_handler();
     args.paths.ensure_root().context("ensure ~/.vibesurfer")?;
 
     // SAFETY: required first call on this thread before any
@@ -410,3 +413,65 @@ fn install_panic_hook() {
         prev(info);
     }));
 }
+
+/// Install a Win32 vectored exception handler that logs structured
+/// exceptions (access violation, stack overflow, etc.) before the
+/// process dies. Rust's panic machinery does not catch SEH on
+/// Windows by default — when a COM call inside `Webview2Backend`
+/// dereferences bad memory, the daemon vanishes with no message,
+/// no panic hook firing, no trace.
+///
+/// This hook writes a single line to stderr containing the
+/// exception code + faulting address, then returns
+/// `EXCEPTION_CONTINUE_SEARCH` so the OS's default handler runs
+/// (process death). Stderr is captured to the daemon log by the
+/// test harness, so the line lands in CI output.
+///
+/// Direct stderr write — not tracing — because the allocator may
+/// be in a bad state during an SEH; tracing's formatting could
+/// deadlock. `writeln!` to a locked stderr handle is the cheapest
+/// thing that can work here.
+#[cfg(target_os = "windows")]
+fn install_seh_handler() {
+    use std::io::Write;
+    use windows::Win32::System::Diagnostics::Debug::{
+        AddVectoredExceptionHandler, EXCEPTION_POINTERS,
+    };
+
+    unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
+        if info.is_null() {
+            return 0; // EXCEPTION_CONTINUE_SEARCH
+        }
+        let info = unsafe { &*info };
+        if info.ExceptionRecord.is_null() {
+            return 0;
+        }
+        let rec = unsafe { &*info.ExceptionRecord };
+        // Filter to fatal-class exceptions only. Status codes in the
+        // 0xC0... range are NTSTATUS errors; lower codes are e.g.
+        // C++ EH (0xE06D7363), DLL not found, debug breakpoints —
+        // not interesting and not always fatal.
+        let code = rec.ExceptionCode.0 as u32;
+        if code & 0xF0000000 != 0xC0000000 {
+            return 0;
+        }
+        let mut err = std::io::stderr().lock();
+        let _ = writeln!(
+            err,
+            "VIBESURFER_SEH code=0x{:08x} address={:p} flags=0x{:x} params={}",
+            code, rec.ExceptionAddress, rec.ExceptionFlags, rec.NumberParameters,
+        );
+        let _ = err.flush();
+        0
+    }
+
+    unsafe {
+        AddVectoredExceptionHandler(1 /* CALL_FIRST */, Some(handler));
+    }
+}
+
+/// No-op on non-Windows. The Unix kernels we target deliver crashes
+/// as signals (SIGSEGV etc.); Rust's panic + signal handling already
+/// covers those.
+#[cfg(not(target_os = "windows"))]
+fn install_seh_handler() {}
