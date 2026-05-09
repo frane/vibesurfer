@@ -451,8 +451,11 @@ fn install_seh_handler() {
         // 0xC0... range are NTSTATUS errors; lower codes are e.g.
         // C++ EH (0xE06D7363), DLL not found, debug breakpoints —
         // not interesting and not always fatal.
-        let code = rec.ExceptionCode.0 as u32;
-        if code & 0xF0000000 != 0xC0000000 {
+        // NTSTATUS is i32 internally — bit-reinterpret to u32 for
+        // hex display + range check. `as u32` would clippy-deny on
+        // `cast_sign_loss`; the to_ne_bytes round-trip is bit-exact.
+        let code = u32::from_ne_bytes(rec.ExceptionCode.0.to_ne_bytes());
+        if code & 0xF000_0000 != 0xC000_0000 {
             return 0;
         }
         let mut err = std::io::stderr().lock();
@@ -465,7 +468,7 @@ fn install_seh_handler() {
         // [access_kind, faulting_va] — log both. access_kind: 0=read,
         // 1=write, 8=DEP/execute. faulting_va is the address that was
         // being read / written / executed at the time of the fault.
-        if code == 0xC0000005 && rec.NumberParameters >= 2 {
+        if code == 0xC000_0005 && rec.NumberParameters >= 2 {
             let kind = rec.ExceptionInformation[0];
             let va = rec.ExceptionInformation[1];
             let kind_str = match kind {
@@ -476,8 +479,7 @@ fn install_seh_handler() {
             };
             let _ = writeln!(
                 err,
-                "VIBESURFER_SEH access={} (kind={}) faulting_va=0x{:x}",
-                kind_str, kind, va,
+                "VIBESURFER_SEH access={kind_str} (kind={kind}) faulting_va=0x{va:x}",
             );
         }
         // Also dump RIP / RSP / a few callee-saved registers from the
