@@ -6,6 +6,32 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
+
+## [v0.1.0] - 2026-05-11
+
+First public release. The wire protocol is stable, the three engines (macOS WKWebView, Linux WebKitGTK 6, Windows WebView2) are all CI-verified by the same 48-cell integration suite on every push.
+
+### Highlights
+
+- **20 primitives** end-to-end on every backend (`session-open` / `session-close` / `open` / `close` / `view` / `read` / `act` / `find` / `wait` / `extract` / `mark` / `annotate` / `status` / `log` / `skill` / `capture` / `viewport` / `layout` / `auth` / `inspect`).
+- **State-token concurrency** with `! STALE_TOKEN` on read-write conflicts; **tree-delta wire format** after the first snapshot; **audit-by-construction** — every primitive writes one row to `actions` before returning.
+- **Trusted clicks on macOS** via native `NSEvent` dispatch (regression test pins `event.isTrusted = true`). Linux + Windows still route clicks through injected JS; native dispatch on those engines is the next milestone.
+- **AES-256-GCM auth blobs** persisted via `vs auth save/load/list/clear`; keyring with `~/.vibesurfer/key` fallback.
+- **CLI short-form aliases** for every primitive and frequent flag (`vs o`, `vs v`, `vs a`, `-S`, `-F`, `-s`, `-n`, `-P`, `-j`, …) — long forms remain, 35 parity tests pin them byte-for-byte.
+- **MCP server** (`vs mcp`) exposes each primitive as an MCP tool. **`vs skill install`** writes the SKILL.md and MCP config into Claude Desktop, Cursor, Codex, Gemini, and OpenClaw.
+- **Plugin manifests** for Claude Code marketplace, Codex CLI, Gemini CLI, and any MCP-aware agent in `plugin/` and `.claude-plugin/`.
+- **Multi-platform release pipeline** at `.github/workflows/release.yml` builds `vs` for `{x86_64,aarch64}-apple-darwin`, `x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc` on tag push.
+
+### Known gaps
+
+- Linux + Windows produce JS-synthetic clicks (`event.isTrusted = false`), so anti-bot pipelines will treat them as automated. Use the macOS engine for fingerprint-sensitive sites.
+- `vs act mark:<name>` is the one remaining `NotImplemented` in the engine layer; today only `ref:<N>` targets work for mutations.
+- The `vs-humanize` crate ships as pure math (Bezier paths, Fitts arrival times, lognormal keystroke timing, inertia scrolls) and is not yet wired into the engine layer.
+
+### Detail by milestone
+
+The chronological work log below covers M1 through M7 PR1, in the order it landed.
+
 ### Added
 - M6 follow-up: Linux WPE primitives complete + Windows WebView2 skeleton.
   - **Linux WpeBackend full primitive set.** `act`
