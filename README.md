@@ -226,13 +226,6 @@ docs/demo/record-claude.sh         # writes docs/demo-claude.gif
 
 The script enforces a TTY guard, isolates the demo home, and locks Claude to Bash so the agent must use the real `vs` binary (no MCP fallback, no built-in file tools). Each render is non-deterministic, since model output varies. The cached gif is committed so cloners and CI don't re-render.
 
-Or regenerate the scripted README gif with [vhs](https://github.com/charmbracelet/vhs):
-
-```
-brew install vhs
-docs/demo/render.sh                # writes docs/demo.gif
-```
-
 ## Contributing
 
 Issues and pull requests welcome. Open an issue first for anything beyond a small fix so we can discuss the approach. The codebase uses [agented](https://github.com/frane/agented) for transactional file edits during development; agented's workspace state is local-only (`.agented/state.db`) and is not committed.
