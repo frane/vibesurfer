@@ -21,7 +21,7 @@ use vs_protocol::Request;
 pub struct Cli {
     /// Override the active session id (otherwise read from
     /// `$VIBESURFER_HOME/active-session`).
-    #[arg(long, global = true)]
+    #[arg(long, short = 'S', global = true)]
     pub session: Option<String>,
 
     /// Override the daemon socket path. Tests pass an explicit path;
@@ -40,7 +40,7 @@ pub struct Cli {
 
     /// Emit the response as JSON for human inspection. The default is
     /// the line-oriented wire form that agents consume.
-    #[arg(long, global = true)]
+    #[arg(long, short = 'j', global = true)]
     pub json: bool,
 
     #[command(subcommand)]
@@ -73,7 +73,7 @@ pub enum Command {
     #[command(visible_alias = "v")]
     View {
         page: String,
-        #[arg(long)]
+        #[arg(long, short = 'F')]
         full: bool,
     },
     /// 6. Read the full text of a ref.
@@ -140,13 +140,13 @@ pub enum Command {
     /// 14. Slice the audit log.
     #[command(visible_alias = "l")]
     Log {
-        #[arg(long)]
+        #[arg(long, short = 'P')]
         page: Option<String>,
         #[arg(long)]
         group: Option<String>,
-        #[arg(long)]
+        #[arg(long, short = 's')]
         since: Option<i64>,
-        #[arg(long)]
+        #[arg(long, short = 'n')]
         limit: Option<i64>,
     },
     /// 15. Skill management. Subcommand: `list` or `show <name>`.
@@ -195,13 +195,13 @@ pub enum Command {
     ///     the page id; the second is the kind. Trailing positionals
     ///     are kind-specific (e.g. `request <seq>`, `eval <expr>`,
     ///     `storage <scope>`, `script <seq>`).
-    #[command(visible_alias = "in")]
+    #[command(visible_alias = "i")]
     Inspect {
         page: String,
         kind: String,
         #[arg(num_args = 0..=3)]
         rest: Vec<String>,
-        #[arg(long)]
+        #[arg(long, short = 's')]
         since: Option<String>,
         #[arg(long)]
         level: Option<String>,
@@ -209,7 +209,7 @@ pub enum Command {
         status: Option<String>,
         #[arg(long)]
         max: Option<String>,
-        #[arg(long)]
+        #[arg(long, short = 'F')]
         full: bool,
         #[arg(long = "unsafe-log")]
         unsafe_log: bool,
@@ -441,8 +441,9 @@ impl Command {
                 unsafe_log,
             } => {
                 let s = require_session(session_id)?;
+                let kind_long = normalize_inspect_kind(kind);
                 let mut req = Request::new("vs_inspect")
-                    .arg(kind.clone())
+                    .arg(kind_long.to_string())
                     .arg(page.clone());
                 for r in rest {
                     req = req.arg(r.clone());
@@ -491,6 +492,25 @@ fn require_session(session: Option<&str>) -> Result<String> {
     session
         .map(str::to_string)
         .context("no active session — run `vs session-open` or pass `--session=<id>`")
+}
+
+/// Map short-form inspect kind aliases to their long form. Unknown
+/// inputs pass through unchanged so the wire-side parser can reject
+/// or accept them — the CLI does not gatekeep here. The two-letter
+/// short forms are unambiguous within the inspect subcommand set.
+fn normalize_inspect_kind(kind: &str) -> &str {
+    match kind {
+        "co" => "console",
+        "n" => "network",
+        "req" => "request",
+        "e" => "eval",
+        "s" => "storage",
+        "scr" => "scripts",
+        "src" => "script",
+        "d" => "dom",
+        "p" => "performance",
+        other => other,
+    }
 }
 
 mod dispatch;
