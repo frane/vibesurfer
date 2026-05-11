@@ -1,0 +1,13 @@
+{
+  "name": "vibesurfer",
+  "description": "Agent-native headless browser.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Frane Bandov",
+    "url": "https://github.com/frane"
+  },
+  "homepage": "https://github.com/frane/vibesurfer",
+  "repository": "https://github.com/frane/vibesurfer",
+  "license": "MIT",
+  "keywords": ["browser", "headless", "webkit", "stateful", "mcp", "automation"]
+}

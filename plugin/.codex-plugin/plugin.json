@@ -1,0 +1,22 @@
+{
+  "name": "vibesurfer",
+  "version": "0.1.0",
+  "description": "Agent-native headless browser.",
+  "author": {
+    "name": "Frane Bandov",
+    "email": "frane.bandov@gmail.com"
+  },
+  "homepage": "https://github.com/frane/vibesurfer",
+  "repository": "https://github.com/frane/vibesurfer",
+  "license": "MIT",
+  "keywords": ["browser", "headless", "webkit", "stateful", "mcp", "automation"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "vibesurfer",
+    "shortDescription": "Agent-native headless browser.",
+    "longDescription": "Real WebKit/WebKitGTK/WebView2 engines under a Unix-socket wire protocol. 20 primitives, state-token concurrency, tree deltas, audit-by-construction, AES-256-GCM auth blobs. Requires the `vs` binary on PATH.",
+    "category": "Browser",
+    "websiteURL": "https://github.com/frane/vibesurfer"
+  }
+}

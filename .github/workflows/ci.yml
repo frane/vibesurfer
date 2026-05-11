@@ -22,6 +22,25 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
+  plugin-mirror:
+    # `plugin/` is a one-way copy of `skills/` consumed by the
+    # Claude Code / Codex / Gemini plugin manifests. The repo cannot
+    # symlink it because the marketplace packagers don't follow
+    # symlinks portably. CI fails any PR that touched the skills
+    # without re-running `scripts/sync-plugin.sh`.
+    name: plugin/ mirror in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run sync and assert no diff
+        run: |
+          ./scripts/sync-plugin.sh
+          if ! git diff --quiet; then
+            echo "::error::plugin/ mirror is stale; run scripts/sync-plugin.sh and commit." >&2
+            git --no-pager diff
+            exit 1
+          fi
+
   clippy:
     name: cargo clippy (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

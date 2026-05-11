@@ -1,0 +1,139 @@
+name: release
+
+# Tag-driven release pipeline. On `v*` tag push, build `vs` for each
+# target triple and upload the artifacts to the matching GitHub
+# Release. The install.sh in this repo expects asset names of the
+# form `vs-<version>-<target>.tar.gz` (`.zip` on Windows), so the
+# archive job below uses the same convention.
+#
+# Trigger:
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# Manual re-run is also possible via the workflow_dispatch entry.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Tag to build (e.g. v0.1.0). Required for manual runs."
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux system deps
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkitgtk-6.0-dev \
+            libgtk-4-dev \
+            libsoup-3.0-dev \
+            pkg-config
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          # On tag push, GITHUB_REF_NAME is the tag. On
+          # workflow_dispatch the user supplies the tag.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: cargo build --release
+        run: cargo build --release --bin vs --target ${{ matrix.target }} --locked
+
+      - name: Stage archive
+        id: stage
+        shell: bash
+        run: |
+          version="${{ steps.ver.outputs.version }}"
+          target="${{ matrix.target }}"
+          stage="$(mktemp -d)"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${target}/release/vs.exe" "${stage}/"
+          else
+            cp "target/${target}/release/vs" "${stage}/"
+          fi
+          cp README.md LICENSE "${stage}/"
+          archive_base="vs-${version}-${target}"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            archive="${archive_base}.zip"
+            (cd "${stage}" && 7z a "../${archive}" .)
+            mv "${stage}/../${archive}" "${archive}"
+          else
+            archive="${archive_base}.tar.gz"
+            tar -czf "${archive}" -C "${stage}" .
+          fi
+          echo "archive=${archive}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        if: github.event_name == 'push'
+        with:
+          files: ${{ steps.stage.outputs.archive }}
+          tag_name: ${{ steps.ver.outputs.version }}
+          fail_on_unmatched_files: true
+
+      - name: Upload as workflow artifact (manual runs)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.stage.outputs.archive }}
+          path: ${{ steps.stage.outputs.archive }}
+
+  checksums:
+    name: checksums
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir staging
+          cd staging
+          gh release download "${GITHUB_REF_NAME}" --pattern 'vs-*' --repo "${GITHUB_REPOSITORY}"
+          sha256sum vs-* > checksums.txt
+      - name: Upload checksums
+        uses: softprops/action-gh-release@v2
+        with:
+          files: staging/checksums.txt
+          tag_name: ${{ github.ref_name }}

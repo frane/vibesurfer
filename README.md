@@ -51,6 +51,17 @@ cargo install --path crates/vs-cli
 
 Linux needs WebKitGTK 6. Windows needs the WebView2 runtime (already on Windows 11, available for Windows 10 from Microsoft).
 
+## Plugin channels
+
+For agents that load plugins from a Git repo rather than from a binary's skill installer, vibesurfer ships the standard manifests:
+
+- **Claude Code marketplace** — `/plugin install frane/vibesurfer` resolves `.claude-plugin/marketplace.json` at the repo root.
+- **Codex CLI plugin** — `plugin/.codex-plugin/plugin.json` registers the skills and the MCP server.
+- **Gemini CLI extension** — `gemini-extension.json` at the repo root wires the MCP server and points at the agent context file (`plugin/GEMINI.md`).
+- **Any MCP-aware agent** — `plugin/.mcp.json` is the drop-in `mcpServers` entry: `{ "command": "vs", "args": ["mcp"] }`.
+
+The plugin packagers run `vs` from your `$PATH`, so you still need the binary installed via one of the methods above.
+
 ## Quickstart
 
 ```
