@@ -24,7 +24,7 @@ So vibesurfer. A native browser daemon in Rust with a wire designed for LLM call
 
 ## Status
 
-Beta. Protocol is stable. macOS and Linux verified by 49 cells of integration tests against real fixture pages, plus a regression that pins `vs act click` produces `event.isTrusted = true`. Windows code ships and cross-compiles clean, but runtime verification is open: the daemon dies during `Webview2Backend::open` from a Win32 structured exception that Rust panic handling does not catch — diagnosing needs a maintainer with real Windows hardware. Real sites work on macOS and Linux. Open an issue with URL and steps when something breaks.
+Beta. Protocol is stable. All three engines (macOS WKWebView, Linux WebKitGTK 6, Windows WebView2) are verified in CI by the same 48 cells of integration tests against real fixture pages. On macOS the suite also pins `vs act click` produces `event.isTrusted = true` via native `NSEvent` dispatch; the Linux and Windows backends still route clicks through injected JS, so anti-bot pipelines (Cloudflare, Google, hCaptcha) will treat them as automated until those engines grow the same trusted-input path. Real sites work on macOS. Open an issue with URL and steps when something breaks.
 
 See [docs/REALITY_CHECK.md](docs/REALITY_CHECK.md) for the per-platform per-primitive verification matrix.
 
@@ -139,7 +139,7 @@ cargo test --workspace --lib --bins        # fast unit tests
 cargo test --workspace                     # adds integration tests (real engine)
 ```
 
-For Linux engine tests on a non-Linux host, use the Docker container. WebKitGTK 6's sandbox needs unprivileged user namespaces, which the bare GitHub runners restrict; the engine-tests Linux job in CI runs the same container with `--privileged`:
+For Linux engine tests on a non-Linux host, use the Docker container. WebKitGTK 6's sandbox needs unprivileged user namespaces; the CI Linux job relaxes the AppArmor restriction with one sysctl on the bare runner, while the Docker fallback needs `--privileged` to do the same:
 
 ```
 docker build -f Dockerfile.linux-test -t vs-test-linux .
