@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/demo-claude.gif" alt="Claude Code using vibesurfer" width="720">
+  <img src="docs/demo-claude.gif" alt="Claude Code using vibesurfer" width="560">
 </p>
 
 ## Why
