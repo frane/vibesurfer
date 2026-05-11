@@ -9,6 +9,12 @@ description: Agent-native headless browser. 19 primitives over a Unix-socket wir
 
 `vs` is a stateless CLI that talks to a daemon (`vs serve`, auto-spawned on first call) over a Unix socket. The daemon owns one long-lived browser engine on the OS main thread and a SQLite store at `~/.vibesurfer/state.db`. Every primitive writes one audit row before returning — there's no opt-out, no untracked operation.
 
+## Short forms are the default in agent contexts
+
+Every primitive has a short alias. Long forms exist for human-readable documentation; agent invocations should use the shorter form to save tokens. `vs o https://...` is the canonical shape for `vs open https://...`, not the other way around. The 19-primitive tables below lead with the short form and show the long form in parens; both work identically.
+
+Frequent flags also have short forms: `-S` (`--session`), `-j` (`--json`), `-F` (`--full`), `-s` (`--since`), `-n` (`--limit`), `-P` (`--page`). The `--token` flag stays verbose because it's never typed by hand — you paste it from the previous read.
+
 ## Use this tool when
 
 - You need to drive a real browser to read or interact with a web app (login, scrape behind auth, click through SPA state).
