@@ -2003,6 +2003,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "vs-humanize"
+version = "0.0.1"
+
+[[package]]
 name = "vs-protocol"
 version = "0.0.1"
 dependencies = [

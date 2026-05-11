@@ -1,0 +1,16 @@
+[package]
+name = "vs-humanize"
+description = "Pure-math input synthesis for vibesurfer's three input modes (human, careful, robotic). Bezier mouse paths, Fitts-law arrival times, lognormal keystroke timing. No engine deps, no platform deps."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+# No external deps. The seeded PRNG (xoshiro256**) is hand-rolled in
+# `rng.rs` so the crate stays std-only — keeps the workspace lean and
+# avoids pulling `rand` + `rand_chacha` into the engine.
