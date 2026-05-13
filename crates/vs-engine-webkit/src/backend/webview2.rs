@@ -653,7 +653,7 @@ impl Engine for Webview2Backend {
         seq: u64,
     ) -> EngineResult<Option<crate::inspector::RequestDetail>> {
         let p = self.page_mut(page)?;
-        Ok(p.inspector.details.borrow().get(&seq).cloned())
+        Ok(p.inspector.details.borrow().get(seq).cloned())
     }
 
     fn eval_js(
