@@ -16,7 +16,7 @@
     clippy::similar_names
 )]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::inspector::{
@@ -29,11 +29,17 @@ use std::rc::Rc;
 /// backends embed this in their per-page struct; the JS bridge
 /// captures it via clone-of-Rc and pushes into the buffers from the
 /// engine main thread.
+///
+/// Every buffer in here is bounded. A long-running page (SPA, chatty
+/// fetch loop) cannot grow this state past `2 * capacity` entries
+/// across all maps combined. v0.1.0 had unbounded `details` and
+/// `pending`; that landed as a serious memory leak on real workloads
+/// and is fixed here.
 #[derive(Clone)]
 pub struct InspectorSlots {
     pub console: Rc<RefCell<RingBuffer<ConsoleEntry>>>,
     pub network: Rc<RefCell<RingBuffer<NetworkEntry>>>,
-    pub details: Rc<RefCell<HashMap<u64, RequestDetail>>>,
+    pub details: Rc<RefCell<RequestDetailStore>>,
     pub pending: Rc<RefCell<NetworkPending>>,
 }
 
@@ -43,9 +49,83 @@ impl InspectorSlots {
         Self {
             console: Rc::new(RefCell::new(RingBuffer::new(capacity))),
             network: Rc::new(RefCell::new(RingBuffer::new(capacity))),
-            details: Rc::new(RefCell::new(HashMap::new())),
-            pending: Rc::new(RefCell::new(NetworkPending::default())),
+            details: Rc::new(RefCell::new(RequestDetailStore::new(capacity))),
+            pending: Rc::new(RefCell::new(NetworkPending::new(capacity))),
         }
+    }
+}
+
+/// Bounded request-detail store. The `vs inspect request <seq>`
+/// primitive reads from here; entries are inserted on every network
+/// `end` event in lockstep with [`NetworkEntry`] pushes into the
+/// network ring buffer, and evicted in lockstep when that ring
+/// buffer drops the oldest entry. Capacity matches the ring buffer's
+/// so the two stores stay aligned.
+pub struct RequestDetailStore {
+    by_seq: HashMap<u64, RequestDetail>,
+    /// Insertion order; oldest at front. FIFO-evicted when `by_seq`
+    /// would exceed `capacity`.
+    order: VecDeque<u64>,
+    capacity: usize,
+}
+
+#[allow(clippy::map_entry)] // false positive: we evict an _unrelated_ key from the map first
+impl RequestDetailStore {
+    #[must_use]
+    pub fn new(capacity: usize) -> Self {
+        let capacity = capacity.max(1);
+        Self {
+            by_seq: HashMap::with_capacity(capacity),
+            order: VecDeque::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    pub fn insert(&mut self, seq: u64, detail: RequestDetail) {
+        if self.by_seq.contains_key(&seq) {
+            // Duplicate-seq insert just overwrites; don't double-track.
+            self.by_seq.insert(seq, detail);
+            return;
+        }
+        if self.by_seq.len() == self.capacity {
+            if let Some(old) = self.order.pop_front() {
+                self.by_seq.remove(&old);
+            }
+        }
+        self.order.push_back(seq);
+        self.by_seq.insert(seq, detail);
+    }
+
+    #[cfg(test)]
+    pub fn remove(&mut self, seq: u64) -> Option<RequestDetail> {
+        let entry = self.by_seq.remove(&seq)?;
+        if let Some(pos) = self.order.iter().position(|s| *s == seq) {
+            self.order.remove(pos);
+        }
+        Some(entry)
+    }
+
+    #[must_use]
+    pub fn get(&self, seq: u64) -> Option<&RequestDetail> {
+        self.by_seq.get(&seq)
+    }
+
+    // Introspection used by tests; gated so production builds don't
+    // pull these into the symbol table.
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.by_seq.len()
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn is_empty(&self) -> bool {
+        self.by_seq.is_empty()
+    }
+
+    #[cfg(test)]
+    pub fn capacity(&self) -> usize {
+        self.capacity
     }
 }
 
@@ -111,16 +191,84 @@ fn parse_headers(v: Option<&serde_json::Value>) -> Vec<Header> {
 
 /// In-flight network state keyed by seq, used to fold a `start` and a
 /// later `end` event into one `NetworkEntry` + one `RequestDetail`.
-#[derive(Default)]
+///
+/// Bounded by `capacity`: requests that start but never end (page
+/// navigated away mid-flight, fetch aborted by a Promise rejection
+/// the JS shim didn't observe) eventually get evicted FIFO. v0.1.0
+/// had unbounded `HashMap`s here and leaked.
 pub struct NetworkPending {
-    pub start_ms: HashMap<u64, i64>,
-    pub req_headers: HashMap<u64, Vec<Header>>,
-    pub req_body: HashMap<u64, Option<String>>,
+    by_seq: HashMap<u64, PendingEntry>,
+    /// Insertion order of currently-tracked seqs; oldest at front.
+    order: VecDeque<u64>,
+    capacity: usize,
+}
+
+#[derive(Clone)]
+pub struct PendingEntry {
+    pub start_ms: i64,
+    pub req_headers: Vec<Header>,
+    pub req_body: Option<String>,
+}
+
+#[allow(clippy::map_entry)] // false positive: we evict an _unrelated_ key from the map first
+impl NetworkPending {
+    #[must_use]
+    pub fn new(capacity: usize) -> Self {
+        let capacity = capacity.max(1);
+        Self {
+            by_seq: HashMap::with_capacity(capacity),
+            order: VecDeque::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    pub fn insert(&mut self, seq: u64, entry: PendingEntry) {
+        if self.by_seq.contains_key(&seq) {
+            // A duplicate `start` for the same seq (engine-shim race
+            // or replay) just overwrites; don't double-track in
+            // `order`.
+            self.by_seq.insert(seq, entry);
+            return;
+        }
+        if self.by_seq.len() == self.capacity {
+            if let Some(old) = self.order.pop_front() {
+                self.by_seq.remove(&old);
+            }
+        }
+        self.order.push_back(seq);
+        self.by_seq.insert(seq, entry);
+    }
+
+    /// Remove and return the entry for `seq`, scrubbing it from
+    /// `order` as well. O(n) on the order deque but n is bounded by
+    /// `capacity`.
+    pub fn take(&mut self, seq: u64) -> Option<PendingEntry> {
+        let entry = self.by_seq.remove(&seq)?;
+        if let Some(pos) = self.order.iter().position(|s| *s == seq) {
+            self.order.remove(pos);
+        }
+        Some(entry)
+    }
+
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.by_seq.len()
+    }
+
+    #[cfg(test)]
+    pub fn is_empty(&self) -> bool {
+        self.by_seq.is_empty()
+    }
+
+    #[cfg(test)]
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
 }
 
 pub struct NetworkIngestSlot<'a> {
     pub entries: &'a mut RingBuffer<NetworkEntry>,
-    pub details: &'a mut HashMap<u64, RequestDetail>,
+    pub details: &'a mut RequestDetailStore,
     pub pending: &'a mut NetworkPending,
 }
 
@@ -142,15 +290,16 @@ pub fn ingest_network(slot: NetworkIngestSlot<'_>, body: &str) {
             .get("ts_ms")
             .and_then(serde_json::Value::as_i64)
             .unwrap_or(0);
-        slot.pending.start_ms.insert(seq, ts);
-        slot.pending
-            .req_headers
-            .insert(seq, parse_headers(v.get("req_headers")));
-        slot.pending.req_body.insert(
+        slot.pending.insert(
             seq,
-            v.get("req_body")
-                .and_then(|x| x.as_str())
-                .map(str::to_string),
+            PendingEntry {
+                start_ms: ts,
+                req_headers: parse_headers(v.get("req_headers")),
+                req_body: v
+                    .get("req_body")
+                    .and_then(|x| x.as_str())
+                    .map(str::to_string),
+            },
         );
         return;
     }
@@ -181,7 +330,8 @@ pub fn ingest_network(slot: NetworkIngestSlot<'_>, body: &str) {
         .get("ts_ms")
         .and_then(serde_json::Value::as_i64)
         .unwrap_or(0);
-    let start_ms = slot.pending.start_ms.remove(&seq).unwrap_or(end_ms);
+    let pending = slot.pending.take(seq);
+    let start_ms = pending.as_ref().map_or(end_ms, |p| p.start_ms);
     let latency = if end_ms >= start_ms {
         Some((end_ms - start_ms) as u64)
     } else {
@@ -193,7 +343,13 @@ pub fn ingest_network(slot: NetworkIngestSlot<'_>, body: &str) {
         .unwrap_or(0);
     let timestamp = ts_from_ms(end_ms);
 
-    slot.entries.push(NetworkEntry {
+    // `entries` is the ring buffer (bounded by capacity). `details`
+    // self-bounds at the same capacity via FIFO eviction. Both pushes
+    // here grow the two stores in lockstep so a `vs inspect request`
+    // lookup never resolves to a seq that's been evicted from
+    // entries (or vice versa) except across a single transient gap
+    // at eviction time.
+    let _evicted = slot.entries.push(NetworkEntry {
         seq,
         timestamp,
         method: method.clone(),
@@ -203,8 +359,9 @@ pub fn ingest_network(slot: NetworkIngestSlot<'_>, body: &str) {
         latency_ms: latency,
     });
 
-    let req_headers = slot.pending.req_headers.remove(&seq).unwrap_or_default();
-    let req_body = slot.pending.req_body.remove(&seq).flatten();
+    let (req_headers, req_body) = pending
+        .map(|p| (p.req_headers, p.req_body))
+        .unwrap_or_default();
     let res_headers = parse_headers(v.get("res_headers"));
     let res_body = v
         .get("res_body")
@@ -224,4 +381,170 @@ pub fn ingest_network(slot: NetworkIngestSlot<'_>, body: &str) {
             response_body: res_body,
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::inspector::DEFAULT_BUFFER_CAPACITY;
+
+    fn make_slots(cap: usize) -> InspectorSlots {
+        InspectorSlots::new(cap)
+    }
+
+    /// Helper: emit start+end events for a fake request seq.
+    fn ingest_pair(slots: &InspectorSlots, seq: u64) {
+        let start = format!(
+            r#"{{"seq":{seq},"phase":"start","ts_ms":1000,"req_headers":[["X-Test","y"]],"req_body":"hi"}}"#
+        );
+        let end = format!(
+            r#"{{"seq":{seq},"phase":"end","ts_ms":1100,"method":"GET","url":"http://x/{seq}","status":200,"size":42}}"#
+        );
+        {
+            let mut entries = slots.network.borrow_mut();
+            let mut details = slots.details.borrow_mut();
+            let mut pending = slots.pending.borrow_mut();
+            ingest_network(
+                NetworkIngestSlot {
+                    entries: &mut entries,
+                    details: &mut details,
+                    pending: &mut pending,
+                },
+                &start,
+            );
+        }
+        {
+            let mut entries = slots.network.borrow_mut();
+            let mut details = slots.details.borrow_mut();
+            let mut pending = slots.pending.borrow_mut();
+            ingest_network(
+                NetworkIngestSlot {
+                    entries: &mut entries,
+                    details: &mut details,
+                    pending: &mut pending,
+                },
+                &end,
+            );
+        }
+    }
+
+    #[test]
+    fn details_store_evicts_oldest_at_capacity() {
+        let slots = make_slots(3);
+        for seq in 1..=5 {
+            ingest_pair(&slots, seq);
+        }
+        let details = slots.details.borrow();
+        assert_eq!(details.len(), 3, "details store must stay bounded");
+        assert_eq!(details.capacity(), 3);
+        assert!(
+            details.get(1).is_none(),
+            "oldest seq 1 should have been evicted"
+        );
+        assert!(
+            details.get(2).is_none(),
+            "second-oldest seq 2 should have been evicted"
+        );
+        assert!(details.get(3).is_some(), "seq 3 still in window");
+        assert!(details.get(5).is_some(), "seq 5 still in window");
+    }
+
+    #[test]
+    fn pending_evicts_oldest_when_starts_pile_up_without_ends() {
+        // start-only events (no matching end) — simulates page that
+        // navigates away mid-fetch, or fetch that throws.
+        let slots = make_slots(3);
+        for seq in 1..=5 {
+            let body = format!(
+                r#"{{"seq":{seq},"phase":"start","ts_ms":{},"req_headers":[],"req_body":null}}"#,
+                seq * 100
+            );
+            let mut entries = slots.network.borrow_mut();
+            let mut details = slots.details.borrow_mut();
+            let mut pending = slots.pending.borrow_mut();
+            ingest_network(
+                NetworkIngestSlot {
+                    entries: &mut entries,
+                    details: &mut details,
+                    pending: &mut pending,
+                },
+                &body,
+            );
+        }
+        let pending = slots.pending.borrow();
+        assert_eq!(pending.len(), 3, "pending must stay bounded by capacity");
+        assert_eq!(pending.capacity(), 3);
+        assert!(!pending.is_empty());
+    }
+
+    #[test]
+    fn end_event_drains_pending_back_to_empty() {
+        let slots = make_slots(DEFAULT_BUFFER_CAPACITY);
+        ingest_pair(&slots, 42);
+        assert!(slots.pending.borrow().is_empty());
+        let details = slots.details.borrow();
+        assert_eq!(details.len(), 1);
+        let detail = details.get(42).expect("seq 42 present");
+        assert_eq!(detail.method, "GET");
+        assert_eq!(detail.url, "http://x/42");
+    }
+
+    #[test]
+    fn details_remove_clears_order_too() {
+        let mut store = RequestDetailStore::new(4);
+        for seq in 1..=3 {
+            store.insert(
+                seq,
+                RequestDetail {
+                    seq,
+                    method: "GET".into(),
+                    url: format!("http://x/{seq}"),
+                    status: NetworkStatus::Code(200),
+                    request_headers: vec![],
+                    request_body: None,
+                    response_headers: vec![],
+                    response_body: None,
+                },
+            );
+        }
+        assert_eq!(store.len(), 3);
+        store.remove(2);
+        assert_eq!(store.len(), 2);
+        // Push a 4th and 5th: with capacity 4 and one removed, both
+        // should fit without evicting the rest.
+        for seq in 4..=5 {
+            store.insert(
+                seq,
+                RequestDetail {
+                    seq,
+                    method: "GET".into(),
+                    url: format!("http://x/{seq}"),
+                    status: NetworkStatus::Code(200),
+                    request_headers: vec![],
+                    request_body: None,
+                    response_headers: vec![],
+                    response_body: None,
+                },
+            );
+        }
+        assert_eq!(store.len(), 4);
+        assert!(store.get(1).is_some(), "seq 1 should not have been evicted");
+        assert!(store.get(2).is_none(), "seq 2 was removed");
+        assert!(store.get(5).is_some());
+    }
+
+    #[test]
+    fn console_ring_buffer_evicts_at_capacity() {
+        let slots = make_slots(3);
+        for i in 0..5 {
+            let body = format!(r#"{{"level":"log","message":"m{i}","ts_ms":{}}}"#, 1000 + i);
+            let mut buf = slots.console.borrow_mut();
+            ingest_console(&mut buf, &body);
+        }
+        let buf = slots.console.borrow();
+        let snap = buf.snapshot();
+        assert_eq!(snap.len(), 3);
+        assert_eq!(snap[0].message, "m2", "oldest two should have been evicted");
+        assert_eq!(snap[2].message, "m4");
+    }
 }

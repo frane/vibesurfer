@@ -7,6 +7,20 @@ All notable changes to vibesurfer are recorded here. The format follows
 ## [Unreleased]
 
 
+## [v0.1.1] - 2026-05-13
+
+Memory-leak fix on the inspector capture path. v0.1.0 ring-buffered the console and network `Entry` lists at 1000 each, but the parallel `RequestDetail` and in-flight `NetworkPending` maps were unbounded `HashMap`s. A long-running page (any SPA with a chatty fetch loop, or a tab left open over a day) accumulated them indefinitely; one real-world session reached ~33 GB of resident memory in the daemon before being killed.
+
+### Fixed
+
+- `RequestDetailStore` and `NetworkPending` are now bounded FIFO maps at the same `DEFAULT_BUFFER_CAPACITY` (1000) as the ring buffers. Insertion past capacity evicts the oldest entry in O(n) on the order deque (n ≤ capacity). Five new unit tests in `inspector_bridge.rs` cover the eviction shape and the start/end pairing.
+- `RingBuffer::push` now returns the evicted entry as `Option<T>` so callers maintaining side-tables can stay aligned without external bookkeeping.
+
+### Compatibility
+
+No wire-format change. No CLI change. `vs inspect request <seq>` may now return "not found" for a seq beyond the 1000-entry retention window (previously: would return any seq that had ever ended on this page). The retention window is configurable in code via `DEFAULT_BUFFER_CAPACITY`; a runtime knob is deferred.
+
+
 ## [v0.1.0] - 2026-05-11
 
 First public release. The wire protocol is stable, the three engines (macOS WKWebView, Linux WebKitGTK 6, Windows WebView2) are all CI-verified by the same 48-cell integration suite on every push.

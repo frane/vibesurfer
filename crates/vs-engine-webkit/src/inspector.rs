@@ -298,11 +298,19 @@ impl<T: Clone> RingBuffer<T> {
         }
     }
 
-    pub fn push(&mut self, item: T) {
-        if self.items.len() == self.capacity {
-            self.items.pop_front();
-        }
+    /// Push `item`; if the buffer was full, return the evicted oldest
+    /// entry. Callers that maintain side-tables keyed off the entry
+    /// (the inspector bridge's `details` map keyed by seq) use the
+    /// returned item to clean up in lockstep so the side-table never
+    /// grows past the ring's capacity.
+    pub fn push(&mut self, item: T) -> Option<T> {
+        let evicted = if self.items.len() == self.capacity {
+            self.items.pop_front()
+        } else {
+            None
+        };
         self.items.push_back(item);
+        evicted
     }
 
     #[must_use]
