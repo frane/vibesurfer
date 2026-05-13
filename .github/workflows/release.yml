@@ -36,8 +36,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Cross-build x86_64 darwin from the Apple Silicon runner.
+          # macos-13 (Intel) is in GitHub's runner pool but allocations
+          # routinely stall in queue for hours; cross-compile from
+          # macos-latest (arm64) with the second target installed
+          # produces a native x86_64 mach-o just the same.
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-latest
           - target: aarch64-apple-darwin
             os: macos-latest
           - target: x86_64-unknown-linux-gnu
