@@ -6,6 +6,10 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- License switched from MIT to Apache-2.0.
+
 
 ## [v0.1.1] - 2026-05-13
 

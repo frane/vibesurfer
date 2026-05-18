@@ -8,6 +8,6 @@
   },
   "homepage": "https://github.com/frane/vibesurfer",
   "repository": "https://github.com/frane/vibesurfer",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": ["browser", "headless", "webkit", "stateful", "mcp", "automation"]
 }

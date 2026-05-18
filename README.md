@@ -6,7 +6,7 @@
   <a href="https://github.com/frane/vibesurfer/actions/workflows/ci.yml"><img alt="ci" src="https://img.shields.io/github/actions/workflow/status/frane/vibesurfer/ci.yml?branch=main&label=ci&style=flat-square"></a>
   <a href="https://github.com/frane/vibesurfer/actions/workflows/engine-tests.yml"><img alt="engine-tests" src="https://img.shields.io/github/actions/workflow/status/frane/vibesurfer/engine-tests.yml?branch=main&label=engine-tests&style=flat-square"></a>
   <a href="https://github.com/frane/vibesurfer/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/frane/vibesurfer?style=flat-square"></a>
-  <a href="https://github.com/frane/vibesurfer/blob/main/LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"></a>
+  <a href="https://github.com/frane/vibesurfer/blob/main/LICENSE"><img alt="license" src="https://img.shields.io/badge/license-Apache_2.0-blue?style=flat-square"></a>
 </p>
 
 <p align="center">
@@ -244,4 +244,4 @@ Protocol borrows from [agented](https://github.com/frane/agented), an editor for
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Apache-2.0. See [LICENSE](LICENSE).
