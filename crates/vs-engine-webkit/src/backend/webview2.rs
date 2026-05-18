@@ -840,9 +840,9 @@ mod wv2_cookies {
                 )
             }
             .map_err(|e| EngineError::Other(format!("CreateCookie: {e}")))?;
-            unsafe { cookie.SetIsHttpOnly(BOOL::from(c.http_only)) }
+            unsafe { cookie.SetIsHttpOnly(c.http_only) }
                 .map_err(|e| EngineError::Other(format!("SetIsHttpOnly: {e}")))?;
-            unsafe { cookie.SetIsSecure(BOOL::from(c.secure)) }
+            unsafe { cookie.SetIsSecure(c.secure) }
                 .map_err(|e| EngineError::Other(format!("SetIsSecure: {e}")))?;
             #[allow(clippy::cast_precision_loss)]
             if let Some(unix) = c.expires_unix {
