@@ -768,8 +768,7 @@ mod wv2_cookies {
         COREWEBVIEW2_COOKIE_SAME_SITE_KIND_NONE, COREWEBVIEW2_COOKIE_SAME_SITE_KIND_STRICT,
     };
     use webview2_com::{pwstr_from_str, take_pwstr, GetCookiesCompletedHandler};
-    use windows::core::{Interface, HSTRING, PCWSTR, PWSTR};
-    use windows::Win32::Foundation::BOOL;
+    use windows::core::{Interface, BOOL, HSTRING, PCWSTR, PWSTR};
 
     use crate::backend::auth::CookieData;
     use crate::engine::{EngineError, EngineResult};
@@ -780,8 +779,7 @@ mod wv2_cookies {
         let v2: ICoreWebView2_2 = web_view
             .cast()
             .map_err(|e| EngineError::Other(format!("cast to ICoreWebView2_2: {e}")))?;
-        unsafe { v2.CookieManager() }
-            .map_err(|e| EngineError::Other(format!("CookieManager: {e}")))
+        unsafe { v2.CookieManager() }.map_err(|e| EngineError::Other(format!("CookieManager: {e}")))
     }
 
     pub(super) fn get_all_cookies(web_view: &ICoreWebView2) -> EngineResult<Vec<CookieData>> {
@@ -911,10 +909,7 @@ mod wv2_cookies {
             let mut d: f64 = 0.0;
             match unsafe { c.Expires(&raw mut d) } {
                 Ok(()) if d > 0.0 => {
-                    #[allow(
-                        clippy::cast_possible_truncation,
-                        clippy::cast_precision_loss
-                    )]
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
                     let i = d.round() as i64;
                     Some(i)
                 }
