@@ -98,6 +98,12 @@ fn handle(mut req: Request) -> std::io::Result<()> {
     if path == "/dashboard" {
         return handle_dashboard(req);
     }
+    if path == "/login-httponly" {
+        return handle_login_http_only(req);
+    }
+    if path == "/dashboard-httponly" {
+        return handle_dashboard_http_only(req);
+    }
     if path == "/api/ok" {
         return respond_text(req, 200, "application/json", r#"{"ok":true}"#);
     }
@@ -153,6 +159,37 @@ fn handle_dashboard(req: Request) -> std::io::Result<()> {
         .map(|h| h.value.as_str().to_string())
         .unwrap_or_default();
     if !cookie_header.contains("session_id=") {
+        return respond_text(req, 401, "text/plain", "unauthenticated");
+    }
+    let path = fixtures_root().join("dashboard.html");
+    serve_file(req, &path)
+}
+
+/// GET that issues an `HttpOnly` session cookie and redirects to
+/// `/dashboard-httponly`. Together with [`handle_dashboard_http_only`]
+/// this exercises the round-trip that v0.1.1's `document.cookie`-only
+/// auth path silently dropped.
+fn handle_login_http_only(req: Request) -> std::io::Result<()> {
+    let resp = Response::empty(StatusCode(303))
+        .with_header(header(
+            "Set-Cookie",
+            "ht_session=ht-fixture; Path=/; HttpOnly; SameSite=Lax",
+        ))
+        .with_header(header("Location", "/dashboard-httponly"))
+        .with_header(no_store());
+    req.respond(resp)
+}
+
+/// Counterpart to [`handle_login_http_only`]: requires the
+/// `ht_session` cookie or returns 401.
+fn handle_dashboard_http_only(req: Request) -> std::io::Result<()> {
+    let cookie_header = req
+        .headers()
+        .iter()
+        .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case("Cookie"))
+        .map(|h| h.value.as_str().to_string())
+        .unwrap_or_default();
+    if !cookie_header.contains("ht_session=") {
         return respond_text(req, 401, "text/plain", "unauthenticated");
     }
     let path = fixtures_root().join("dashboard.html");

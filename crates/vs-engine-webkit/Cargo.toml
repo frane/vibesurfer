@@ -22,6 +22,7 @@ test-support = []
 [dependencies]
 vs-protocol = { path = "../vs-protocol" }
 thiserror = "2"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 [target.'cfg(target_os = "linux")'.dependencies]
 # WebKitGTK 6.0 + GLib for the Linux backend. Heavy system deps
@@ -37,9 +38,9 @@ glib = "0.22"
 # at our level; a small unsafe surface remains for delegate-class
 # definitions and a few message sends.
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSURL", "NSURLRequest", "NSString", "NSError", "NSDictionary", "NSValue", "NSArray", "NSData", "NSThread", "NSDate", "NSRunLoop"] }
+objc2-foundation = { version = "0.3", features = ["NSURL", "NSURLRequest", "NSString", "NSError", "NSDictionary", "NSValue", "NSArray", "NSData", "NSThread", "NSDate", "NSRunLoop", "NSHTTPCookie"] }
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "NSView", "NSWindow", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphics", "NSEvent", "NSScreen"] }
-objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKWebViewConfiguration", "WKNavigation", "WKNavigationDelegate", "WKUserContentController", "WKUserScript", "WKScriptMessage", "WKScriptMessageHandler", "WKContentWorld", "WKWebsiteDataStore", "WKSnapshotConfiguration", "WKFrameInfo"] }
+objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKWebViewConfiguration", "WKNavigation", "WKNavigationDelegate", "WKUserContentController", "WKUserScript", "WKScriptMessage", "WKScriptMessageHandler", "WKContentWorld", "WKWebsiteDataStore", "WKHTTPCookieStore", "WKSnapshotConfiguration", "WKFrameInfo"] }
 block2 = "0.6"
 
 [target.'cfg(target_os = "windows")'.dependencies]

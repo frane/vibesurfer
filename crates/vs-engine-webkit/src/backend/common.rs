@@ -102,12 +102,22 @@ fn build_node(v: &serde_json::Value) -> Option<Node> {
 
 /// JS that snapshots cookies + localStorage + sessionStorage as a JSON
 /// blob. Used by `save_auth` on every backend.
+#[allow(dead_code)] // used by wpe + webview2; WkBackend moved to host-side cookie store
 pub(crate) const AUTH_SAVE_JS: &str = include_str!("auth_save.js");
 
 /// JS that restores the JSON blob produced by [`AUTH_SAVE_JS`]. The
 /// caller wraps this in an IIFE that defines `blob` from
 /// `JSON.parse(<payload>)`.
+#[allow(dead_code)]
 pub(crate) const AUTH_LOAD_BODY_JS: &str = include_str!("auth_load_body.js");
+
+/// JS that snapshots only localStorage + sessionStorage. The cookie
+/// portion is handled by the host-side cookie store API (which sees
+/// HttpOnly cookies; `document.cookie` does not).
+pub(crate) const STORAGE_SAVE_JS: &str = include_str!("storage_save.js");
+
+/// JS that restores localStorage + sessionStorage from `payload`.
+pub(crate) const STORAGE_LOAD_BODY_JS: &str = include_str!("storage_load_body.js");
 
 /// Shared DOM-walker JS payload. All three real backends evaluate this
 /// and parse the result with [`parse_snapshot`].
@@ -395,6 +405,7 @@ where
 }
 
 /// Run `save_auth`: eval the snapshot JS, capture the JSON blob.
+#[allow(dead_code)]
 pub(crate) fn run_save_auth<F>(eval: F) -> EngineResult<AuthBlob>
 where
     F: Fn(&str, Duration) -> EngineResult<String>,
@@ -408,6 +419,7 @@ where
 
 /// Run `load_auth`: rebuild the IIFE with the payload baked in, eval,
 /// expect the literal `"ok"`.
+#[allow(dead_code)]
 pub(crate) fn run_load_auth<F>(eval: F, blob: &AuthBlob) -> EngineResult<()>
 where
     F: Fn(&str, Duration) -> EngineResult<String>,
@@ -854,4 +866,78 @@ where
         js_heap_mb: f("heap_mb"),
         dom_nodes: u("dom_nodes"),
     })
+}
+
+/// Captured storage state from `STORAGE_SAVE_JS`. Cookies live in a
+/// separate host-side payload because `document.cookie` can't see
+/// `HttpOnly`.
+pub(crate) struct StorageSnapshot {
+    pub url: String,
+    pub origin: String,
+    pub local_storage: std::collections::BTreeMap<String, String>,
+    pub session_storage: std::collections::BTreeMap<String, String>,
+}
+
+pub(crate) fn run_save_storage_only<F>(eval: F) -> EngineResult<StorageSnapshot>
+where
+    F: Fn(&str, Duration) -> EngineResult<String>,
+{
+    let json = eval(STORAGE_SAVE_JS, Duration::from_secs(5))?;
+    let unwrapped = serde_json::from_str::<String>(&json).unwrap_or(json);
+    let v: serde_json::Value = serde_json::from_str(&unwrapped)
+        .map_err(|e| EngineError::Other(format!("save_storage parse: {e}")))?;
+    let url = v
+        .get("url")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let origin = v
+        .get("origin")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let local_storage = parse_storage_map(v.get("localStorage"));
+    let session_storage = parse_storage_map(v.get("sessionStorage"));
+    Ok(StorageSnapshot {
+        url,
+        origin,
+        local_storage,
+        session_storage,
+    })
+}
+
+fn parse_storage_map(v: Option<&serde_json::Value>) -> std::collections::BTreeMap<String, String> {
+    let Some(obj) = v.and_then(serde_json::Value::as_object) else {
+        return std::collections::BTreeMap::new();
+    };
+    obj.iter()
+        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+        .collect()
+}
+
+pub(crate) fn run_load_storage_only<F>(
+    eval: F,
+    local: &std::collections::BTreeMap<String, String>,
+    session: &std::collections::BTreeMap<String, String>,
+) -> EngineResult<()>
+where
+    F: Fn(&str, Duration) -> EngineResult<String>,
+{
+    let payload = serde_json::json!({
+        "localStorage": local,
+        "sessionStorage": session,
+    });
+    let payload_lit = serde_json::to_string(&payload.to_string())
+        .map_err(|e| EngineError::Other(format!("storage payload encode: {e}")))?;
+    let body = STORAGE_LOAD_BODY_JS;
+    let js = format!("(function() {{ const payload = JSON.parse({payload_lit}); {body} }})()");
+    let result = eval(&js, Duration::from_secs(5))?;
+    let unwrapped = serde_json::from_str::<String>(&result).unwrap_or(result);
+    if unwrapped == "ok" {
+        Ok(())
+    } else {
+        Err(EngineError::Other(format!(
+            "load_storage: unexpected: {unwrapped}"
+        )))
+    }
 }

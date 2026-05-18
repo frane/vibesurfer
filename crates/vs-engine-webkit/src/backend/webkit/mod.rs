@@ -16,6 +16,7 @@
 //!   load_auth) lives in [`super::common`].
 
 mod capture;
+mod cookie_store;
 mod eval;
 mod input;
 mod inspector_handler;
@@ -296,15 +297,36 @@ impl Engine for WkBackend {
     fn save_auth(&mut self, page: PageHandle) -> EngineResult<AuthBlob> {
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
-        super::common::run_save_auth(move |js, budget| eval_js_string(&web_view, js, budget))
+        // Cookies: host-side via WKHTTPCookieStore so HttpOnly entries
+        // are captured (the v0.1.1 document.cookie path silently
+        // dropped them). localStorage/sessionStorage: JS shim, which
+        // is the right surface for those.
+        let cookies = cookie_store::get_all_cookies(&web_view)?;
+        let storage = super::common::run_save_storage_only(move |js, budget| {
+            eval_js_string(&web_view, js, budget)
+        })?;
+        let blob = super::auth::AuthBlobV2 {
+            version: 2,
+            url: storage.url,
+            origin: storage.origin,
+            cookies,
+            local_storage: storage.local_storage,
+            session_storage: storage.session_storage,
+        };
+        super::auth::encode(&blob)
     }
 
     fn load_auth(&mut self, page: PageHandle, blob: &AuthBlob) -> EngineResult<()> {
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
-        super::common::run_load_auth(
+        let parsed = super::auth::decode(blob)?;
+        // Cookies first so subsequent fetches by the storage-restore
+        // JS (none today, but future hooks) see the auth state.
+        cookie_store::set_cookies(&web_view, &parsed.cookies)?;
+        super::common::run_load_storage_only(
             move |js, budget| eval_js_string(&web_view, js, budget),
-            blob,
+            &parsed.local_storage,
+            &parsed.session_storage,
         )
     }
 

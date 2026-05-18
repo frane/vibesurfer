@@ -1511,6 +1511,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
 dependencies = [
  "serde_core",
+ "serde_derive",
 ]
 
 [[package]]
@@ -1941,7 +1942,7 @@ checksum = "03c2856837ef78f57382f06b2b8563a2f512f7185d732608fd9176cb3b8edf0e"
 
 [[package]]
 name = "vs-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -1966,7 +1967,7 @@ dependencies = [
 
 [[package]]
 name = "vs-daemon"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1985,7 +1986,7 @@ dependencies = [
 
 [[package]]
 name = "vs-engine-webkit"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "block2",
  "glib",
@@ -1993,6 +1994,7 @@ dependencies = [
  "objc2-app-kit",
  "objc2-foundation",
  "objc2-web-kit",
+ "serde",
  "serde_json",
  "tempfile",
  "thiserror",
@@ -2004,11 +2006,11 @@ dependencies = [
 
 [[package]]
 name = "vs-humanize"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "vs-protocol"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "proptest",
  "thiserror",
@@ -2016,7 +2018,7 @@ dependencies = [
 
 [[package]]
 name = "vs-store"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "apple-native-keyring-store",
  "keyring-core",

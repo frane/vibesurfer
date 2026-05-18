@@ -622,13 +622,33 @@ impl Engine for Webview2Backend {
     fn save_auth(&mut self, page: PageHandle) -> EngineResult<AuthBlob> {
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
-        super::common::run_save_auth(move |js, _budget| execute_script(&web_view, js))
+        // Cookies: host-side via ICoreWebView2CookieManager so
+        // HttpOnly entries are captured. localStorage/sessionStorage:
+        // JS shim.
+        let cookies = wv2_cookies::get_all_cookies(&web_view)?;
+        let storage =
+            super::common::run_save_storage_only(move |js, _budget| execute_script(&web_view, js))?;
+        let blob = super::auth::AuthBlobV2 {
+            version: 2,
+            url: storage.url,
+            origin: storage.origin,
+            cookies,
+            local_storage: storage.local_storage,
+            session_storage: storage.session_storage,
+        };
+        super::auth::encode(&blob)
     }
 
     fn load_auth(&mut self, page: PageHandle, blob: &AuthBlob) -> EngineResult<()> {
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
-        super::common::run_load_auth(move |js, _budget| execute_script(&web_view, js), blob)
+        let parsed = super::auth::decode(blob)?;
+        wv2_cookies::set_cookies(&web_view, &parsed.cookies)?;
+        super::common::run_load_storage_only(
+            move |js, _budget| execute_script(&web_view, js),
+            &parsed.local_storage,
+            &parsed.session_storage,
+        )
     }
 
     fn console_entries(
@@ -729,4 +749,176 @@ impl Engine for Webview2Backend {
             version: "Windows WebView2 (webview2-com 0.39)",
         }
     }
+}
+
+// =============================================================================
+// Host-side cookie save/load via ICoreWebView2CookieManager.
+// =============================================================================
+//
+// Mirror of the macOS `webkit::cookie_store` and Linux `wpe_cookies`
+// modules. `document.cookie` can't see or write `HttpOnly`; the
+// `ICoreWebView2CookieManager` API can. The v0.1.2 fix routes auth
+// save/load through this path on every backend.
+mod wv2_cookies {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2, ICoreWebView2Cookie, ICoreWebView2CookieManager,
+        COREWEBVIEW2_COOKIE_SAME_SITE_KIND_LAX, COREWEBVIEW2_COOKIE_SAME_SITE_KIND_NONE,
+        COREWEBVIEW2_COOKIE_SAME_SITE_KIND_STRICT,
+    };
+    use webview2_com::{pwstr_from_str, take_pwstr, GetCookiesCompletedHandler};
+    use windows::core::{HSTRING, PCWSTR};
+
+    use crate::backend::auth::CookieData;
+    use crate::engine::{EngineError, EngineResult};
+
+    fn cookie_manager(web_view: &ICoreWebView2) -> EngineResult<ICoreWebView2CookieManager> {
+        unsafe { web_view.CookieManager() }
+            .map_err(|e| EngineError::Other(format!("CookieManager: {e}")))
+    }
+
+    pub(super) fn get_all_cookies(web_view: &ICoreWebView2) -> EngineResult<Vec<CookieData>> {
+        let manager = cookie_manager(web_view)?;
+        let (tx, rx) = mpsc::channel();
+        // Empty URI = all cookies, per CWE2 docs.
+        let empty: HSTRING = HSTRING::new();
+        let manager_for_init = manager.clone();
+        GetCookiesCompletedHandler::wait_for_async_operation(
+            Box::new(move |handler| {
+                unsafe { manager_for_init.GetCookies(PCWSTR(empty.as_ptr()), &handler) }
+                    .map_err(webview2_com::Error::WindowsError)
+            }),
+            Box::new(move |hr, list| {
+                hr?;
+                let mut out: Vec<CookieData> = Vec::new();
+                if let Some(list) = list {
+                    let count = unsafe { list.Count() }.unwrap_or(0);
+                    for i in 0..count {
+                        if let Ok(c) = unsafe { list.GetValueAtIndex(i) } {
+                            out.push(serialize(&c));
+                        }
+                    }
+                }
+                let _ = tx.send(out);
+                Ok(())
+            }),
+        )
+        .map_err(|e| EngineError::Other(format!("GetCookies: {e:?}")))?;
+        rx.recv()
+            .map_err(|_| EngineError::Other("GetCookies: channel closed".into()))
+    }
+
+    pub(super) fn set_cookies(
+        web_view: &ICoreWebView2,
+        cookies: &[CookieData],
+    ) -> EngineResult<()> {
+        let manager = cookie_manager(web_view)?;
+        for c in cookies {
+            if c.name.is_empty() || c.domain.is_empty() {
+                continue;
+            }
+            let name = pwstr_from_str(&c.name);
+            let value = pwstr_from_str(&c.value);
+            let domain = pwstr_from_str(&c.domain);
+            let path_str = if c.path.is_empty() {
+                "/"
+            } else {
+                c.path.as_str()
+            };
+            let path = pwstr_from_str(path_str);
+            let cookie: ICoreWebView2Cookie = unsafe {
+                manager.CreateCookie(
+                    PCWSTR(name.0),
+                    PCWSTR(value.0),
+                    PCWSTR(domain.0),
+                    PCWSTR(path.0),
+                )
+            }
+            .map_err(|e| EngineError::Other(format!("CreateCookie: {e}")))?;
+            unsafe { cookie.SetIsHttpOnly(c.http_only.into()) }
+                .map_err(|e| EngineError::Other(format!("SetIsHttpOnly: {e}")))?;
+            unsafe { cookie.SetIsSecure(c.secure.into()) }
+                .map_err(|e| EngineError::Other(format!("SetIsSecure: {e}")))?;
+            #[allow(clippy::cast_precision_loss)]
+            if let Some(unix) = c.expires_unix {
+                unsafe { cookie.SetExpires(unix as f64) }
+                    .map_err(|e| EngineError::Other(format!("SetExpires: {e}")))?;
+            }
+            if let Some(ss) = c.same_site.as_deref() {
+                let kind = match ss {
+                    "Strict" => COREWEBVIEW2_COOKIE_SAME_SITE_KIND_STRICT,
+                    "None" => COREWEBVIEW2_COOKIE_SAME_SITE_KIND_NONE,
+                    _ => COREWEBVIEW2_COOKIE_SAME_SITE_KIND_LAX,
+                };
+                unsafe { cookie.SetSameSite(kind) }
+                    .map_err(|e| EngineError::Other(format!("SetSameSite: {e}")))?;
+            }
+            unsafe { manager.AddOrUpdateCookie(&cookie) }
+                .map_err(|e| EngineError::Other(format!("AddOrUpdateCookie: {e}")))?;
+            // Drop the PWSTR allocations explicitly to free LocalAlloc
+            // memory now that the cookie has been created.
+            drop_pwstr(name);
+            drop_pwstr(value);
+            drop_pwstr(domain);
+            drop_pwstr(path);
+        }
+        Ok(())
+    }
+
+    fn drop_pwstr(p: windows::core::PWSTR) {
+        // take_pwstr both reads the string and frees the underlying
+        // buffer via LocalFree on drop. We don't need the value here.
+        let _ = take_pwstr(p);
+    }
+
+    fn serialize(c: &ICoreWebView2Cookie) -> CookieData {
+        let name = read_pwstr(unsafe { c.Name() }.ok());
+        let value = read_pwstr(unsafe { c.Value() }.ok());
+        let domain = read_pwstr(unsafe { c.Domain() }.ok());
+        let path = read_pwstr(unsafe { c.Path() }.ok());
+        let secure = unsafe { c.IsSecure() }
+            .map(|b| b.as_bool())
+            .unwrap_or(false);
+        let http_only = unsafe { c.IsHttpOnly() }
+            .map(|b| b.as_bool())
+            .unwrap_or(false);
+        let expires_unix = unsafe { c.Expires() }.ok().and_then(|d| {
+            #[allow(clippy::cast_possible_truncation)]
+            if d > 0.0 {
+                Some(d.round() as i64)
+            } else {
+                None
+            }
+        });
+        let same_site = unsafe { c.SameSite() }.ok().and_then(|k| match k {
+            COREWEBVIEW2_COOKIE_SAME_SITE_KIND_STRICT => Some("Strict".to_string()),
+            COREWEBVIEW2_COOKIE_SAME_SITE_KIND_NONE => Some("None".to_string()),
+            COREWEBVIEW2_COOKIE_SAME_SITE_KIND_LAX => Some("Lax".to_string()),
+            _ => None,
+        });
+        CookieData {
+            name,
+            value,
+            domain,
+            path,
+            expires_unix,
+            secure,
+            http_only,
+            same_site,
+        }
+    }
+
+    fn read_pwstr(p: Option<windows::core::PWSTR>) -> String {
+        match p {
+            Some(p) if !p.is_null() => take_pwstr(p),
+            _ => String::new(),
+        }
+    }
+
+    // Eat the unused-import warning on `Duration` if we later thread
+    // a timeout. Kept commented as a reminder.
+    #[allow(dead_code)]
+    const _RESERVED: Duration = Duration::from_secs(5);
 }

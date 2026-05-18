@@ -6,6 +6,19 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
+
+## [v0.1.2] - 2026-05-18
+
+### Fixed
+
+- `vs auth save/load` previously operated on `document.cookie` from injected JS. By spec that API cannot see or write cookies with the `HttpOnly` attribute, so every modern web app's session token silently dropped on save and the agent burned cycles wondering why protected pages kept redirecting to login. Save and load now route through the host-side cookie store on every backend: `WKHTTPCookieStore` on macOS, `WebKitCookieManager` on Linux, `ICoreWebView2CookieManager` on Windows. `localStorage` and `sessionStorage` still go through the JS shim since those buckets are JS-accessible by design.
+- Auth-blob schema bumped to v2 with a structured `cookies` array (name, value, domain, path, expires_unix, secure, http_only, same_site). v1 blobs from v0.1.1 still decode for back-compat.
+
+### Added
+
+- New integration cell `auth::cell_auth_http_only_save_and_load` exercises an `HttpOnly` session cookie through save → load on a fresh page.
+- New fixture routes `/login-httponly` (issues `HttpOnly` cookie) and `/dashboard-httponly` (gated on it).
+
 ### Changed
 
 - License switched from MIT to Apache-2.0.

@@ -8,6 +8,7 @@
 //!   `windows-rs`. Real `ICoreWebView2`. Requires the Win32 message
 //!   pump.
 
+pub(crate) mod auth;
 mod common;
 pub(crate) mod inspector_bridge;
 
