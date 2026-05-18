@@ -10,18 +10,18 @@
 </p>
 
 <p align="center">
-  <img src="docs/demo-claude.gif" alt="Claude Code using vibesurfer" width="560">
+  <img src="https://github.com/frane/vibesurfer/raw/main/docs/demo-claude.gif" alt="Claude Code using vibesurfer" width="560">
 </p>
 
 ## Why
 
-I wanted agents to test via the browser. All the existing options — Playwright, Puppeteer, anything wrapping CDP — were too heavy and unstable. CDP drops sessions. Playwright crashes on long runs. Chrome bloats every release. And none of that is even the real problem: CDP and Chrome were built for humans staring at DevTools, not for an agent in a loop.
+I wanted agents to test web apps via the browser. Everything I tried (Playwright, Puppeteer, anything else that wraps CDP) was too heavy and too unstable. CDP drops sessions. Playwright crashes on long runs. Chrome gets fatter every release. None of that is the actual problem though. CDP and Chrome were designed for humans staring at DevTools. They were never designed for an agent stuck in a while loop.
 
-An agent pays per token. It can't afford a 4kb DOM dump on every read or the event firehose CDP emits. The Hacker News front page through Playwright is around 2000 input tokens before the agent has done anything. Through vibesurfer it's around 50.
+An agent pays per token. It blocks per response. It can't deal with the event firehose, and a 4kb DOM dump on every read burns the context budget fast. The Hacker News front page through Playwright is about 2000 input tokens before the agent has done anything. Through vibesurfer it's around 50.
 
-So this. A native browser daemon in Rust. Reads return state tokens and tree deltas instead of the full DOM. Writes check the token — if anything moved between read and write the call fails and the agent re-reads instead of clicking into a stale page. Three real engines under the hood (WKWebView on macOS, WebKitGTK on Linux, WebView2 on Windows). The protocol on top is text and line-oriented.
+vibesurfer is a native browser daemon in Rust. Reads return state tokens and tree deltas instead of the full DOM. Writes check the token. If anything moved between the read and the write, the call fails and the agent re-reads instead of clicking on a stale page. There are three real engines underneath: WKWebView on macOS, WebKitGTK on Linux, WebView2 on Windows. The protocol on top is text and line-oriented.
 
-When you actually need pixels: `vs capture` for screenshots, `vs viewport` switches mobile/desktop, `vs layout` returns bounding boxes. Default path is text in, deltas out.
+When you actually need pixels there's `vs capture` for screenshots, `vs viewport` to switch between mobile and desktop layouts, and `vs layout` to get bounding boxes. But text comes first.
 
 ## Install
 
