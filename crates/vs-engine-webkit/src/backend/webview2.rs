@@ -761,28 +761,32 @@ impl Engine for Webview2Backend {
 // save/load through this path on every backend.
 mod wv2_cookies {
     use std::sync::mpsc;
-    use std::time::Duration;
 
     use webview2_com::Microsoft::Web::WebView2::Win32::{
-        ICoreWebView2, ICoreWebView2Cookie, ICoreWebView2CookieManager,
-        COREWEBVIEW2_COOKIE_SAME_SITE_KIND_LAX, COREWEBVIEW2_COOKIE_SAME_SITE_KIND_NONE,
-        COREWEBVIEW2_COOKIE_SAME_SITE_KIND_STRICT,
+        ICoreWebView2, ICoreWebView2Cookie, ICoreWebView2CookieList, ICoreWebView2CookieManager,
+        ICoreWebView2_2, COREWEBVIEW2_COOKIE_SAME_SITE_KIND_LAX,
+        COREWEBVIEW2_COOKIE_SAME_SITE_KIND_NONE, COREWEBVIEW2_COOKIE_SAME_SITE_KIND_STRICT,
     };
     use webview2_com::{pwstr_from_str, take_pwstr, GetCookiesCompletedHandler};
-    use windows::core::{HSTRING, PCWSTR};
+    use windows::core::{Interface, HSTRING, PCWSTR, PWSTR};
+    use windows::Win32::Foundation::BOOL;
 
     use crate::backend::auth::CookieData;
     use crate::engine::{EngineError, EngineResult};
 
     fn cookie_manager(web_view: &ICoreWebView2) -> EngineResult<ICoreWebView2CookieManager> {
-        unsafe { web_view.CookieManager() }
+        // CookieManager is on ICoreWebView2_2, not the base ICoreWebView2.
+        // Cast (QueryInterface) then call.
+        let v2: ICoreWebView2_2 = web_view
+            .cast()
+            .map_err(|e| EngineError::Other(format!("cast to ICoreWebView2_2: {e}")))?;
+        unsafe { v2.CookieManager() }
             .map_err(|e| EngineError::Other(format!("CookieManager: {e}")))
     }
 
     pub(super) fn get_all_cookies(web_view: &ICoreWebView2) -> EngineResult<Vec<CookieData>> {
         let manager = cookie_manager(web_view)?;
         let (tx, rx) = mpsc::channel();
-        // Empty URI = all cookies, per CWE2 docs.
         let empty: HSTRING = HSTRING::new();
         let manager_for_init = manager.clone();
         GetCookiesCompletedHandler::wait_for_async_operation(
@@ -794,10 +798,11 @@ mod wv2_cookies {
                 hr?;
                 let mut out: Vec<CookieData> = Vec::new();
                 if let Some(list) = list {
-                    let count = unsafe { list.Count() }.unwrap_or(0);
-                    for i in 0..count {
-                        if let Ok(c) = unsafe { list.GetValueAtIndex(i) } {
-                            out.push(serialize(&c));
+                    if let Ok(count) = read_count(&list) {
+                        for i in 0..count {
+                            if let Ok(c) = unsafe { list.GetValueAtIndex(i) } {
+                                out.push(serialize(&c));
+                            }
                         }
                     }
                 }
@@ -837,9 +842,9 @@ mod wv2_cookies {
                 )
             }
             .map_err(|e| EngineError::Other(format!("CreateCookie: {e}")))?;
-            unsafe { cookie.SetIsHttpOnly(c.http_only.into()) }
+            unsafe { cookie.SetIsHttpOnly(BOOL::from(c.http_only)) }
                 .map_err(|e| EngineError::Other(format!("SetIsHttpOnly: {e}")))?;
-            unsafe { cookie.SetIsSecure(c.secure.into()) }
+            unsafe { cookie.SetIsSecure(BOOL::from(c.secure)) }
                 .map_err(|e| EngineError::Other(format!("SetIsSecure: {e}")))?;
             #[allow(clippy::cast_precision_loss)]
             if let Some(unix) = c.expires_unix {
@@ -857,47 +862,77 @@ mod wv2_cookies {
             }
             unsafe { manager.AddOrUpdateCookie(&cookie) }
                 .map_err(|e| EngineError::Other(format!("AddOrUpdateCookie: {e}")))?;
-            // Drop the PWSTR allocations explicitly to free LocalAlloc
-            // memory now that the cookie has been created.
-            drop_pwstr(name);
-            drop_pwstr(value);
-            drop_pwstr(domain);
-            drop_pwstr(path);
+            // Free the PWSTR buffers we passed in (LocalAlloc'd by
+            // pwstr_from_str; take_pwstr frees on drop).
+            let _ = take_pwstr(name);
+            let _ = take_pwstr(value);
+            let _ = take_pwstr(domain);
+            let _ = take_pwstr(path);
         }
         Ok(())
     }
 
-    fn drop_pwstr(p: windows::core::PWSTR) {
-        // take_pwstr both reads the string and frees the underlying
-        // buffer via LocalFree on drop. We don't need the value here.
-        let _ = take_pwstr(p);
+    fn read_count(list: &ICoreWebView2CookieList) -> windows::core::Result<u32> {
+        let mut count: u32 = 0;
+        unsafe { list.Count(&raw mut count) }?;
+        Ok(count)
+    }
+
+    fn read_pwstr_getter<F>(call: F) -> String
+    where
+        F: FnOnce(&mut PWSTR) -> windows::core::Result<()>,
+    {
+        let mut out: PWSTR = PWSTR::null();
+        match call(&mut out) {
+            Ok(()) if !out.is_null() => take_pwstr(out),
+            _ => String::new(),
+        }
+    }
+
+    fn read_bool_getter<F>(call: F) -> bool
+    where
+        F: FnOnce(&mut BOOL) -> windows::core::Result<()>,
+    {
+        let mut out: BOOL = BOOL(0);
+        match call(&mut out) {
+            Ok(()) => out.as_bool(),
+            Err(_) => false,
+        }
     }
 
     fn serialize(c: &ICoreWebView2Cookie) -> CookieData {
-        let name = read_pwstr(unsafe { c.Name() }.ok());
-        let value = read_pwstr(unsafe { c.Value() }.ok());
-        let domain = read_pwstr(unsafe { c.Domain() }.ok());
-        let path = read_pwstr(unsafe { c.Path() }.ok());
-        let secure = unsafe { c.IsSecure() }
-            .map(|b| b.as_bool())
-            .unwrap_or(false);
-        let http_only = unsafe { c.IsHttpOnly() }
-            .map(|b| b.as_bool())
-            .unwrap_or(false);
-        let expires_unix = unsafe { c.Expires() }.ok().and_then(|d| {
-            #[allow(clippy::cast_possible_truncation)]
-            if d > 0.0 {
-                Some(d.round() as i64)
-            } else {
-                None
+        let name = read_pwstr_getter(|p| unsafe { c.Name(&raw mut *p) });
+        let value = read_pwstr_getter(|p| unsafe { c.Value(&raw mut *p) });
+        let domain = read_pwstr_getter(|p| unsafe { c.Domain(&raw mut *p) });
+        let path = read_pwstr_getter(|p| unsafe { c.Path(&raw mut *p) });
+        let secure = read_bool_getter(|b| unsafe { c.IsSecure(&raw mut *b) });
+        let http_only = read_bool_getter(|b| unsafe { c.IsHttpOnly(&raw mut *b) });
+        let expires_unix = {
+            let mut d: f64 = 0.0;
+            match unsafe { c.Expires(&raw mut d) } {
+                Ok(()) if d > 0.0 => {
+                    #[allow(
+                        clippy::cast_possible_truncation,
+                        clippy::cast_precision_loss
+                    )]
+                    let i = d.round() as i64;
+                    Some(i)
+                }
+                _ => None,
             }
-        });
-        let same_site = unsafe { c.SameSite() }.ok().and_then(|k| match k {
-            COREWEBVIEW2_COOKIE_SAME_SITE_KIND_STRICT => Some("Strict".to_string()),
-            COREWEBVIEW2_COOKIE_SAME_SITE_KIND_NONE => Some("None".to_string()),
-            COREWEBVIEW2_COOKIE_SAME_SITE_KIND_LAX => Some("Lax".to_string()),
-            _ => None,
-        });
+        };
+        let same_site = {
+            let mut k = COREWEBVIEW2_COOKIE_SAME_SITE_KIND_LAX;
+            match unsafe { c.SameSite(&raw mut k) } {
+                Ok(()) => match k {
+                    COREWEBVIEW2_COOKIE_SAME_SITE_KIND_STRICT => Some("Strict".to_string()),
+                    COREWEBVIEW2_COOKIE_SAME_SITE_KIND_NONE => Some("None".to_string()),
+                    COREWEBVIEW2_COOKIE_SAME_SITE_KIND_LAX => Some("Lax".to_string()),
+                    _ => None,
+                },
+                _ => None,
+            }
+        };
         CookieData {
             name,
             value,
@@ -909,16 +944,4 @@ mod wv2_cookies {
             same_site,
         }
     }
-
-    fn read_pwstr(p: Option<windows::core::PWSTR>) -> String {
-        match p {
-            Some(p) if !p.is_null() => take_pwstr(p),
-            _ => String::new(),
-        }
-    }
-
-    // Eat the unused-import warning on `Duration` if we later thread
-    // a timeout. Kept commented as a reminder.
-    #[allow(dead_code)]
-    const _RESERVED: Duration = Duration::from_secs(5);
 }

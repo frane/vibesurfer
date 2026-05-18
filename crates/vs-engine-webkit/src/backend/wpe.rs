@@ -578,7 +578,7 @@ mod wpe_cookies {
         let manager = cookie_manager(web_view)?;
         let slot: Rc<RefCell<Option<Vec<CookieData>>>> = Rc::new(RefCell::new(None));
         let slot_cb = slot.clone();
-        manager.all_cookies(None::<&gio::Cancellable>, move |result| {
+        webkit6::CookieManager::all_cookies(&manager, None::<&gio::Cancellable>, move |result| {
             let cookies = match result {
                 Ok(v) => v.into_iter().map(|mut c| serialize(&mut c)).collect(),
                 Err(_) => Vec::new(),
@@ -629,7 +629,7 @@ mod wpe_cookies {
 
             let done: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
             let done_cb = done.clone();
-            manager.add_cookie(&cookie, None::<&gio::Cancellable>, move |_| {
+            webkit6::CookieManager::add_cookie(&manager, &cookie, None::<&gio::Cancellable>, move |_| {
                 *done_cb.borrow_mut() = true;
             });
             let check = done.clone();
