@@ -1,6 +1,6 @@
 [package]
 name = "vs-protocol"
-description = "Wire-protocol encoder/decoder for vibesurfer."
+description = "Wire protocol for vibesurfer."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

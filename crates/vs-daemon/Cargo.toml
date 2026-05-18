@@ -1,6 +1,6 @@
 [package]
 name = "vs-daemon"
-description = "vibesurferd — long-running daemon that owns the engine and exposes the protocol."
+description = "Daemon that owns the browser engine for vibesurfer."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,9 +15,9 @@ workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-vs-protocol = { path = "../vs-protocol" }
-vs-store = { path = "../vs-store" }
-vs-engine-webkit = { path = "../vs-engine-webkit" }
+vs-protocol = { path = "../vs-protocol", version = "0.1.2" }
+vs-store = { path = "../vs-store", version = "0.1.2" }
+vs-engine-webkit = { path = "../vs-engine-webkit", version = "0.1.2" }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "io-util", "macros", "signal", "time"] }
 blake3 = "1"
 thiserror = "2"
@@ -31,4 +31,4 @@ interprocess = { version = "2.4.2", features = ["tokio"] }
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "io-util", "macros", "time", "test-util"] }
-vs-engine-webkit = { path = "../vs-engine-webkit", features = ["test-support"] }
+vs-engine-webkit = { path = "../vs-engine-webkit", version = "0.1.2", features = ["test-support"] }

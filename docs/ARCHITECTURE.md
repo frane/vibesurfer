@@ -7,7 +7,7 @@ between them is documented separately in [`PROTOCOL.md`](PROTOCOL.md).
 
 ```
 ┌─────────────┐                ┌──────────────────────────────────────────┐
-│   vs CLI    │ unix socket    │             vibesurferd                  │
+│   vs CLI    │ unix socket    │             vs serve (daemon)            │
 │  (stateless)│ ─────────────▶ │                                          │
 └─────────────┘                │  ┌────────────┐    ┌──────────────────┐  │
                                │  │  server    │    │  engine thread   │  │
@@ -39,7 +39,7 @@ between them is documented separately in [`PROTOCOL.md`](PROTOCOL.md).
   `--json` switches to JSON for humans/debugging; agents never use this.
 - Exit codes: `0` success, `1` error envelope, `2` warnings + success.
 
-### `vibesurferd` — the daemon
+### `vs serve` — the daemon
 
 - Owns the Unix socket and dispatches requests to handlers.
 - Manages session and page state. Lifetime of a session is one
@@ -124,7 +124,7 @@ or vice versa.
   state.db-wal
   state.db-shm
   log/
-    vibesurferd.log     # rotating tracing output
+    daemon.log          # rotating tracing output
   key                   # AES-256 key fallback if OS keyring unavailable
 ```
 

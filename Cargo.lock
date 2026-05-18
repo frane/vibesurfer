@@ -1941,7 +1941,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03c2856837ef78f57382f06b2b8563a2f512f7185d732608fd9176cb3b8edf0e"
 
 [[package]]
-name = "vs-cli"
+name = "vibesurfer"
 version = "0.1.2"
 dependencies = [
  "anyhow",

@@ -1,4 +1,4 @@
-//! The [`Daemon`] — the brain of `vibesurferd`.
+//! The [`Daemon`] — the brain of the vibesurfer daemon.
 //!
 //! Owns the SQLite store, the engine runtime, and the in-memory session
 //! cache. Each primitive is a `pub fn` on [`Daemon`] living in one of

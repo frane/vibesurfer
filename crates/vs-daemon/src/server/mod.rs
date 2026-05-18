@@ -60,7 +60,7 @@ pub async fn serve(
             );
             e
         })?;
-    tracing::info!(?path, "vibesurferd listening");
+    tracing::info!(?path, "vibesurfer daemon listening");
 
     let daemon = Arc::new(daemon);
     loop {

@@ -10,7 +10,7 @@ Drafted at M0 from the bootstrap design. Encoder/decoder lands in M1
 
 ## Scope
 
-The wire protocol governs how `vs` (the CLI) and `vibesurferd` (the daemon)
+The wire protocol governs how `vs` (the CLI) and `vs serve` (the daemon)
 exchange requests and responses over a Unix domain socket. It is also the
 interface any future MCP shim translates to.
 

@@ -1,6 +1,6 @@
 [package]
 name = "vs-humanize"
-description = "Pure-math input synthesis for vibesurfer's three input modes (human, careful, robotic). Bezier mouse paths, Fitts-law arrival times, lognormal keystroke timing. No engine deps, no platform deps."
+description = "Human-like input synthesis for vibesurfer."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

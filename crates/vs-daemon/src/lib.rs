@@ -1,4 +1,4 @@
-//! `vibesurferd` — the vibesurfer daemon library.
+//! The vibesurfer daemon library — owns the engine, exposes the protocol.
 //!
 //! The binary at `src/main.rs` is a thin wrapper around this library:
 //! it constructs a [`Daemon`], binds a Unix socket, and runs the
