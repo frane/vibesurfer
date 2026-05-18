@@ -28,7 +28,7 @@ use anyhow::{Context as _, Result};
 use serde_json::{json, Map, Value};
 
 const SERVER_NAME: &str = "vibesurfer";
-const SKILL_MD: &str = include_str!("../../../skills/vibesurfer/SKILL.md");
+const SKILL_MD: &str = include_str!("../SKILL.md");
 
 // ============================================================================
 // Agent catalog
