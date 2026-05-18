@@ -8,6 +8,15 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 
 
+## [v0.1.5] - 2026-05-19
+
+### Fixed
+- `vs inspect storage cookies` now sees HttpOnly cookies. The command used to enumerate `document.cookie` from injected JS, which by spec cannot read entries with the `HttpOnly` attribute, so any session cookie set by a real auth flow showed up as empty. The cookies scope now reads from the host-side cookie store (`WKHTTPCookieStore` on macOS, `WebKitCookieManager` on Linux, `ICoreWebView2CookieManager` on Windows) and reports `secure`, `httponly`, `samesite=...`, and `expires=...` flags inline.
+
+### Added
+- `cell_inspect_storage_cookies_includes_http_only` integration cell verifies the HttpOnly listing on each backend.
+
+
 ## [v0.1.4] - 2026-05-19
 
 ### Fixed

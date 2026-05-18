@@ -693,6 +693,13 @@ impl Engine for Webview2Backend {
     ) -> EngineResult<Vec<crate::inspector::StorageEntry>> {
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
+        if matches!(scope, crate::inspector::StorageScope::Cookies) {
+            let cookies = wv2_cookies::get_all_cookies(&web_view)?;
+            return Ok(cookies
+                .iter()
+                .map(super::common::cookie_to_storage_entry)
+                .collect());
+        }
         super::common::run_storage(move |js, _budget| execute_script(&web_view, js), scope)
     }
 

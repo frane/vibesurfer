@@ -115,6 +115,30 @@ fn cell_inspect_storage_cookies() {
     }
 }
 
+// vs_inspect storage cookies must see HttpOnly entries. `document.cookie`
+// is blind to those, so up through v0.1.4 the listing was empty for any
+// session cookie a real auth flow sets. v0.1.5 routes the cookies scope
+// through the host-side cookie store API.
+#[test]
+fn cell_inspect_storage_cookies_includes_http_only() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/login-httponly");
+        let _ = ctx.vs(&["wait", &page, "stable", "--timeout=2000"]);
+        let r = ctx.vs(&["inspect", &page, "storage", "cookies"]);
+        assert_ok("inspect storage cookies (HttpOnly)", &r);
+        let body = body_rest(&r);
+        assert!(
+            body.contains("ht_session"),
+            "HttpOnly cookie ht_session must appear in storage cookies listing:\n{body}"
+        );
+        assert!(
+            body.contains("httponly"),
+            "httponly flag must be reported on the entry:\n{body}"
+        );
+    }
+}
+
 // 41. vs_inspect storage local
 #[test]
 fn cell_inspect_storage_local() {

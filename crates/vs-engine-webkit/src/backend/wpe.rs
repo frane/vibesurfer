@@ -377,6 +377,13 @@ impl Engine for WpeBackend {
     ) -> EngineResult<Vec<crate::inspector::StorageEntry>> {
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
+        if matches!(scope, crate::inspector::StorageScope::Cookies) {
+            let cookies = wpe_cookies::get_all_cookies(&web_view)?;
+            return Ok(cookies
+                .iter()
+                .map(super::common::cookie_to_storage_entry)
+                .collect());
+        }
         super::common::run_storage(
             move |js, budget| eval_js_string(&web_view, js, budget),
             scope,

@@ -375,6 +375,16 @@ impl Engine for WkBackend {
     ) -> EngineResult<Vec<crate::inspector::StorageEntry>> {
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
+        // `document.cookie` is blind to HttpOnly cookies, so route the
+        // cookie scope through the host-side cookie store the auth
+        // save/load path already uses. Other scopes stay on JS.
+        if matches!(scope, crate::inspector::StorageScope::Cookies) {
+            let cookies = cookie_store::get_all_cookies(&web_view)?;
+            return Ok(cookies
+                .iter()
+                .map(super::common::cookie_to_storage_entry)
+                .collect());
+        }
         super::common::run_storage(
             move |js, budget| eval_js_string(&web_view, js, budget),
             scope,

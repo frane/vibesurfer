@@ -518,6 +518,37 @@ where
     }
 }
 
+/// Map a host-side [`auth::CookieData`] to an [`inspector::StorageEntry`].
+/// Used by each backend's `storage(Cookies)` path so `vs inspect storage
+/// cookies` surfaces HttpOnly entries that `document.cookie` is blind to.
+pub(crate) fn cookie_to_storage_entry(
+    c: &crate::backend::auth::CookieData,
+) -> crate::inspector::StorageEntry {
+    let lower = c.name.to_ascii_lowercase();
+    let sensitive = ["session_id", "auth", "token", "secret", "password", "csrf"]
+        .iter()
+        .any(|needle| lower.contains(needle));
+    let mut flags = Vec::new();
+    if c.secure {
+        flags.push("secure".to_string());
+    }
+    if c.http_only {
+        flags.push("httponly".to_string());
+    }
+    if let Some(ss) = &c.same_site {
+        flags.push(format!("samesite={}", ss.to_ascii_lowercase()));
+    }
+    if let Some(unix) = c.expires_unix {
+        flags.push(format!("expires={unix}"));
+    }
+    crate::inspector::StorageEntry {
+        key: c.name.clone(),
+        value: c.value.clone(),
+        flags,
+        sensitive,
+    }
+}
+
 /// Run `storage`: enumerate cookies / localStorage / sessionStorage /
 /// indexeddb databases for the page. The response is a `Vec<(key,
 /// value, sensitive)>` where `sensitive` flags credential-shaped keys.
