@@ -37,6 +37,12 @@ curl:
 curl -sSL https://raw.githubusercontent.com/frane/vibesurfer/main/install.sh | sh
 ```
 
+Cargo:
+
+```
+cargo install vibesurfer
+```
+
 From source:
 
 ```
