@@ -16,4 +16,10 @@ cp skills/vibesurfer/SKILL.md plugin/skills/vibesurfer/SKILL.md
 cp skills/debug-failed-action/SKILL.md plugin/skills/debug-failed-action/SKILL.md
 cp skills/debug-failed-action/skill.toml plugin/skills/debug-failed-action/skill.toml
 
+# Mirror the canonical README into every published crate so crates.io
+# renders it on each package page.
+for c in vs-cli vs-daemon vs-engine-webkit vs-humanize vs-protocol vs-store; do
+  cp README.md "crates/$c/README.md"
+done
+
 echo "plugin/ mirror is up to date"

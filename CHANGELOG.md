@@ -8,6 +8,12 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 
 
+## [v0.1.4] - 2026-05-19
+
+### Fixed
+- crates.io now renders the project README on every published crate page. Previously the package tarballs shipped no README (the canonical one lives at the repo root, outside any single crate dir), so `crates.io/crates/vibesurfer` showed "no README.md file". Each crate now includes a mirrored copy of the root README and references it via `readme = "README.md"`. `scripts/sync-plugin.sh` keeps the mirrors aligned.
+
+
 ## [v0.1.3] - 2026-05-18
 
 ### Fixed

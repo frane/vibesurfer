@@ -1,6 +1,7 @@
 [package]
 name = "vs-store"
 description = "SQLite-backed durable state for vibesurfer."
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
