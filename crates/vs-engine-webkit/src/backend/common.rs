@@ -155,7 +155,7 @@ fn build_act_js(r: Ref, action: &Action) -> String {
     let body = match action {
         Action::Click => "el.click(); return 'ok';".to_string(),
         Action::Fill { value } => format!(
-            "el.focus(); el.value = {v}; el.dispatchEvent(new Event('input', {{bubbles: true}})); el.dispatchEvent(new Event('change', {{bubbles: true}})); return 'ok';",
+            "el.focus(); var p = (el instanceof HTMLTextAreaElement) ? HTMLTextAreaElement.prototype : (el instanceof HTMLInputElement ? HTMLInputElement.prototype : null); if (p) {{ Object.getOwnPropertyDescriptor(p, 'value').set.call(el, {v}); }} else {{ el.value = {v}; }} el.dispatchEvent(new Event('input', {{bubbles: true}})); el.dispatchEvent(new Event('change', {{bubbles: true}})); return 'ok';",
             v = json_string(value)
         ),
         Action::Scroll => {

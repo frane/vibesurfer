@@ -104,6 +104,11 @@ fn handle(mut req: Request) -> std::io::Result<()> {
     if path == "/dashboard-httponly" {
         return handle_dashboard_http_only(req);
     }
+    if path == "/login-react" && matches!(method, Method::Post) {
+        let mut body = String::new();
+        req.as_reader().read_to_string(&mut body)?;
+        return respond_text(req, 200, "text/plain", &body);
+    }
     if path == "/api/ok" {
         return respond_text(req, 200, "application/json", r#"{"ok":true}"#);
     }

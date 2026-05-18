@@ -7,6 +7,18 @@ All notable changes to vibesurfer are recorded here. The format follows
 ## [Unreleased]
 
 
+
+## [v0.1.3] - 2026-05-18
+
+### Fixed
+- `vs act fill` now reaches React-style controlled inputs. The primitive used to set `el.value` directly, which trips React's per-instance value-setter override and leaves the framework's internal state empty; the form would then submit with empty payloads. The fill JS now calls the original `HTMLInputElement.prototype` (or `HTMLTextAreaElement.prototype`) setter via `Object.getOwnPropertyDescriptor(..., 'value').set.call(el, …)` — the canonical Playwright / Puppeteer fix.
+
+### Added
+- `cell_act_fill_react_controlled_input` integration cell against a React-tracker fixture (`fixtures/react-form.html`); ensures the form actually POSTs the value rather than submitting an empty body.
+
+### Changed
+- Workspace crates published to crates.io. The CLI ships as the `vibesurfer` crate (binary stays `vs`); supporting crates `vs-protocol`, `vs-store`, `vs-engine-webkit`, `vs-daemon`, `vs-humanize` are publishable lib crates with version-pinned path deps. `cargo install vibesurfer` now works.
+
 ## [v0.1.2] - 2026-05-18
 
 ### Fixed

@@ -15,13 +15,13 @@
 
 ## Why
 
-I wanted agents to automate browser work. First try Playwright, second Puppeteer directly. Both fell back to CDP underneath. CDP dropped sessions. Playwright crashed on long runs. Chrome got heavier every minor version. The bug wasn't any of those. CDP and Chrome were built for humans staring at DevTools, not for an LLM in a loop.
+I wanted agents to test via the browser. All the existing options — Playwright, Puppeteer, anything wrapping CDP — were too heavy and unstable. CDP drops sessions. Playwright crashes on long runs. Chrome bloats every release. And none of that is even the real problem: CDP and Chrome were built for humans staring at DevTools, not for an agent in a loop.
 
-A human watching DevTools wants pixel-accurate rendering, async events as they fire, the full DOM on demand. An LLM pays per token, blocks per response, can't afford an event firehose or a 4000-token DOM dump on every read. One Hacker News front page rendered through Playwright is around 2000 input tokens before the agent has done any actual work. The same flow through vibesurfer is around 50.
+An agent pays per token. It can't afford a 4kb DOM dump on every read or the event firehose CDP emits. The Hacker News front page through Playwright is around 2000 input tokens before the agent has done anything. Through vibesurfer it's around 50.
 
-So vibesurfer. A native browser daemon in Rust with a wire designed for LLM callers. Reads return state tokens and tree deltas instead of full DOM. Writes check the token. Three real engines underneath (WKWebView on macOS, WebKitGTK on Linux, WebView2 on Windows); the protocol on top is small, synchronous, line-oriented.
+So this. A native browser daemon in Rust. Reads return state tokens and tree deltas instead of the full DOM. Writes check the token — if anything moved between read and write the call fails and the agent re-reads instead of clicking into a stale page. Three real engines under the hood (WKWebView on macOS, WebKitGTK on Linux, WebView2 on Windows). The protocol on top is text and line-oriented.
 
-For tasks that need pixels, `vs capture` takes a screenshot, `vs viewport` switches between mobile and desktop layouts, and `vs layout` returns bounding boxes. The default path is text in, structured deltas out.
+When you actually need pixels: `vs capture` for screenshots, `vs viewport` switches mobile/desktop, `vs layout` returns bounding boxes. Default path is text in, deltas out.
 
 ## Install
 

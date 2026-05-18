@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>react-form fixture</title></head>
+<body>
+<form id="f">
+  <input id="email" type="text">
+  <button id="submit" type="submit">Submit</button>
+</form>
+<div id="result">idle</div>
+<script>
+// Reproduce React's controlled-input gotcha. React patches the value
+// setter on each tracked instance so it can dedupe synthetic-event
+// fires; the canonical fix in agent drivers (Playwright, Puppeteer) is
+// to call the prototype setter directly, bypassing the per-instance
+// override. If `vs act fill` just does `el.value = X`, the patched
+// setter records the new value as the "last seen", the input event
+// handler sees current==tracked and skips state, and submission goes
+// out with an empty body.
+(function () {
+  var proto = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+  var tracked = new WeakMap();
+  function track(el) {
+    tracked.set(el, proto.get.call(el));
+    Object.defineProperty(el, 'value', {
+      configurable: true,
+      get: function () { return proto.get.call(this); },
+      set: function (v) { tracked.set(this, v); proto.set.call(this, v); }
+    });
+  }
+  var input = document.getElementById('email');
+  track(input);
+
+  var state = { email: '' };
+  window.__probe_state = state;
+  input.addEventListener('input', function () {
+    var current = proto.get.call(input);
+    var last = tracked.get(input);
+    if (current === last) return;
+    tracked.set(input, current);
+    state.email = current;
+  });
+
+  document.getElementById('f').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var r = document.getElementById('result');
+    if (!state.email) { r.textContent = 'empty'; return; }
+    fetch('/login-react', { method: 'POST', body: state.email })
+      .then(function (resp) { return resp.text(); })
+      .then(function (t) { r.textContent = 'ok:' + t; });
+  });
+})();
+</script>
+</body>
+</html>

@@ -265,3 +265,59 @@ fn cell_act_click_is_trusted() {
         );
     }
 }
+
+// vs_act fill must work against React-style controlled inputs whose
+// per-instance value setter swallows plain `el.value = X` assignments.
+// Fixture mimics React's tracker; fill must reach the prototype setter
+// so the form submission goes through. v0.1.3 regression.
+#[test]
+fn cell_act_fill_react_controlled_input() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/react-form.html");
+        let r = ctx.vs(&["view", &page, "--full"]);
+        let body = body_rest(&r);
+        let token = token_of(&r);
+        let n_email = ref_for(&body, "tf", "");
+        let r_fill = ctx.vs(&[
+            "act",
+            &page,
+            &n_email.to_string(),
+            "fill",
+            "alice@example.com",
+            &format!("--token={token}"),
+        ]);
+        assert_ok("fill react-controlled input", &r_fill);
+        // After fill, the react-style tracker should have observed the
+        // new value and updated `state.email`. Probe both to localize
+        // a failure: if input.value is empty the prototype setter
+        // didn't run; if state.email is empty the input event was
+        // either not dispatched or React's deduplication swallowed it.
+        let post_fill_value =
+            eval_js(&ctx, &page, "document.getElementById('email').value");
+        let post_fill_state = eval_js(
+            &ctx,
+            &page,
+            "(typeof window.__probe_state === 'object' ? window.__probe_state.email : 'unset')",
+        );
+        let r = ctx.vs(&["view", &page, "--full"]);
+        let body = body_rest(&r);
+        let token = token_of(&r);
+        let n_submit = ref_for(&body, "btn", "Submit");
+        let r_click = ctx.vs(&[
+            "act",
+            &page,
+            &n_submit.to_string(),
+            "click",
+            &format!("--token={token}"),
+        ]);
+        assert_ok("click submit on react form", &r_click);
+        let _ = ctx.vs(&["wait", &page, "stable", "--timeout=2000"]);
+        let result = eval_js(&ctx, &page, "document.getElementById('result').textContent");
+        assert!(
+            result.contains("ok:alice@example.com"),
+            "react-style fill must update internal state so submit posts the value; \
+             input.value={post_fill_value:?} state.email={post_fill_state:?} result={result:?}"
+        );
+    }
+}
