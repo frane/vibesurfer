@@ -293,8 +293,7 @@ fn cell_act_fill_react_controlled_input() {
         // a failure: if input.value is empty the prototype setter
         // didn't run; if state.email is empty the input event was
         // either not dispatched or React's deduplication swallowed it.
-        let post_fill_value =
-            eval_js(&ctx, &page, "document.getElementById('email').value");
+        let post_fill_value = eval_js(&ctx, &page, "document.getElementById('email').value");
         let post_fill_state = eval_js(
             &ctx,
             &page,
