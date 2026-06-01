@@ -124,6 +124,80 @@ pub(super) fn handle_viewport(daemon: &Daemon, req: &Request) -> String {
     }
 }
 
+pub(super) fn handle_cursor(daemon: &Daemon, req: &Request, kind: &str) -> String {
+    let session_id = match require_session(req) {
+        Ok(s) => s,
+        Err(msg) => return format_error(ErrorCode::BadRequest, vec![msg]),
+    };
+    let Some(page_id) = req.args.first().cloned() else {
+        return format_error(
+            ErrorCode::BadRequest,
+            vec![format!("vs_{kind}: missing page id")],
+        );
+    };
+    let parse_f64 = |idx: usize, name: &str| -> Result<f64, String> {
+        req.args
+            .get(idx)
+            .ok_or_else(|| format!("vs_{kind}: missing {name}"))
+            .and_then(|s| {
+                s.parse::<f64>()
+                    .map_err(|_| format!("vs_{kind}: bad {name}={s:?}"))
+            })
+    };
+    let mode_str = flag_value(req, "mode").unwrap_or_else(|| "human".into());
+    let Some(mode) = vs_engine_webkit::engine::InputMode::parse(&mode_str) else {
+        return format_error(
+            ErrorCode::BadRequest,
+            vec![format!(
+                "vs_{kind}: bad --mode={mode_str:?} (expected human|careful|robotic)"
+            )],
+        );
+    };
+    let op_result = match kind {
+        "move_to" => parse_f64(1, "x").and_then(|x| {
+            parse_f64(2, "y").map(|y| vs_engine_webkit::engine::CursorOp::MoveTo { x, y })
+        }),
+        "click_at" => parse_f64(1, "x").and_then(|x| {
+            parse_f64(2, "y").map(|y| vs_engine_webkit::engine::CursorOp::ClickAt { x, y })
+        }),
+        "hover_at" => parse_f64(1, "x").and_then(|x| {
+            parse_f64(2, "y").map(|y| vs_engine_webkit::engine::CursorOp::HoverAt { x, y })
+        }),
+        "drag" => parse_f64(1, "x1").and_then(|x1| {
+            parse_f64(2, "y1").and_then(|y1| {
+                parse_f64(3, "x2").and_then(|x2| {
+                    parse_f64(4, "y2").map(|y2| vs_engine_webkit::engine::CursorOp::Drag {
+                        x1,
+                        y1,
+                        x2,
+                        y2,
+                    })
+                })
+            })
+        }),
+        _ => Err(format!("vs_{kind}: unknown kind")),
+    };
+    let op = match op_result {
+        Ok(o) => o,
+        Err(msg) => return format_error(ErrorCode::BadRequest, vec![msg]),
+    };
+    // Token check for click_at / drag (mutating ops).
+    if matches!(kind, "click_at" | "drag") {
+        let Some(_token) = flag_value(req, "token") else {
+            return format_error(
+                ErrorCode::BadRequest,
+                vec![format!("vs_{kind}: missing --token=<state token>")],
+            );
+        };
+    }
+    match daemon.cursor_op(&session_id, &page_id, op, mode) {
+        Ok(token) => {
+            let head = vs_protocol::ResponseHead::ok(token).encode();
+            format!("{head}\n")
+        }
+        Err(e) => format_daemon_error(&e),
+    }
+}
 pub(super) fn handle_layout(daemon: &Daemon, req: &Request) -> String {
     let session_id = match require_session(req) {
         Ok(s) => s,

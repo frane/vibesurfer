@@ -360,6 +360,32 @@ impl Daemon {
         })
     }
 
+    pub fn cursor_op(
+        &self,
+        session_id: &str,
+        page_id: &str,
+        op: vs_engine_webkit::engine::CursorOp,
+        mode: vs_engine_webkit::engine::InputMode,
+    ) -> Result<vs_protocol::StateToken> {
+        let ctx = AuditCtx::new("vs_cursor_op", session_id)
+            .with_page(page_id)
+            .with_args(
+                format!("{op:?} mode={}", mode.as_str()),
+                crate::tokens::args_hash(
+                    "vs_cursor_op",
+                    &[format!("{op:?}"), mode.as_str().into()],
+                ),
+            );
+        self.audit_call(ctx, |ctx| {
+            self.require_session(session_id)?;
+            let handle = self.engine_handle_for(session_id, page_id)?;
+            self.inner.engine.cursor_op(handle, op, mode)?;
+            let token = self.current_token(session_id, page_id)?;
+            ctx.after_token = Some(token);
+            Ok(token)
+        })
+    }
+
     pub fn inspect_scripts(
         &self,
         session_id: &str,

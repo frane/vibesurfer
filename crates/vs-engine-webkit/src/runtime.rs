@@ -239,6 +239,15 @@ impl EngineRuntime {
         self.dispatch(move |e| e.cookie_events(page))
     }
 
+    pub fn cursor_op(
+        &self,
+        page: PageHandle,
+        op: crate::engine::CursorOp,
+        mode: crate::engine::InputMode,
+    ) -> EngineResult<()> {
+        self.dispatch(move |e| e.cursor_op(page, op, mode))
+    }
+
     pub fn scripts(&self, page: PageHandle) -> EngineResult<Vec<crate::inspector::ScriptEntry>> {
         self.dispatch(move |e| e.scripts(page))
     }

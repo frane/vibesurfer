@@ -148,6 +148,10 @@ pub fn dispatch(daemon: &Daemon, req: &Request) -> String {
         "vs_layout" => engine_ops::handle_layout(daemon, req),
         "vs_auth" => engine_ops::handle_auth(daemon, req),
         "vs_inspect" => engine_ops::handle_inspect(daemon, req),
+        "vs_move_to" => engine_ops::handle_cursor(daemon, req, "move_to"),
+        "vs_click_at" => engine_ops::handle_cursor(daemon, req, "click_at"),
+        "vs_hover_at" => engine_ops::handle_cursor(daemon, req, "hover_at"),
+        "vs_drag" => engine_ops::handle_cursor(daemon, req, "drag"),
         other => format_error(
             ErrorCode::BadRequest,
             vec![format!("unknown primitive: {other}")],

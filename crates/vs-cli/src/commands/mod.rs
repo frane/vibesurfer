@@ -214,6 +214,50 @@ pub enum Command {
         #[arg(long = "unsafe-log")]
         unsafe_log: bool,
     },
+    /// Move the cursor to `(x, y)` along a humanized Bezier path.
+    /// Native trusted-event dispatch on macOS; ENGINE_UNSUPPORTED
+    /// elsewhere until M7 wires GDK / CDP input.
+    #[command(visible_alias = "mt")]
+    MoveTo {
+        page: String,
+        x: f64,
+        y: f64,
+        #[arg(long, short = 'M', default_value = "human")]
+        mode: String,
+    },
+    /// Click at `(x, y)`. Trusted on macOS (`isTrusted = true`).
+    #[command(visible_alias = "ca")]
+    ClickAt {
+        page: String,
+        x: f64,
+        y: f64,
+        #[arg(long)]
+        token: String,
+        #[arg(long, short = 'M', default_value = "human")]
+        mode: String,
+    },
+    /// Hover at `(x, y)`.
+    #[command(visible_alias = "ha")]
+    HoverAt {
+        page: String,
+        x: f64,
+        y: f64,
+        #[arg(long, short = 'M', default_value = "human")]
+        mode: String,
+    },
+    /// Drag from `(x1, y1)` to `(x2, y2)`.
+    #[command(visible_alias = "dr")]
+    Drag {
+        page: String,
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
+        #[arg(long)]
+        token: String,
+        #[arg(long, short = 'M', default_value = "human")]
+        mode: String,
+    },
     /// Run the daemon in this process. The `vs` binary doubles as the
     /// daemon — `vs serve` is what auto-spawn re-execs when the socket
     /// is missing. SIGINT shuts down cleanly.
@@ -474,6 +518,60 @@ impl Command {
                     req = req.flag("unsafe-log");
                 }
                 req
+            }
+            Self::MoveTo { page, x, y, mode } => {
+                let s = require_session(session_id)?;
+                Request::new("vs_move_to")
+                    .arg(page.clone())
+                    .arg(x.to_string())
+                    .arg(y.to_string())
+                    .flag_value("session", s)
+                    .flag_value("mode", mode.clone())
+            }
+            Self::ClickAt {
+                page,
+                x,
+                y,
+                token,
+                mode,
+            } => {
+                let s = require_session(session_id)?;
+                Request::new("vs_click_at")
+                    .arg(page.clone())
+                    .arg(x.to_string())
+                    .arg(y.to_string())
+                    .flag_value("session", s)
+                    .flag_value("token", token.clone())
+                    .flag_value("mode", mode.clone())
+            }
+            Self::HoverAt { page, x, y, mode } => {
+                let s = require_session(session_id)?;
+                Request::new("vs_hover_at")
+                    .arg(page.clone())
+                    .arg(x.to_string())
+                    .arg(y.to_string())
+                    .flag_value("session", s)
+                    .flag_value("mode", mode.clone())
+            }
+            Self::Drag {
+                page,
+                x1,
+                y1,
+                x2,
+                y2,
+                token,
+                mode,
+            } => {
+                let s = require_session(session_id)?;
+                Request::new("vs_drag")
+                    .arg(page.clone())
+                    .arg(x1.to_string())
+                    .arg(y1.to_string())
+                    .arg(x2.to_string())
+                    .arg(y2.to_string())
+                    .flag_value("session", s)
+                    .flag_value("token", token.clone())
+                    .flag_value("mode", mode.clone())
             }
             Self::Serve { .. } => {
                 anyhow::bail!("vs_serve is local; route via main, not the wire dispatcher");
