@@ -30,13 +30,13 @@ fn parent_pid() -> u32 {
             ..PROCESSENTRY32W::default()
         };
         let mut found = 0;
-        if Process32FirstW(snap, &mut entry).is_ok() {
+        if Process32FirstW(snap, &raw mut entry).is_ok() {
             loop {
                 if entry.th32ProcessID == me {
                     found = entry.th32ParentProcessID;
                     break;
                 }
-                if Process32NextW(snap, &mut entry).is_err() {
+                if Process32NextW(snap, &raw mut entry).is_err() {
                     break;
                 }
             }
@@ -90,7 +90,13 @@ fn parent_start_time(ppid: u32) -> Option<u64> {
         let mut exit = FILETIME::default();
         let mut kernel = FILETIME::default();
         let mut user = FILETIME::default();
-        let r = GetProcessTimes(h, &mut creation, &mut exit, &mut kernel, &mut user);
+        let r = GetProcessTimes(
+            h,
+            &raw mut creation,
+            &raw mut exit,
+            &raw mut kernel,
+            &raw mut user,
+        );
         let _ = CloseHandle(h);
         r.ok()?;
         let high = u64::from(creation.dwHighDateTime);
