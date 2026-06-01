@@ -88,13 +88,15 @@ fn save_caller_session(paths: &Paths, key: &str, session_id: &str) -> Result<()>
     Ok(())
 }
 
-fn clear_caller_session(paths: &Paths, key: &str) -> Result<()> {
-    let path = paths.caller_session(key);
-    match std::fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e).context("remove caller session file"),
-    }
+/// Sentinel written to the caller file by `vs session-close` so a
+/// follow-up command does NOT silently auto-create a fresh session.
+/// Explicit close means "I'm done" — a subsequent `vs open` should
+/// fail loudly, the same way it did pre-v0.1.7. The user re-opens
+/// by running `vs session-open` explicitly.
+const CLOSED_SENTINEL: &str = "__closed__";
+
+fn mark_caller_closed(paths: &Paths, key: &str) -> Result<()> {
+    save_caller_session(paths, key, CLOSED_SENTINEL)
 }
 
 /// End-to-end dispatch. Auto-opens a session for the caller if needed
@@ -106,11 +108,21 @@ pub fn run(cli: &Cli) -> Result<Response> {
     let mut client = connect(cli, &paths)?;
     let caller_key = caller::caller_key();
 
+    // Explicit close sentinel means "user said they were done" — don't
+    // auto-reopen on a follow-up command. Treat it as no session so the
+    // daemon returns the same `NotFound` error the pre-v0.1.7 active-
+    // session file used to surface.
+    let explicit_close = matches!(session_id.as_deref(), Some(CLOSED_SENTINEL));
+    if explicit_close {
+        session_id = None;
+    }
+
     // Auto-open: if this command needs a session and none was resolved,
-    // open one transparently and remember it for the caller. The
-    // explicit SessionOpen command is excluded — the user is about to
-    // open one anyway.
+    // open one transparently and remember it for the caller. Excluded:
+    // SessionOpen (about to open anyway), and the explicit-close case
+    // (the user told us to stop).
     if session_id.is_none()
+        && !explicit_close
         && cli.command.needs_session()
         && !matches!(cli.command, Command::SessionOpen { .. })
     {
@@ -138,7 +150,7 @@ pub fn run(cli: &Cli) -> Result<Response> {
         }
         (Command::SessionClose, vs_protocol::Envelope::Success(_)) => {
             if let Some(key) = caller_key.as_ref() {
-                let _ = clear_caller_session(&paths, key);
+                let _ = mark_caller_closed(&paths, key);
             }
         }
         _ => {}
