@@ -54,53 +54,24 @@ Linux needs WebKitGTK 6. Windows needs the WebView2 runtime (already on Windows 
 
 ## Wire it into your agent
 
-The fastest path is the binary's auto-installer. After `vs` is on your PATH:
+Two integration paths, and they're independent. You can install either or both:
+
+- **Skill**: drop `SKILL.md` into the agent's skills directory. The agent reads it as context and calls the `vs` binary directly through whatever shell it has. Use this for any agent that runs Bash but doesn't speak MCP.
+- **MCP**: register `vs mcp` as an MCP server. The agent calls vibesurfer primitives as MCP tools over JSON-RPC, no shell required. Use this for agents with native MCP support.
+
+The auto-installer does both where supported. After `vs` is on your PATH:
 
 ```
 vs skill install
 ```
 
-It detects Claude Desktop, Claude Code, Cursor, Codex CLI, Gemini CLI, and OpenClaw on your machine and writes the SKILL.md plus an MCP entry into each. Re-run after upgrading.
+It detects Claude Desktop, Claude Code, Cursor, Codex CLI, Gemini CLI, and OpenClaw, then writes the SKILL.md plus the MCP entry into each one. Agents that only support one of the two get only the relevant piece. Re-run after upgrading.
 
-If you'd rather install per-agent, the manifests below are in the repo and supported by each tool's native plugin command:
+### Doing it by hand
 
-### Claude Code
+For the **skill path**, copy `skills/vibesurfer/SKILL.md` from the repo into the agent's skills directory. For Claude-family agents that's typically `~/.claude/skills/vibesurfer/SKILL.md`.
 
-```
-/plugin install frane/vibesurfer
-```
-
-Resolves `.claude-plugin/marketplace.json` at the repo root and `plugin/.claude-plugin/plugin.json`. The plugin registers the MCP server (`vs mcp`) and ships the SKILL.md so Claude knows when to reach for it.
-
-### Codex CLI (OpenAI)
-
-The plugin manifest at `plugin/.codex-plugin/plugin.json` declares the skills directory and the MCP entry. Install via Codex's plugin command, or do it by hand:
-
-```
-mkdir -p ~/.codex/skills && cp -r plugin/skills/vibesurfer ~/.codex/skills/
-```
-
-Then add the MCP server to `~/.codex/config.toml`:
-
-```toml
-[mcp_servers.vibesurfer]
-command = "vs"
-args = ["mcp"]
-```
-
-`vs skill install` does both steps automatically.
-
-### Gemini CLI
-
-```
-gemini extensions install https://github.com/frane/vibesurfer
-```
-
-Reads `gemini-extension.json` at the repo root, which wires `vs mcp` as the server and points at `plugin/GEMINI.md` for the context file.
-
-### Claude Desktop or any MCP-aware agent
-
-Edit the tool's MCP config (`claude_desktop_config.json`, Cursor's `mcp.json`, etc.) and drop in:
+For the **MCP path**, add this block to the agent's MCP config (`claude_desktop_config.json`, `.cursor/mcp.json`, etc.):
 
 ```json
 {
@@ -113,7 +84,25 @@ Edit the tool's MCP config (`claude_desktop_config.json`, Cursor's `mcp.json`, e
 }
 ```
 
-The same JSON sits at `plugin/.mcp.json` if you want to copy from the repo.
+Codex uses TOML with the same shape under `[mcp_servers.vibesurfer]`. The JSON form also sits at `plugin/.mcp.json` if you would rather copy it from the repo.
+
+### Per-agent shortcuts
+
+**Claude Code marketplace** installs both surfaces from one command:
+
+```
+/plugin install frane/vibesurfer
+```
+
+Resolves `.claude-plugin/marketplace.json` at the repo root and `plugin/.claude-plugin/plugin.json`.
+
+**Gemini extension** wires the MCP server plus the GEMINI.md context file:
+
+```
+gemini extensions install https://github.com/frane/vibesurfer
+```
+
+Reads `gemini-extension.json` at the repo root.
 
 ## Short forms
 
