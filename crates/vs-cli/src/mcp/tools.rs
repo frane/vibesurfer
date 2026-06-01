@@ -43,6 +43,34 @@ pub fn list() -> Vec<Value> {
             ("token", str_prop("State token from the most recent read.", true)),
             ("group", str_prop("Optional audit-group label (e.g. \"login-flow\").", false)),
         ])),
+        tool("vs_move_to", "Move the cursor to (x, y) along a humanized Bezier path. Trusted NSEvent dispatch on macOS; ENGINE_UNSUPPORTED on Linux/Windows for now.", obj(&[
+            ("page", str_prop("Page id.", true)),
+            ("x", num_prop("Target X in CSS pixels (client space, top-left origin).", true)),
+            ("y", num_prop("Target Y in CSS pixels.", true)),
+            ("mode", str_prop("Input mode: human | careful | robotic. Default: human.", false)),
+        ])),
+        tool("vs_click_at", "Click at exact coordinates. Trusted (isTrusted=true) on macOS; the Bezier lead-in from the last cursor position simulates real user motion.", obj(&[
+            ("page", str_prop("Page id.", true)),
+            ("x", num_prop("Click X in CSS pixels.", true)),
+            ("y", num_prop("Click Y in CSS pixels.", true)),
+            ("token", str_prop("State token from the most recent read.", true)),
+            ("mode", str_prop("Input mode: human | careful | robotic. Default: human.", false)),
+        ])),
+        tool("vs_hover_at", "Hover at coordinates without clicking.", obj(&[
+            ("page", str_prop("Page id.", true)),
+            ("x", num_prop("Hover X in CSS pixels.", true)),
+            ("y", num_prop("Hover Y in CSS pixels.", true)),
+            ("mode", str_prop("Input mode: human | careful | robotic. Default: human.", false)),
+        ])),
+        tool("vs_drag", "Press at (x1, y1), drag along a humanized path to (x2, y2), release.", obj(&[
+            ("page", str_prop("Page id.", true)),
+            ("x1", num_prop("Drag start X.", true)),
+            ("y1", num_prop("Drag start Y.", true)),
+            ("x2", num_prop("Drag end X.", true)),
+            ("y2", num_prop("Drag end Y.", true)),
+            ("token", str_prop("State token from the most recent read.", true)),
+            ("mode", str_prop("Input mode: human | careful | robotic. Default: human.", false)),
+        ])),
         tool("vs_find", "Search across all open pages in the session.", obj(&[
             ("query", str_prop("Substring or pattern.", true)),
         ])),
@@ -284,6 +312,16 @@ fn str_prop(desc: &str, required: bool) -> Value {
 
 fn uint_prop(desc: &str, required: bool) -> Value {
     let mut v = json!({ "type": "integer", "minimum": 0, "description": desc });
+    if required {
+        v.as_object_mut()
+            .unwrap()
+            .insert("required".into(), Value::Bool(true));
+    }
+    v
+}
+
+fn num_prop(desc: &str, required: bool) -> Value {
+    let mut v = json!({ "type": "number", "description": desc });
     if required {
         v.as_object_mut()
             .unwrap()

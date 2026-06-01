@@ -28,7 +28,7 @@ Frequent flags also have short forms: `-S` (`--session`), `-j` (`--json`), `-F` 
 - Anything where you'd be parsing the rendered HTML by string matching — `vs_view` already gives you a typed accessibility tree with stable refs.
 - Headless screenshots of fixed URLs with no interaction (overkill — though you can; see `vs capture`).
 
-## The 19 primitives
+## The 23 primitives
 
 Wire form is `vs_<name>` (over the socket); CLI subcommand is `<name>` with hyphens. Each call returns a state envelope (`@<token>` success, `! CODE` error, `? warning` lines before the envelope).
 
@@ -59,6 +59,20 @@ Wire form is `vs_<name>` (over the socket); CLI subcommand is `<name>` with hyph
 | 11 | `vs mark <PAGE> <REF> <NAME> --token=<TOK>` | Persist a ref as a named anchor. |
 | 12 | `vs annotate <TARGET> <KEY> [VALUE]` | `ref:N` / `mark:NAME` / `page` annotation. |
 | 17 | `vs viewport <PAGE> <SPEC> [--dpr=N]` | Preset (`mobile` / `desktop` / etc.) or `WxH`. Re-baselines next view. |
+
+### Cursor coordinates (20–23, v0.1.8+)
+
+Coordinate-addressed input. Native trusted dispatch on macOS so events carry `isTrusted = true`; Linux + Windows currently return `ENGINE_UNSUPPORTED` until M7 wires GDK + CDP input. All four take `--mode={human,careful,robotic}` (short `-M`), default `human`.
+
+`human` synthesizes a Bezier path from the last known cursor position with Fitts-law arrival timing; the visible motion is indistinguishable from a real cursor reaching the target before the click. `careful` is a single-shot move. `robotic` is a teleport (no path).
+
+| # | CLI | Short | What |
+|---|-----|-------|------|
+| 20 | `vs move-to <PAGE> <X> <Y> [-M=human]` | `mt` | Move the cursor to (x, y). No click. |
+| 21 | `vs click-at <PAGE> <X> <Y> --token=<TOK> [-M=human]` | `ca` | Trusted click at (x, y) after a humanized lead-in. |
+| 22 | `vs hover-at <PAGE> <X> <Y> [-M=human]` | `ha` | Hover at (x, y). |
+| 23 | `vs drag <PAGE> <X1> <Y1> <X2> <Y2> --token=<TOK> [-M=human]` | `dr` | Press at start, drag along a humanized path, release at end. |
+
 
 ### Search / extract (8, 10, 18)
 
