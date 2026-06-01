@@ -1942,13 +1942,14 @@ checksum = "03c2856837ef78f57382f06b2b8563a2f512f7185d732608fd9176cb3b8edf0e"
 
 [[package]]
 name = "vibesurfer"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "clap",
  "glib",
  "gtk4",
  "interprocess",
+ "libc",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
@@ -1967,7 +1968,7 @@ dependencies = [
 
 [[package]]
 name = "vs-daemon"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1986,7 +1987,7 @@ dependencies = [
 
 [[package]]
 name = "vs-engine-webkit"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "block2",
  "glib",
@@ -2006,11 +2007,11 @@ dependencies = [
 
 [[package]]
 name = "vs-humanize"
-version = "0.1.5"
+version = "0.1.6"
 
 [[package]]
 name = "vs-protocol"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "proptest",
  "thiserror",
@@ -2018,7 +2019,7 @@ dependencies = [
 
 [[package]]
 name = "vs-store"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "apple-native-keyring-store",
  "keyring-core",

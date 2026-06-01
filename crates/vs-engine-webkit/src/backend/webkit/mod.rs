@@ -134,6 +134,14 @@ impl Engine for WkBackend {
         let inspector =
             super::inspector_bridge::InspectorSlots::new(crate::inspector::DEFAULT_BUFFER_CAPACITY);
         let config = unsafe { WKWebViewConfiguration::new(mtm) };
+        // Pin the shared persistent data store explicitly. The default
+        // value of `websiteDataStore` is *supposed* to be the persistent
+        // default, but on headless Cocoa processes the binding can land
+        // on a non-persistent store and any `Set-Cookie` from in-session
+        // fetches gets silently dropped between the network and the
+        // cookie jar. Assigning `defaultDataStore` defensively pins it.
+        let data_store = unsafe { objc2_web_kit::WKWebsiteDataStore::defaultDataStore(mtm) };
+        unsafe { config.setWebsiteDataStore(&data_store) };
         let ucc = unsafe { config.userContentController() };
         let inspector_installed = inspector_handler::install(mtm, &ucc, &inspector);
         let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1280.0, 800.0));
@@ -448,6 +456,7 @@ impl Engine for WkBackend {
             persists_auth: true,
             inspector_console: any_inspector,
             inspector_network: any_inspector,
+            inspector_cookie_events: false,
             name: "webkit",
             version: "macOS WebKit (objc2)",
         }

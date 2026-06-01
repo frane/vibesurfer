@@ -26,6 +26,82 @@ use vs_daemon::{config::Paths as DaemonPaths, server, Daemon};
 /// Args specific to `vs serve`. `paths` is the resolved daemon home.
 pub struct ServeArgs {
     pub paths: DaemonPaths,
+    /// If true, do not start a daemon — instead, read the PID file,
+    /// send SIGTERM, and wait for the socket to disappear.
+    pub stop: bool,
+}
+
+/// `vs serve --stop`. Reads the daemon PID file, sends SIGTERM (Unix)
+/// or TerminateProcess (Windows), and waits up to 5s for the socket
+/// file to disappear. Stale PID files for processes that already exit
+/// are cleaned up.
+pub fn run_stop(paths: &DaemonPaths) -> Result<()> {
+    let pid_file = paths.pid_file();
+    let pid_str = match std::fs::read_to_string(&pid_file) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("no daemon running (no PID file at {})", pid_file.display());
+            return Ok(());
+        }
+        Err(e) => return Err(e).context("read pid file"),
+    };
+    let pid: i32 = pid_str
+        .trim()
+        .parse()
+        .with_context(|| format!("malformed PID file: {pid_str:?}"))?;
+    #[cfg(unix)]
+    {
+        let r = unsafe { libc::kill(pid, libc::SIGTERM) };
+        if r != 0 {
+            let e = std::io::Error::last_os_error();
+            if e.raw_os_error() == Some(libc::ESRCH) {
+                let _ = std::fs::remove_file(&pid_file);
+                eprintln!("no daemon running (cleaned stale PID file for pid {pid})");
+                return Ok(());
+            }
+            return Err(anyhow::anyhow!("kill({pid}, SIGTERM) failed: {e}"));
+        }
+    }
+    #[cfg(windows)]
+    {
+        use windows::Win32::Foundation::CloseHandle;
+        use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+        unsafe {
+            let h = OpenProcess(PROCESS_TERMINATE, false, u32::try_from(pid).unwrap_or(0))
+                .map_err(|e| anyhow::anyhow!("OpenProcess({pid}): {e}"))?;
+            let r = TerminateProcess(h, 0);
+            let _ = CloseHandle(h);
+            r.map_err(|e| anyhow::anyhow!("TerminateProcess({pid}): {e}"))?;
+        }
+    }
+    let socket = paths.socket();
+    for _ in 0..50 {
+        if !socket.exists() {
+            eprintln!("daemon stopped (pid {pid})");
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    Err(anyhow::anyhow!(
+        "daemon (pid {pid}) did not exit within 5s; socket still present at {}",
+        socket.display()
+    ))
+}
+
+/// Future that resolves on SIGTERM (Unix) or never (other platforms).
+/// Lets the server loop treat SIGTERM equivalently to ctrl-c.
+#[cfg(unix)]
+pub async fn wait_terminate() {
+    if let Ok(mut s) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+        s.recv().await;
+    } else {
+        std::future::pending::<()>().await;
+    }
+}
+
+#[cfg(not(unix))]
+pub async fn wait_terminate() {
+    std::future::pending::<()>().await;
 }
 
 // =============================================================================
@@ -38,6 +114,10 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     use objc2_app_kit::NSApplication;
     use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSRunLoop};
     use vs_engine_webkit::{backend::webkit::WkBackend, Engine, EngineRuntime};
+
+    if args.stop {
+        return run_stop(&args.paths);
+    }
 
     init_tracing();
     install_panic_hook();
@@ -77,6 +157,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     }
 
     let socket = args.paths.socket();
+    let pid_path = args.paths.pid_file();
 
     // Spawn the tokio runtime on a worker. It owns the daemon and the
     // socket server; ctrl-c on the worker triggers a graceful shutdown
@@ -90,6 +171,9 @@ pub fn run(args: &ServeArgs) -> Result<()> {
                 .enable_all()
                 .build()
                 .context("build tokio runtime")?;
+            if let Err(e) = std::fs::write(&pid_path, std::process::id().to_string()) {
+                tracing::warn!(?pid_path, error = %e, "write pid file");
+            }
             rt.block_on(async move {
                 let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
                 let mut server =
@@ -102,14 +186,21 @@ pub fn run(args: &ServeArgs) -> Result<()> {
                             tracing::error!(error = %e, "server task ended with error");
                         }
                     }
+                    () = wait_terminate() => {
+                        tracing::info!("SIGTERM received, shutting down");
+                        let _ = shutdown_tx.send(());
+                        if let Ok(Err(e)) = server.await {
+                            tracing::error!(error = %e, "server task ended with error");
+                        }
+                    }
                     res = &mut server => {
-                        // server::serve returned without ctrl-c — most
-                        // commonly a bind failure on the local socket.
-                        // Surface it before the run loop exits.
+                        // server::serve returned without an external
+                        // signal — typically a bind failure. Surface it
+                        // before the run loop exits.
                         match res {
                             Ok(Err(e)) => tracing::error!(
                                 error = %e,
-                                "server task failed before ctrl-c"
+                                "server task failed before shutdown signal"
                             ),
                             Err(e) => tracing::error!(
                                 error = %e,
@@ -120,6 +211,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
                     }
                 }
             });
+            let _ = std::fs::remove_file(&pid_path);
             // Dropping `rt` and the moved `engine_runtime` (held by the
             // daemon) closes the engine channel, which signals the main
             // loop to exit.
@@ -163,6 +255,9 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     install_panic_hook();
     install_seh_handler();
     args.paths.ensure_root().context("ensure ~/.vibesurfer")?;
+    if args.stop {
+        return run_stop(&args.paths);
+    }
 
     // GTK init must happen on the OS main thread, before any WebView.
     gtk4::init().context("gtk4 init")?;
@@ -190,6 +285,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     }
 
     let socket = args.paths.socket();
+    let pid_path = args.paths.pid_file();
 
     let server_thread = std::thread::Builder::new()
         .name("vs-daemon-tokio".into())
@@ -199,6 +295,9 @@ pub fn run(args: &ServeArgs) -> Result<()> {
                 .enable_all()
                 .build()
                 .context("build tokio runtime")?;
+            if let Err(e) = std::fs::write(&pid_path, std::process::id().to_string()) {
+                tracing::warn!(?pid_path, error = %e, "write pid file");
+            }
             rt.block_on(async move {
                 let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
                 let mut server =
@@ -211,14 +310,18 @@ pub fn run(args: &ServeArgs) -> Result<()> {
                             tracing::error!(error = %e, "server task ended with error");
                         }
                     }
+                    () = wait_terminate() => {
+                        tracing::info!("SIGTERM received, shutting down");
+                        let _ = shutdown_tx.send(());
+                        if let Ok(Err(e)) = server.await {
+                            tracing::error!(error = %e, "server task ended with error");
+                        }
+                    }
                     res = &mut server => {
-                        // server::serve returned without ctrl-c — most
-                        // commonly a bind failure on the local socket.
-                        // Surface it before the run loop exits.
                         match res {
                             Ok(Err(e)) => tracing::error!(
                                 error = %e,
-                                "server task failed before ctrl-c"
+                                "server task failed before shutdown signal"
                             ),
                             Err(e) => tracing::error!(
                                 error = %e,
@@ -229,6 +332,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
                     }
                 }
             });
+            let _ = std::fs::remove_file(&pid_path);
             drop(rt);
             Ok(())
         })
@@ -273,6 +377,9 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     install_panic_hook();
     install_seh_handler();
     args.paths.ensure_root().context("ensure ~/.vibesurfer")?;
+    if args.stop {
+        return run_stop(&args.paths);
+    }
 
     // SAFETY: required first call on this thread before any
     // WebView2 COM API. RPC_E_CHANGED_MODE on second call is fine.
@@ -303,6 +410,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     }
 
     let socket = args.paths.socket();
+    let pid_path = args.paths.pid_file();
 
     let server_thread = std::thread::Builder::new()
         .name("vs-daemon-tokio".into())
@@ -312,6 +420,9 @@ pub fn run(args: &ServeArgs) -> Result<()> {
                 .enable_all()
                 .build()
                 .context("build tokio runtime")?;
+            if let Err(e) = std::fs::write(&pid_path, std::process::id().to_string()) {
+                tracing::warn!(?pid_path, error = %e, "write pid file");
+            }
             rt.block_on(async move {
                 let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
                 let mut server =
@@ -324,14 +435,18 @@ pub fn run(args: &ServeArgs) -> Result<()> {
                             tracing::error!(error = %e, "server task ended with error");
                         }
                     }
+                    () = wait_terminate() => {
+                        tracing::info!("SIGTERM received, shutting down");
+                        let _ = shutdown_tx.send(());
+                        if let Ok(Err(e)) = server.await {
+                            tracing::error!(error = %e, "server task ended with error");
+                        }
+                    }
                     res = &mut server => {
-                        // server::serve returned without ctrl-c — most
-                        // commonly a bind failure on the local socket.
-                        // Surface it before the run loop exits.
                         match res {
                             Ok(Err(e)) => tracing::error!(
                                 error = %e,
-                                "server task failed before ctrl-c"
+                                "server task failed before shutdown signal"
                             ),
                             Err(e) => tracing::error!(
                                 error = %e,
@@ -342,6 +457,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
                     }
                 }
             });
+            let _ = std::fs::remove_file(&pid_path);
             drop(rt);
             Ok(())
         })

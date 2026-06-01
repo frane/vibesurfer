@@ -42,6 +42,13 @@ impl Paths {
         self.root.join("daemon.sock")
     }
 
+    /// PID file for the running daemon. Written by `vs serve` on startup
+    /// and removed on graceful shutdown. `vs serve --stop` reads it.
+    #[must_use]
+    pub fn pid_file(&self) -> PathBuf {
+        self.root.join("daemon.pid")
+    }
+
     #[must_use]
     pub fn db(&self) -> PathBuf {
         self.root.join("state.db")

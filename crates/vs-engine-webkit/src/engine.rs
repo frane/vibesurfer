@@ -172,6 +172,11 @@ pub struct EngineCapabilities {
     /// Captures network requests in a ring buffer (M5.7 PR1+).
     /// Surfaced via `vs_inspect network`.
     pub inspector_network: bool,
+    /// Captures cookie-store ADD/REMOVE events in a ring buffer
+    /// (v0.1.6+). Surfaced via `vs_inspect cookie-events`. macOS and
+    /// Linux only — Windows reports `false` because `webview2-com` has
+    /// no cookie-changed observer.
+    pub inspector_cookie_events: bool,
     /// Short identifier reported in `vs_status`.
     pub name: &'static str,
     /// Engine version string. Empty for the stub.
@@ -189,6 +194,7 @@ impl EngineCapabilities {
         persists_auth: true,
         inspector_console: true,
         inspector_network: true,
+        inspector_cookie_events: true,
         name: "test",
         version: "",
     };
@@ -336,6 +342,17 @@ pub trait Engine {
         _page: PageHandle,
         _scope: crate::inspector::StorageScope,
     ) -> EngineResult<Vec<crate::inspector::StorageEntry>> {
+        Ok(Vec::new())
+    }
+
+    /// List cookie store ADD/REMOVE events observed since the page
+    /// opened. Engines without a cookie-changed observer (Windows, the
+    /// stub) return an empty vec or `ENGINE_UNSUPPORTED` via their
+    /// capability flag.
+    fn cookie_events(
+        &mut self,
+        _page: PageHandle,
+    ) -> EngineResult<Vec<crate::inspector::CookieEvent>> {
         Ok(Vec::new())
     }
 

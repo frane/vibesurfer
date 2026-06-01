@@ -207,6 +207,44 @@ pub struct StorageEntry {
     pub sensitive: bool,
 }
 
+/// Cookie store change event captured by `Engine::cookie_events`.
+/// macOS uses `WKHTTPCookieStoreObserver`, Linux uses the
+/// `WebKitCookieManager::changed` signal; both diff snapshots to
+/// produce per-cookie Added/Removed events. Windows currently has no
+/// observer in `webview2-com`, so the engine reports
+/// `inspector_cookie_events = false` and the primitive returns
+/// `ENGINE_UNSUPPORTED`.
+#[derive(Debug, Clone)]
+pub struct CookieEvent {
+    /// Per-page monotonic sequence (formatted on the wire as `c_<seq>`).
+    pub seq: u64,
+    /// Milliseconds since Unix epoch when the event was observed.
+    pub ts_ms: u64,
+    pub action: CookieAction,
+    pub name: String,
+    pub domain: String,
+    pub path: String,
+    /// Same `secure`/`httponly`/`samesite=`/`expires=` flag vocabulary
+    /// as [`StorageEntry::flags`].
+    pub flags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CookieAction {
+    Added,
+    Removed,
+}
+
+impl CookieAction {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Added => "added",
+            Self::Removed => "removed",
+        }
+    }
+}
+
 /// One loaded script in `Engine::scripts`.
 #[derive(Debug, Clone)]
 pub struct ScriptEntry {

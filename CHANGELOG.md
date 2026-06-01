@@ -8,6 +8,16 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 
 
+## [v0.1.6] - 2026-06-01
+
+### Fixed
+- Cookies set via `Set-Cookie` on in-session fetches now persist in `WKHTTPCookieStore` on macOS. v0.1.5 left `WKWebViewConfiguration.websiteDataStore` to its default value; in headless Cocoa processes that default landed on a non-persistent or per-page store, and `Set-Cookie` from XHR/fetch responses got dropped silently between the network stack and the cookie jar. v0.1.6 explicitly assigns `WKWebsiteDataStore.defaultDataStore()` on every config so all pages share the same persistent jar.
+
+### Added
+- `vs serve --stop` reads `~/.vibesurfer/daemon.pid` and sends `SIGTERM` (Unix) / `TerminateProcess` (Windows), then waits up to 5s for the socket to disappear. The daemon writes the PID file on startup and removes it on graceful shutdown. Replaces the `pkill -f "vs serve"` ritual after `brew upgrade`.
+- The daemon now also handles `SIGTERM` (in addition to `SIGINT`) as a graceful-shutdown signal.
+
+
 ## [v0.1.5] - 2026-05-19
 
 ### Fixed

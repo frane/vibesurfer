@@ -390,6 +390,7 @@ mod tests {
                 persists_auth: false,
                 inspector_console: false,
                 inspector_network: false,
+                inspector_cookie_events: false,
                 name: "test",
                 version: "runtime-tests",
             }

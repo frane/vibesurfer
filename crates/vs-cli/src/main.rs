@@ -22,13 +22,13 @@ use vs_protocol::Envelope;
 fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
 
-    if matches!(cli.command, Command::Serve) {
+    if let Command::Serve { stop } = cli.command {
         let paths = vs_daemon::config::Paths::at(
             cli.home
                 .clone()
                 .unwrap_or_else(|| vs_cli::paths::Paths::home().root),
         );
-        if let Err(e) = serve::run(&ServeArgs { paths }) {
+        if let Err(e) = serve::run(&ServeArgs { paths, stop }) {
             eprintln!("error: {e:#}");
             return std::process::ExitCode::from(1);
         }

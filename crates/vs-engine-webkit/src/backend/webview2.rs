@@ -752,6 +752,7 @@ impl Engine for Webview2Backend {
             persists_auth: true,
             inspector_console: any_inspector,
             inspector_network: any_inspector,
+            inspector_cookie_events: false,
             name: "webview2",
             version: "Windows WebView2 (webview2-com 0.39)",
         }

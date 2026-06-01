@@ -442,6 +442,7 @@ impl Engine for WpeBackend {
             persists_auth: true,
             inspector_console: any_inspector,
             inspector_network: any_inspector,
+            inspector_cookie_events: false,
             name: "wpe",
             version: "Linux WebKitGTK 6 (webkit6)",
         }
