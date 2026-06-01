@@ -8,6 +8,12 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 
 
+## [v0.1.10] - 2026-06-01
+
+### Security
+- Sensitive `<input>` values are now masked in the accessibility tree returned by `vs view`. Up through v0.1.9 the snapshot walker's `labelFor` read `el.value` for every input regardless of type — including `<input type="password">` — so any agent that called `vs view` after `vs prompt-input --secret` saw the cleartext password the user had just typed via tty. The `--secret` flag only suppressed terminal echo; the value still landed in the next snapshot. Fixed: inputs whose `type` is `password` or `hidden`, or whose `autocomplete` is `current-password` / `new-password` / `one-time-code` / `cc-number` / `cc-csc`, now report `***` in the tree if a value is set, or the placeholder if empty.
+
+
 ## [v0.1.9] - 2026-06-01
 
 ### Added

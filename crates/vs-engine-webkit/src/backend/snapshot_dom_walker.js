@@ -75,6 +75,23 @@
         const aria = el.getAttribute('aria-label');
         if (aria) return aria.trim();
         if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+            // Mask sensitive inputs so the agent never sees what the
+            // user typed via `vs prompt-input --secret` (or via the
+            // page directly). The HTML spec already marks `password`
+            // / `hidden` inputs as not-for-display; the `autocomplete`
+            // hints catch credit-card fields and similar.
+            const type = (el.getAttribute('type') || 'text').toLowerCase();
+            const ac = (el.getAttribute('autocomplete') || '').toLowerCase();
+            const sensitive = (
+                type === 'password' || type === 'hidden' ||
+                ac === 'current-password' || ac === 'new-password' ||
+                ac === 'one-time-code' ||
+                ac === 'cc-number' || ac === 'cc-csc'
+            );
+            if (sensitive) {
+                if (el.value) return '***';
+                return (el.placeholder || '').trim();
+            }
             return (el.value || el.placeholder || '').trim();
         }
         if (el.tagName === 'IMG') return (el.alt || '').trim();
