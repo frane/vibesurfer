@@ -8,6 +8,17 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 
 
+## [v0.1.7] - 2026-06-01
+
+### Fixed
+- Concurrent agents no longer collide on a single shared session. Up through v0.1.6 the CLI resolved the session id from a single `~/.vibesurfer/active-session` file; two agents both running `vs session-open` overwrote each other and every subsequent `vs view`/`vs act` from either side could land in the wrong session. The CLI now keys sessions by `<parent_pid>-<parent_start_time>` — two shells (or two agent processes) get independent sessions automatically and the active-session footgun is gone.
+
+### Added
+- `VS_SESSION` env var. When set, takes precedence over the caller-key auto-mapping but is overridden by an explicit `--session=<id>`/`-S`. Useful for shells that want to pin a session across invocations or share one across cooperating processes.
+- Auto session-open. If a command needs a session and none has been resolved for the current caller, the CLI implicitly runs `vs_session_open` first and binds the new id to the caller key. Agents stop having to call `vs session-open` explicitly before the first `vs open`.
+- `~/.vibesurfer/callers/<key>` files replace `~/.vibesurfer/active-session`. Each caller-key file stores one session id; the old single-tenant pointer file is no longer read or written.
+
+
 ## [v0.1.6] - 2026-06-01
 
 ### Fixed

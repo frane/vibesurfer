@@ -9,6 +9,7 @@
 #![cfg_attr(any(unix, target_os = "windows"), allow(unsafe_code))]
 
 pub mod active_session;
+pub mod caller;
 pub mod client;
 pub mod commands;
 pub mod mcp;

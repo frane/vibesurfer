@@ -38,4 +38,12 @@ impl Paths {
     pub fn active_session(&self) -> PathBuf {
         self.root.join("active-session")
     }
+
+    /// Where the session id is stored for a given caller key. The
+    /// directory is created lazily on first write so a read-only
+    /// `vs status` doesn't side-effect.
+    #[must_use]
+    pub fn caller_session(&self, caller_key: &str) -> PathBuf {
+        self.root.join("callers").join(caller_key)
+    }
 }

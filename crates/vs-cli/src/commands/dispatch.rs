@@ -1,13 +1,26 @@
 //! End-to-end CLI dispatch: resolve paths/session, connect to the
 //! daemon (auto-spawning if needed), build the wire request, send it,
 //! and side-effect on session-open / session-close.
+//!
+//! Session resolution order (v0.1.7+):
+//!   1. `--session=<id>` (or `-S`) — explicit override
+//!   2. `VS_SESSION` env var — set by the caller's shell
+//!   3. Per-caller saved session at `~/.vibesurfer/callers/<key>` —
+//!      keyed by `<parent_pid>-<parent_start_time>` so different
+//!      shells / agents get independent sessions automatically
+//!   4. Auto-create: if the command needs a session and none of the
+//!      above resolved, the CLI implicitly runs `vs_session_open`
+//!      first and binds the new id to the caller key
+//!
+//! The legacy `active-session` pointer file is no longer read or
+//! written; concurrent agents would race on it.
 
 use std::path::PathBuf;
 
 use anyhow::{Context as _, Result};
 
 use super::{Cli, Command};
-use crate::active_session;
+use crate::caller;
 use crate::client::{Client, Response};
 use crate::paths::Paths;
 use crate::spawn;
@@ -21,13 +34,30 @@ pub fn resolve_paths(home_override: Option<&PathBuf>) -> Paths {
     }
 }
 
-/// Resolve the active session id from CLI override or the on-disk
-/// pointer file.
+/// Resolve the session id without auto-creating one. Returns `None` if
+/// no explicit override / env var is set and the caller has no saved
+/// session yet — [`run`] handles the auto-create case for commands
+/// that need a session.
 pub fn resolve_session(cli: &Cli, paths: &Paths) -> Result<Option<String>> {
     if let Some(s) = &cli.session {
         return Ok(Some(s.clone()));
     }
-    active_session::read(paths.active_session())
+    if let Ok(s) = std::env::var("VS_SESSION") {
+        let trimmed = s.trim();
+        if !trimmed.is_empty() {
+            return Ok(Some(trimmed.to_string()));
+        }
+    }
+    if let Some(key) = caller::caller_key() {
+        let p = paths.caller_session(&key);
+        if let Ok(contents) = std::fs::read_to_string(&p) {
+            let trimmed = contents.trim();
+            if !trimmed.is_empty() {
+                return Ok(Some(trimmed.to_string()));
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// Connect to the daemon, auto-spawning if necessary (unless
@@ -49,22 +79,67 @@ pub fn connect(cli: &Cli, paths: &Paths) -> Result<Client> {
     Client::connect(&socket)
 }
 
-/// End-to-end dispatch: parse session, connect, send, side-effect on
-/// `session-open` (write active-session file). Returns the response.
+fn save_caller_session(paths: &Paths, key: &str, session_id: &str) -> Result<()> {
+    let path = paths.caller_session(key);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).context("create callers/ directory")?;
+    }
+    std::fs::write(&path, session_id).context("write caller session file")?;
+    Ok(())
+}
+
+fn clear_caller_session(paths: &Paths, key: &str) -> Result<()> {
+    let path = paths.caller_session(key);
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e).context("remove caller session file"),
+    }
+}
+
+/// End-to-end dispatch. Auto-opens a session for the caller if needed
+/// and binds session-open / session-close side effects to the caller
+/// key so concurrent agents in different shells stay isolated.
 pub fn run(cli: &Cli) -> Result<Response> {
     let paths = resolve_paths(cli.home.as_ref());
-    let session_id = resolve_session(cli, &paths)?;
+    let mut session_id = resolve_session(cli, &paths)?;
     let mut client = connect(cli, &paths)?;
+    let caller_key = caller::caller_key();
+
+    // Auto-open: if this command needs a session and none was resolved,
+    // open one transparently and remember it for the caller. The
+    // explicit SessionOpen command is excluded — the user is about to
+    // open one anyway.
+    if session_id.is_none()
+        && cli.command.needs_session()
+        && !matches!(cli.command, Command::SessionOpen { .. })
+    {
+        let open_req = vs_protocol::Request::new("vs_session_open");
+        let open_resp = client.call(&open_req).context("auto session-open")?;
+        if let vs_protocol::Envelope::Success(_) = &open_resp.envelope {
+            if let Some(line) = open_resp.body.first() {
+                let id = line.trim().to_string();
+                if let Some(key) = caller_key.as_ref() {
+                    let _ = save_caller_session(&paths, key, &id);
+                }
+                session_id = Some(id);
+            }
+        }
+    }
+
     let req = cli.command.to_request(session_id.as_deref())?;
     let resp = client.call(&req).context("daemon call")?;
+
     match (&cli.command, &resp.envelope) {
         (Command::SessionOpen { .. }, vs_protocol::Envelope::Success(_)) => {
-            if let Some(line) = resp.body.first() {
-                active_session::write(paths.active_session(), line.trim())?;
+            if let (Some(line), Some(key)) = (resp.body.first(), caller_key.as_ref()) {
+                let _ = save_caller_session(&paths, key, line.trim());
             }
         }
         (Command::SessionClose, vs_protocol::Envelope::Success(_)) => {
-            active_session::clear(paths.active_session())?;
+            if let Some(key) = caller_key.as_ref() {
+                let _ = clear_caller_session(&paths, key);
+            }
         }
         _ => {}
     }
