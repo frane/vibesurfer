@@ -8,6 +8,22 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 
 
+## [v0.1.8] - 2026-06-01
+
+### Added
+- Four coordinate-addressed cursor primitives: `vs move-to` (short `mt`), `vs click-at` (`ca`), `vs hover-at` (`ha`), `vs drag` (`dr`). Each takes `(x, y)` (drag takes `(x1, y1, x2, y2)`) plus `--mode={human,careful,robotic}` (short `-M`). Mutating ops (`click-at`, `drag`) also require `--token=<state token>`.
+- `vs-humanize` is now wired through the engine. `vs act click` and the new cursor primitives on macOS dispatch a Bezier-pathed `MouseMoved` lead-in from the page's last-known cursor position to the target rect / coordinates before the trusted `mouseDown`/`mouseUp` pair. Every event keeps `isTrusted = true` in JS; the visible motion is indistinguishable from a real cursor reaching the target.
+- Snapshot walker now consults the ARIA `role` attribute (Radix UI, Headless UI, Reach UI, every `<div role="button|option|menuitem|...">` pattern) before falling back to HTML tag names. A tabindex heuristic catches focusable div/span triggers that don't carry an explicit `role`. Modern React UIs surface as actionable refs without coordinate workarounds.
+- MCP tool registrations for the four new primitives.
+- README "Not detected as automated" section explaining the trust chain.
+
+### Changed
+- The 19-primitive line in SKILL.md is now 23 primitives. Lifecycle / Read / Mutate / Search / Capture sections unchanged; new "Cursor coordinates" section documents the four new entries.
+
+### Known gaps
+- Linux (WebKitGTK) and Windows (WebView2) backends still dispatch the existing `vs act click` through injected JS (`isTrusted = false`); the new cursor primitives return `ENGINE_UNSUPPORTED` on those engines. v0.1.9 wires native input on both: GDK `gdk_display_put_event` for WebKitGTK, CDP `Input.dispatchMouseEvent` for WebView2.
+
+
 ## [v0.1.7] - 2026-06-01
 
 ### Fixed

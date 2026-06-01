@@ -104,6 +104,17 @@ gemini extensions install https://github.com/frane/vibesurfer
 
 Reads `gemini-extension.json` at the repo root.
 
+
+## Not detected as automated
+
+Modern anti-bot systems (Cloudflare, hCaptcha, reCAPTCHA, DataDome) gate first on `event.isTrusted`, then on movement timing, then on TLS/HTTP fingerprinting. vibesurfer's input dispatch is built to pass all three.
+
+On macOS, `vs act click` and the coordinate primitives (`vs click-at`, `vs hover-at`, `vs move-to`, `vs drag`) route through native `NSEvent` mouseDown / mouseUp / mouseMoved on `WKWebView`. Each event carries `isTrusted = true` in JS, same as a real cursor click. The Bezier-pathed lead-in dispatched before every click reproduces Fitts-law arrival timing (digraph-derived control points, optional overshoot) so the visible motion looks like a human reaching the target rather than a teleport.
+
+Linux (WebKitGTK) and Windows (WebView2) currently still dispatch clicks through injected JS, so `isTrusted` is `false` on those engines. The next release (v0.1.9) wires native input on both: GDK `gdk_display_put_event` for WebKitGTK, CDP `Input.dispatchMouseEvent` for WebView2.
+
+The walker also honors ARIA `role="..."` (Radix UI, Headless UI, Reach UI, every custom-div-as-button pattern), plus a tabindex heuristic for focusable divs/spans without a role. Modern React UIs surface as actionable refs without coordinate workarounds.
+
 ## Short forms
 
 Every primitive has a one-to-three-letter alias. Long forms exist for documentation; agent invocations should use the short form to save tokens.
