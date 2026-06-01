@@ -18,5 +18,8 @@ pub mod webkit;
 #[cfg(target_os = "linux")]
 pub mod wpe;
 
+#[cfg(target_os = "linux")]
+mod wpe_input;
+
 #[cfg(target_os = "windows")]
 pub mod webview2;

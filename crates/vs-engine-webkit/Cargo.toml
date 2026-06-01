@@ -34,6 +34,11 @@ serde_json = "1"
 webkit6 = { version = "0.6", features = ["v2_42"] }
 glib = "0.22"
 # gtk4 pulled transitively via webkit6; specifying it directly causes a `links = "gtk-4"` conflict.
+# libc for `dlopen` / `dlsym` in `backend/wpe_input.rs`. We load
+# `libXtst.so.6` (XTest) and `libei.so.1` (libei) at runtime so neither
+# library imposes a build-time Cargo dep — the binary still links on
+# hosts that have only one (or neither).
+libc = "0.2"
 [target.'cfg(target_os = "macos")'.dependencies]
 # objc2 ecosystem — Rust bindings to the Apple Objective-C runtime and
 # the AppKit / Foundation / WebKit frameworks. Most call sites are safe

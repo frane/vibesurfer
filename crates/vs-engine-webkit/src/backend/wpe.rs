@@ -20,21 +20,22 @@
 //! Verified on Linux CI with `libwebkitgtk-6.0-dev` + `libgtk-4-dev`
 //! installed; this file is not built on macOS.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
 use glib::prelude::*;
+use webkit6::gtk;
 use webkit6::prelude::*;
 use webkit6::{LoadEvent, UserContentInjectedFrames, UserScript, UserScriptInjectionTime, WebView};
 
 use vs_protocol::{Ref, Tree};
 
 use crate::engine::{
-    ActTarget, Action, AuthBlob, CaptureScope, Engine, EngineCapabilities, EngineError,
-    EngineResult, LayoutBox, PageHandle, Viewport, WaitCondition,
+    ActTarget, Action, AuthBlob, CaptureScope, CursorOp, Engine, EngineCapabilities, EngineError,
+    EngineResult, InputMode, LayoutBox, PageHandle, Viewport, WaitCondition,
 };
 
 // =============================================================================
@@ -43,6 +44,11 @@ use crate::engine::{
 
 struct WpePage {
     web_view: WebView,
+    /// Hidden host window that owns `web_view` as its single child.
+    /// Required so the WebView has a `GdkSurface` on the X display —
+    /// without it XTest's synthetic input has no window to land on.
+    /// Created in `open()`, dropped on `close()`.
+    window: gtk::Window,
     inspector: super::inspector_bridge::InspectorSlots,
     /// True if the inspector install path actually succeeded for this
     /// page (script + handlers registered without bail). Read by
@@ -50,6 +56,10 @@ struct WpePage {
     inspector_installed: bool,
     cookie_baseline: std::cell::RefCell<Option<Vec<super::auth::CookieData>>>,
     cookie_next_seq: std::cell::RefCell<u64>,
+    /// Last known cursor position in screen-absolute CSS px. Updated
+    /// after every `cursor_op` so the next humanized lead-in starts
+    /// where the previous one ended. Defaults to (0, 0) on `open`.
+    last_mouse: Cell<vs_humanize::Point>,
 }
 
 // =============================================================================
@@ -139,6 +149,21 @@ impl Engine for WpeBackend {
     fn open(&mut self, url: &str) -> EngineResult<PageHandle> {
         let web_view = WebView::new();
 
+        // Hidden host window for the WebView. v0.1.11 added native
+        // input dispatch (XTest / libei) for the cursor primitives;
+        // both require the WebView to have a real `GdkSurface` on the
+        // display server so the synthetic event has somewhere to land.
+        // `WebView::new()` alone renders to an internal offscreen
+        // surface with no display-server window — XTest events would
+        // disappear into the void. Wrapping each WebView in a
+        // decorated-off `gtk::Window` and presenting it gives us that
+        // surface; under `xvfb` (CI) the window has no visual effect.
+        let window = gtk::Window::new();
+        WindowExt::set_decorated(&window, false);
+        WindowExt::set_default_size(&window, 1280, 800);
+        WindowExt::set_child(&window, Some(&web_view));
+        WindowExt::present(&window);
+
         // Pin the User-Agent to a current Safari string so anti-bot
         // fingerprinters don't flag the WebKitGTK default. See the
         // commit log for `crate::engine::DEFAULT_USER_AGENT` rationale.
@@ -196,17 +221,25 @@ impl Engine for WpeBackend {
             handle,
             WpePage {
                 web_view,
+                window,
                 inspector,
                 inspector_installed,
                 cookie_baseline: std::cell::RefCell::new(None),
                 cookie_next_seq: std::cell::RefCell::new(0),
+                last_mouse: Cell::new(vs_humanize::Point { x: 0.0, y: 0.0 }),
             },
         );
         Ok(handle)
     }
 
     fn close(&mut self, page: PageHandle) -> EngineResult<()> {
-        self.pages.remove(&page);
+        if let Some(p) = self.pages.remove(&page) {
+            // Dismiss the hidden host window so its `GdkSurface` is
+            // unmapped from the display server. `close()` queues the
+            // destroy; the GLib main context completes it on the next
+            // iteration.
+            WindowExt::close(&p.window);
+        }
         Ok(())
     }
 
@@ -451,6 +484,58 @@ impl Engine for WpeBackend {
         Ok(events)
     }
 
+    fn cursor_op(&mut self, page: PageHandle, op: CursorOp, mode: InputMode) -> EngineResult<()> {
+        let p = self.page_mut(page)?;
+        let dispatcher = super::wpe_input::dispatcher()?;
+        let humanize_mode = match mode {
+            InputMode::Human => vs_humanize::InputMode::Human,
+            InputMode::Careful => vs_humanize::InputMode::Careful,
+            InputMode::Robotic => vs_humanize::InputMode::Robotic,
+        };
+        // Screen origin of the hidden host window. v0.1.11 assumes
+        // (0, 0) — true under `xvfb` (CI) and any session without a
+        // window manager. With a WM, the WM may have translated the
+        // window elsewhere; a follow-up PR will query
+        // `GdkX11Surface::xid()` + `XTranslateCoordinates` to read the
+        // real origin. Until then, page-local CSS px == screen px,
+        // which is fine for CI and most headless setups.
+        let (origin_x, origin_y) = (0.0_f64, 0.0_f64);
+        let start = p.last_mouse.get();
+        let seed = humanize_seed(op);
+        let landed = match op {
+            CursorOp::MoveTo { x, y } | CursorOp::HoverAt { x, y } => {
+                cursor_move_along_path(dispatcher, start, vs_humanize::Point { x, y },
+                    (origin_x, origin_y), humanize_mode, seed, false)?
+            }
+            CursorOp::ClickAt { x, y } => {
+                let landed = cursor_move_along_path(dispatcher, start, vs_humanize::Point { x, y },
+                    (origin_x, origin_y), humanize_mode, seed, false)?;
+                cursor_press_release(dispatcher, landed, (origin_x, origin_y))?;
+                landed
+            }
+            CursorOp::Drag { x1, y1, x2, y2 } => {
+                let start_pt = vs_humanize::Point { x: x1, y: y1 };
+                let target = vs_humanize::Point { x: x2, y: y2 };
+                let pre = cursor_move_along_path(dispatcher, start, start_pt,
+                    (origin_x, origin_y), humanize_mode, seed, false)?;
+                dispatcher.dispatch(super::wpe_input::InputEvent::Press(
+                    super::wpe_input::Button::Left,
+                ))?;
+                std::thread::sleep(Duration::from_millis(15));
+                let landed = cursor_move_along_path(dispatcher, pre, target,
+                    (origin_x, origin_y), humanize_mode, seed, true)?;
+                dispatcher.dispatch(super::wpe_input::InputEvent::Release(
+                    super::wpe_input::Button::Left,
+                ))?;
+                dispatcher.flush()?;
+                landed
+            }
+        };
+        p.last_mouse.set(landed);
+        Ok(())
+    }
+
+
     fn capabilities(&self) -> EngineCapabilities {
         let any_inspector = self.pages.values().any(|p| p.inspector_installed);
         EngineCapabilities {
@@ -470,6 +555,95 @@ impl Engine for WpeBackend {
 // =============================================================================
 // JS evaluation helper
 // =============================================================================
+
+// =============================================================================
+// Cursor primitive helpers (XTest / libei input dispatch)
+// =============================================================================
+
+/// Deterministic seed for the humanize Bezier path so the same
+/// `cursor_op` invocation produces the same trajectory on every run.
+fn humanize_seed(op: CursorOp) -> u64 {
+    // Hash the op's coordinates into a u64. Trivial mixer; replays
+    // need determinism, not cryptographic spread.
+    let (a, b, c, d) = match op {
+        CursorOp::MoveTo { x, y } | CursorOp::HoverAt { x, y } | CursorOp::ClickAt { x, y } => {
+            (x, y, 0.0, 0.0)
+        }
+        CursorOp::Drag { x1, y1, x2, y2 } => (x1, y1, x2, y2),
+    };
+    let bits = |v: f64| v.to_bits();
+    bits(a).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ bits(b).wrapping_mul(0xBF58_476D_1CE4_E5B9)
+        ^ bits(c).wrapping_mul(0x94D0_49BB_1331_11EB)
+        ^ bits(d)
+}
+
+/// Walk a Bezier path from `start` to `end`, dispatching one `Move`
+/// per step at the path's prescribed timing. Returns the final point.
+/// The `button_down` flag is unused on Linux today (XTest doesn't
+/// distinguish drag-move from plain-move — both are `MotionNotify`
+/// events; the held button state is tracked at the X server). Kept
+/// in the signature so drag callers stay symmetric with the macOS
+/// `move_along_path`.
+fn cursor_move_along_path(
+    dispatcher: &dyn super::wpe_input::InputDispatcher,
+    start: vs_humanize::Point,
+    end: vs_humanize::Point,
+    origin: (f64, f64),
+    mode: vs_humanize::InputMode,
+    seed: u64,
+    _button_down: bool,
+) -> EngineResult<vs_humanize::Point> {
+    let path = vs_humanize::mouse_path(start, end, mode, seed);
+    let mut prev_ms: u128 = 0;
+    for step in &path {
+        if step.kind != vs_humanize::MouseStepKind::Move {
+            continue;
+        }
+        let screen = super::wpe_input::ScreenPoint {
+            #[allow(clippy::cast_possible_truncation)]
+            x: (origin.0 + step.point.x).round() as i32,
+            #[allow(clippy::cast_possible_truncation)]
+            y: (origin.1 + step.point.y).round() as i32,
+        };
+        dispatcher.dispatch(super::wpe_input::InputEvent::Move(screen))?;
+        let dt = step.at.as_millis().saturating_sub(prev_ms);
+        if dt > 0 {
+            std::thread::sleep(Duration::from_millis(u64::try_from(dt).unwrap_or(0)));
+        }
+        prev_ms = step.at.as_millis();
+    }
+    // Final settling move ending exactly at `end`.
+    let final_pt = super::wpe_input::ScreenPoint {
+        #[allow(clippy::cast_possible_truncation)]
+        x: (origin.0 + end.x).round() as i32,
+        #[allow(clippy::cast_possible_truncation)]
+        y: (origin.1 + end.y).round() as i32,
+    };
+    dispatcher.dispatch(super::wpe_input::InputEvent::Move(final_pt))?;
+    dispatcher.flush()?;
+    Ok(end)
+}
+
+/// Press-then-release left button at the current pointer position.
+/// Matches the `mouseDown` / 15 ms / `mouseUp` cadence the macOS
+/// backend uses so JS sees a coherent `click` event.
+fn cursor_press_release(
+    dispatcher: &dyn super::wpe_input::InputDispatcher,
+    _at: vs_humanize::Point,
+    _origin: (f64, f64),
+) -> EngineResult<()> {
+    dispatcher.dispatch(super::wpe_input::InputEvent::Press(
+        super::wpe_input::Button::Left,
+    ))?;
+    std::thread::sleep(Duration::from_millis(15));
+    dispatcher.dispatch(super::wpe_input::InputEvent::Release(
+        super::wpe_input::Button::Left,
+    ))?;
+    dispatcher.flush()?;
+    std::thread::sleep(Duration::from_millis(30));
+    Ok(())
+}
 
 fn eval_js_string(web_view: &WebView, js: &str, budget: Duration) -> EngineResult<String> {
     let slot: Rc<RefCell<Option<Result<String, String>>>> = Rc::new(RefCell::new(None));
