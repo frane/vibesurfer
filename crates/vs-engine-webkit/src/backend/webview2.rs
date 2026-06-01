@@ -39,7 +39,7 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, COREWEBVIEW2_MOUSE_EVENT_KIND,
     COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOWN,
     COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP, COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE,
-    COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS, COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE,
+    COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE,
 };
 use webview2_com::{
     pwstr_from_str, take_pwstr, AddScriptToExecuteOnDocumentCreatedCompletedHandler,
@@ -50,7 +50,7 @@ use webview2_com::{
 use windows::core::{Interface, HSTRING, PWSTR};
 use windows::Win32::Foundation::{E_POINTER, HWND, POINT, RECT};
 use windows::Win32::Graphics::DirectComposition::{
-    DCompositionCreateDevice, IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,
+    DCompositionCreateDevice2, IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,
 };
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -454,8 +454,8 @@ impl Engine for Webview2Backend {
         //     once. The device + target + visual are stored on the page
         //     so their refcounts outlive the open() call.
         let dcomp_device: IDCompositionDevice = unsafe {
-            DCompositionCreateDevice::<_, IDCompositionDevice>(None)
-                .map_err(|e| EngineError::Other(format!("DCompositionCreateDevice: {e}")))?
+            DCompositionCreateDevice2::<_, IDCompositionDevice>(None)
+                .map_err(|e| EngineError::Other(format!("DCompositionCreateDevice2: {e}")))?
         };
         let dcomp_target: IDCompositionTarget = unsafe {
             dcomp_device
