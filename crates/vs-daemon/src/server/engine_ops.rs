@@ -297,6 +297,7 @@ pub(super) fn handle_inspect(daemon: &Daemon, req: &Request) -> String {
         "script" => render_script(daemon, &session_id, &page_id, req),
         "dom" => render_dom(daemon, &session_id, &page_id, req),
         "performance" => render_performance(daemon, &session_id, &page_id),
+        "cookie-events" => render_cookie_events(daemon, &session_id, &page_id, req),
         other => format_error(ErrorCode::UnknownKind, vec![format!("vs_inspect: {other}")]),
     }
 }
@@ -710,6 +711,45 @@ fn render_dom(daemon: &Daemon, session_id: &str, page_id: &str, req: &Request) -
         Ok(None) => format_error(ErrorCode::NotFound, vec![format!("ref={}", r.0)]),
         Err(e) => format_daemon_error(&e),
     }
+}
+
+fn render_cookie_events(daemon: &Daemon, session_id: &str, page_id: &str, req: &Request) -> String {
+    use std::fmt::Write as _;
+    let unsafe_log = req.flags.contains_key("unsafe-log");
+    let events = match daemon.inspect_cookie_events(session_id, page_id) {
+        Ok(e) => e,
+        Err(e) => return format_daemon_error(&e),
+    };
+    let mut body = String::new();
+    for ev in events {
+        let name = if !unsafe_log && is_sensitive_cookie_name(&ev.name) {
+            "***"
+        } else {
+            ev.name.as_str()
+        };
+        let mut line = format!(
+            "c_{}\t{}\t{}\t{}\t{}\t{}",
+            ev.seq,
+            ev.ts_ms,
+            ev.action.as_str(),
+            name,
+            ev.domain,
+            ev.path
+        );
+        for f in &ev.flags {
+            let _ = write!(line, "\t{f}");
+        }
+        body.push_str(&line);
+        body.push('\n');
+    }
+    body
+}
+
+fn is_sensitive_cookie_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    ["session", "auth", "token", "secret", "csrf", "access"]
+        .iter()
+        .any(|needle| lower.contains(needle))
 }
 
 fn render_performance(daemon: &Daemon, session_id: &str, page_id: &str) -> String {

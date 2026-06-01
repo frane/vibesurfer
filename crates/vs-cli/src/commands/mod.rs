@@ -515,6 +515,7 @@ fn normalize_inspect_kind(kind: &str) -> &str {
         "src" => "script",
         "d" => "dom",
         "p" => "performance",
+        "ce" => "cookie-events",
         other => other,
     }
 }

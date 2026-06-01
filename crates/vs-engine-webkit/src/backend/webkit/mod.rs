@@ -66,6 +66,12 @@ struct WkPage {
     /// `vs_inspect` gate; if false, the wire returns
     /// `! ENGINE_UNSUPPORTED <op>` instead of an empty buffer.
     inspector_installed: bool,
+    /// Cookie snapshot from the last `cookie_events` call (or `None`
+    /// until the first call). Diffed by `Engine::cookie_events` to
+    /// surface ADDed and REMOVEd entries.
+    cookie_baseline: std::cell::RefCell<Option<Vec<super::auth::CookieData>>>,
+    /// Per-page monotonic counter for cookie-event sequence numbers.
+    cookie_next_seq: std::cell::RefCell<u64>,
 }
 
 // =============================================================================
@@ -214,6 +220,8 @@ impl Engine for WkBackend {
                 _nav_delegate: delegate,
                 inspector,
                 inspector_installed,
+                cookie_baseline: std::cell::RefCell::new(None),
+                cookie_next_seq: std::cell::RefCell::new(0),
             },
         );
         Ok(handle)
@@ -441,6 +449,20 @@ impl Engine for WkBackend {
         let web_view = p.web_view.clone();
         super::common::run_performance(move |js, budget| eval_js_string(&web_view, js, budget))
     }
+
+    fn cookie_events(
+        &mut self,
+        page: PageHandle,
+    ) -> EngineResult<Vec<crate::inspector::CookieEvent>> {
+        let p = self.page_mut(page)?;
+        let web_view = p.web_view.clone();
+        let current = cookie_store::get_all_cookies(&web_view)?;
+        let previous = p.cookie_baseline.borrow().clone();
+        let mut seq = p.cookie_next_seq.borrow_mut();
+        let events = super::common::diff_cookies(previous.as_deref(), &current, &mut seq);
+        *p.cookie_baseline.borrow_mut() = Some(current);
+        Ok(events)
+    }
     fn capabilities(&self) -> EngineCapabilities {
         // Inspector console + network reflect actual install-path
         // success: a flag is `true` only if at least one currently-open
@@ -456,7 +478,7 @@ impl Engine for WkBackend {
             persists_auth: true,
             inspector_console: any_inspector,
             inspector_network: any_inspector,
-            inspector_cookie_events: false,
+            inspector_cookie_events: true,
             name: "webkit",
             version: "macOS WebKit (objc2)",
         }

@@ -48,6 +48,8 @@ struct WpePage {
     /// page (script + handlers registered without bail). Read by
     /// `Engine::capabilities()` and the daemon `vs_inspect` gate.
     inspector_installed: bool,
+    cookie_baseline: std::cell::RefCell<Option<Vec<super::auth::CookieData>>>,
+    cookie_next_seq: std::cell::RefCell<u64>,
 }
 
 // =============================================================================
@@ -196,6 +198,8 @@ impl Engine for WpeBackend {
                 web_view,
                 inspector,
                 inspector_installed,
+                cookie_baseline: std::cell::RefCell::new(None),
+                cookie_next_seq: std::cell::RefCell::new(0),
             },
         );
         Ok(handle)
@@ -433,6 +437,20 @@ impl Engine for WpeBackend {
         super::common::run_performance(move |js, budget| eval_js_string(&web_view, js, budget))
     }
 
+    fn cookie_events(
+        &mut self,
+        page: PageHandle,
+    ) -> EngineResult<Vec<crate::inspector::CookieEvent>> {
+        let p = self.page_mut(page)?;
+        let web_view = p.web_view.clone();
+        let current = wpe_cookies::get_all_cookies(&web_view)?;
+        let previous = p.cookie_baseline.borrow().clone();
+        let mut seq = p.cookie_next_seq.borrow_mut();
+        let events = super::common::diff_cookies(previous.as_deref(), &current, &mut seq);
+        *p.cookie_baseline.borrow_mut() = Some(current);
+        Ok(events)
+    }
+
     fn capabilities(&self) -> EngineCapabilities {
         let any_inspector = self.pages.values().any(|p| p.inspector_installed);
         EngineCapabilities {
@@ -442,7 +460,7 @@ impl Engine for WpeBackend {
             persists_auth: true,
             inspector_console: any_inspector,
             inspector_network: any_inspector,
-            inspector_cookie_events: false,
+            inspector_cookie_events: true,
             name: "wpe",
             version: "Linux WebKitGTK 6 (webkit6)",
         }

@@ -109,6 +109,7 @@ pub async fn wait_terminate() {
 // =============================================================================
 
 #[cfg(target_os = "macos")]
+#[allow(clippy::too_many_lines)]
 pub fn run(args: &ServeArgs) -> Result<()> {
     use objc2::MainThreadMarker;
     use objc2_app_kit::NSApplication;
@@ -248,6 +249,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
 // =============================================================================
 
 #[cfg(target_os = "linux")]
+#[allow(clippy::too_many_lines)]
 pub fn run(args: &ServeArgs) -> Result<()> {
     use vs_engine_webkit::{backend::wpe::WpeBackend, Engine, EngineRuntime};
 
@@ -366,6 +368,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
 // =============================================================================
 
 #[cfg(target_os = "windows")]
+#[allow(clippy::too_many_lines)]
 pub fn run(args: &ServeArgs) -> Result<()> {
     use vs_engine_webkit::{backend::webview2::Webview2Backend, Engine, EngineRuntime};
     use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};

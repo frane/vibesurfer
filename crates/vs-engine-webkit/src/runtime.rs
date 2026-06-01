@@ -232,6 +232,13 @@ impl EngineRuntime {
         self.dispatch(move |e| e.storage(page, scope))
     }
 
+    pub fn cookie_events(
+        &self,
+        page: PageHandle,
+    ) -> EngineResult<Vec<crate::inspector::CookieEvent>> {
+        self.dispatch(move |e| e.cookie_events(page))
+    }
+
     pub fn scripts(&self, page: PageHandle) -> EngineResult<Vec<crate::inspector::ScriptEntry>> {
         self.dispatch(move |e| e.scripts(page))
     }

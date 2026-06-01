@@ -340,6 +340,26 @@ impl Daemon {
         })
     }
 
+    pub fn inspect_cookie_events(
+        &self,
+        session_id: &str,
+        page_id: &str,
+    ) -> Result<Vec<vs_engine_webkit::inspector::CookieEvent>> {
+        let ctx = AuditCtx::new("vs_inspect", session_id)
+            .with_page(page_id)
+            .with_args(
+                "cookie-events".to_string(),
+                crate::tokens::args_hash("vs_inspect", &["cookie-events".into()]),
+            );
+        self.audit_call(ctx, |ctx| {
+            self.require_session(session_id)?;
+            let handle = self.engine_handle_for(session_id, page_id)?;
+            let events = self.inner.engine.cookie_events(handle)?;
+            ctx.after_token = Some(self.current_token(session_id, page_id)?);
+            Ok(events)
+        })
+    }
+
     pub fn inspect_scripts(
         &self,
         session_id: &str,

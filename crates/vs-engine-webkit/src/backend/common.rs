@@ -549,6 +549,78 @@ pub(crate) fn cookie_to_storage_entry(
     }
 }
 
+/// Diff the current cookie snapshot against `previous` and produce
+/// `CookieEvent`s for entries that were added or removed. Identity is
+/// `(name, domain, path)` — the same triple WebKit / WebKitGTK /
+/// WebView2 use to dedupe cookies in their stores. The `next_seq`
+/// counter is incremented for each event so per-page sequences stay
+/// monotonic across calls.
+pub(crate) fn diff_cookies(
+    previous: Option<&[crate::backend::auth::CookieData]>,
+    current: &[crate::backend::auth::CookieData],
+    next_seq: &mut u64,
+) -> Vec<crate::inspector::CookieEvent> {
+    use crate::inspector::{CookieAction, CookieEvent};
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| u64::try_from(d.as_millis()).unwrap_or(0))
+        .unwrap_or(0);
+    let mut out = Vec::new();
+    let key =
+        |c: &crate::backend::auth::CookieData| (c.name.clone(), c.domain.clone(), c.path.clone());
+    let cur_keys: std::collections::HashSet<_> = current.iter().map(key).collect();
+    let prev_keys: std::collections::HashSet<_> = previous
+        .map(|p| p.iter().map(key).collect())
+        .unwrap_or_default();
+    let entry_flags = |c: &crate::backend::auth::CookieData| {
+        let mut flags = Vec::new();
+        if c.secure {
+            flags.push("secure".to_string());
+        }
+        if c.http_only {
+            flags.push("httponly".to_string());
+        }
+        if let Some(ss) = &c.same_site {
+            flags.push(format!("samesite={}", ss.to_ascii_lowercase()));
+        }
+        if let Some(unix) = c.expires_unix {
+            flags.push(format!("expires={unix}"));
+        }
+        flags
+    };
+    for c in current {
+        if !prev_keys.contains(&key(c)) {
+            *next_seq += 1;
+            out.push(CookieEvent {
+                seq: *next_seq,
+                ts_ms: now_ms,
+                action: CookieAction::Added,
+                name: c.name.clone(),
+                domain: c.domain.clone(),
+                path: c.path.clone(),
+                flags: entry_flags(c),
+            });
+        }
+    }
+    if let Some(prev) = previous {
+        for c in prev {
+            if !cur_keys.contains(&key(c)) {
+                *next_seq += 1;
+                out.push(CookieEvent {
+                    seq: *next_seq,
+                    ts_ms: now_ms,
+                    action: CookieAction::Removed,
+                    name: c.name.clone(),
+                    domain: c.domain.clone(),
+                    path: c.path.clone(),
+                    flags: entry_flags(c),
+                });
+            }
+        }
+    }
+    out
+}
+
 /// Run `storage`: enumerate cookies / localStorage / sessionStorage /
 /// indexeddb databases for the page. The response is a `Vec<(key,
 /// value, sensitive)>` where `sensitive` flags credential-shaped keys.
