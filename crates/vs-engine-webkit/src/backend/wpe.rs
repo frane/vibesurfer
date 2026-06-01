@@ -286,13 +286,16 @@ impl Engine for WpeBackend {
     }
     fn set_viewport(&mut self, page: PageHandle, viewport: Viewport) -> EngineResult<()> {
         let p = self.page_mut(page)?;
-        // WebKitGTK doesn't expose a per-WebView viewport API the way
-        // WKWebView's setFrame does on macOS. Resize via the GTK widget
-        // size request — the WebView is itself a Widget.
-        p.web_view.set_size_request(
-            i32::try_from(viewport.width).unwrap_or(i32::MAX),
-            i32::try_from(viewport.height).unwrap_or(i32::MAX),
-        );
+        let w = i32::try_from(viewport.width).unwrap_or(i32::MAX);
+        let h = i32::try_from(viewport.height).unwrap_or(i32::MAX);
+        // The host `gtk::Window` constrains its child WebView's
+        // allocation, so resizing the WebView via `set_size_request`
+        // alone is shadowed by the (1280x800) host. Resize both: the
+        // window's default size for the surface, and the WebView's
+        // size request so its render target matches the requested
+        // viewport.
+        p.window.set_default_size(w, h);
+        p.web_view.set_size_request(w, h);
         Ok(())
     }
 
