@@ -180,12 +180,12 @@ impl Webview2Backend {
         })
     }
 
-    /// Lazily create the message-only parent HWND that hosts every
-    /// WebView2 controller. Idempotent.
-    fn parent_hwnd(&mut self) -> EngineResult<HWND> {
-        if let Some(h) = self.parent_hwnd {
-            return Ok(h);
-        }
+    /// Create a fresh message-only HWND to host this page's WebView2
+    /// composition target. DirectComposition rejects a second
+    /// `CreateTargetForHwnd` on a window that already has a target
+    /// (`DCOMPOSITION_ERROR_WINDOW_ALREADY_COMPOSED`), so every page
+    /// gets its own HWND under the same shared class.
+    fn create_host_hwnd(&mut self) -> EngineResult<HWND> {
         // SAFETY: CoInitializeEx is required by the caller per the
         // module docs; we ignore RPC_E_CHANGED_MODE (already
         // initialized as STA on this thread).
@@ -194,21 +194,18 @@ impl Webview2Backend {
         }
         // `wnd_proc` (module-level) is what makes `lpfnWndProc`
         // non-NULL — see its docstring for why a NULL there crashes
-        // the daemon with STATUS_ACCESS_VIOLATION.
+        // the daemon with STATUS_ACCESS_VIOLATION. Class registration
+        // is idempotent on Windows; duplicate `RegisterClassW` calls
+        // under the same name are harmless.
         let class_name: HSTRING = HSTRING::from("vs-webview2-host");
         let class = WNDCLASSW {
             lpfnWndProc: Some(wnd_proc),
             lpszClassName: windows::core::PCWSTR(class_name.as_ptr()),
             ..Default::default()
         };
-        // SAFETY: registering an idempotent class — duplicate
-        // registrations under the same name are harmless on Windows.
         unsafe {
             let _atom = RegisterClassW(&raw const class);
         }
-        // SAFETY: creating a message-only window (HWND_MESSAGE
-        // parent) — never visible, never gets focus, used only as a
-        // host for the WebView2 controller.
         let hwnd = unsafe {
             CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
@@ -226,6 +223,8 @@ impl Webview2Backend {
             )
         }
         .map_err(|e| EngineError::Other(format!("CreateWindowExW: {e}")))?;
+        // Remember the most recent HWND only so `Default::default()`
+        // is satisfied; per-page HWNDs live on `W2Page::parent_hwnd`.
         self.parent_hwnd = Some(hwnd);
         Ok(hwnd)
     }
@@ -386,7 +385,7 @@ fn install_inspector(web_view: &ICoreWebView2, slots: &InspectorSlots) -> bool {
 
 impl Engine for Webview2Backend {
     fn open(&mut self, url: &str) -> EngineResult<PageHandle> {
-        let parent = self.parent_hwnd()?;
+        let parent = self.create_host_hwnd()?;
 
         // 1. Environment.
         let environment: ICoreWebView2Environment = {
