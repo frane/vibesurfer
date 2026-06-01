@@ -563,8 +563,7 @@ pub(crate) fn diff_cookies(
     use crate::inspector::{CookieAction, CookieEvent};
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| u64::try_from(d.as_millis()).unwrap_or(0))
-        .unwrap_or(0);
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(0));
     let mut out = Vec::new();
     let key =
         |c: &crate::backend::auth::CookieData| (c.name.clone(), c.domain.clone(), c.path.clone());
