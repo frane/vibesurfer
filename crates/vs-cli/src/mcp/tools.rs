@@ -43,6 +43,18 @@ pub fn list() -> Vec<Value> {
             ("token", str_prop("State token from the most recent read.", true)),
             ("group", str_prop("Optional audit-group label (e.g. \"login-flow\").", false)),
         ])),
+        tool("vs_prompt_input", "Prompt the human at the local terminal for a value, then fill it into a ref. The agent that invokes this never sees the value the user types — vs reads from /dev/tty itself and ships the bytes to the daemon, which writes them into the field via the trusted prototype-setter fill path. Use --secret for passwords, TANs, credit-card numbers, and anything else the agent should not see.", obj(&[
+            ("page", str_prop("Page id.", true)),
+            ("ref", uint_prop("Ref number of the input field.", true)),
+            ("message", str_prop("Prompt text shown to the human. Include the field label and any disambiguating context (e.g. \"Flatex Kundennummer:\", \"TAN sent to your phone:\").", true)),
+            ("secret", bool_prop("Disable terminal echo while reading. Default: false. Set true for any credential.", false)),
+            ("token", str_prop("State token from the most recent read.", true)),
+            ("group", str_prop("Optional audit-group label.", false)),
+        ])),
+        tool("vs_prompt_confirm", "Block until the human at the local terminal presses Enter. Returns `ok` on confirm or aborts on EOF / Ctrl-C. Use as a human-in-loop gate before a sensitive vs_act click (e.g. \"about to transfer $5000 — Enter to confirm\"). No state change; the next call after this still uses whatever state token the agent already had.", obj(&[
+            ("page", str_prop("Page id (passed for audit context; the primitive itself does not touch the page).", true)),
+            ("message", str_prop("Prompt text shown to the human. State what they are confirming.", true)),
+        ])),
         tool("vs_move_to", "Move the cursor to (x, y) along a humanized Bezier path. Trusted NSEvent dispatch on macOS; ENGINE_UNSUPPORTED on Linux/Windows for now.", obj(&[
             ("page", str_prop("Page id.", true)),
             ("x", num_prop("Target X in CSS pixels (client space, top-left origin).", true)),

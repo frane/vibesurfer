@@ -1,6 +1,6 @@
 ---
 name: vibesurfer
-version: 0.1.8
+version: 0.1.9
 binary: vs
 description: Agent-native headless browser. 20 primitives over a Unix-socket wire protocol. Real WKWebView (macOS), WebKitGTK 6 (Linux), or WebView2 (Windows) — all three engines CI-verified by 48 integration cells per platform. Optimistic concurrency via state tokens; tree-delta wire format; durable session/page/auth state in SQLite.
 ---
@@ -28,7 +28,7 @@ Frequent flags also have short forms: `-S` (`--session`), `-j` (`--json`), `-F` 
 - Anything where you'd be parsing the rendered HTML by string matching — `vs_view` already gives you a typed accessibility tree with stable refs.
 - Headless screenshots of fixed URLs with no interaction (overkill — though you can; see `vs capture`).
 
-## The 23 primitives
+## The 25 primitives
 
 Wire form is `vs_<name>` (over the socket); CLI subcommand is `<name>` with hyphens. Each call returns a state envelope (`@<token>` success, `! CODE` error, `? warning` lines before the envelope).
 
@@ -72,6 +72,18 @@ Coordinate-addressed input. Native trusted dispatch on macOS so events carry `is
 | 21 | `vs click-at <PAGE> <X> <Y> --token=<TOK> [-M=human]` | `ca` | Trusted click at (x, y) after a humanized lead-in. |
 | 22 | `vs hover-at <PAGE> <X> <Y> [-M=human]` | `ha` | Hover at (x, y). |
 | 23 | `vs drag <PAGE> <X1> <Y1> <X2> <Y2> --token=<TOK> [-M=human]` | `dr` | Press at start, drag along a humanized path, release at end. |
+
+
+### Human-in-loop (24–25, v0.1.9+)
+
+For credentials, TANs, and any other value the agent must not see. The CLI reads from the local terminal the user is sitting at; the agent never receives the bytes.
+
+| # | CLI | Short | What |
+|---|-----|-------|------|
+| 24 | `vs prompt-input <PAGE> <REF> --message="..." [--secret] --token=<TOK>` | `pi` | Print the message to the user, read a line (echo off when `--secret`), then fill it into the ref via the daemon's trusted-fill path. The agent that issued this call sees only `ok` + new token. |
+| 25 | `vs prompt-confirm <PAGE> --message="..."` | `pc` | Block until the user presses Enter, or abort on Ctrl-C. Use as a gate before a mutating click ("about to transfer X — Enter to confirm"). |
+
+When you need credentials, never call `vs act fill` with the value. Always call `vs prompt-input <PAGE> <REF> --message="<label-from-snapshot>" --secret --token=<TOK>` and let the user type. Include enough context in the message that they know which field they're filling (the field label from the snapshot is usually enough).
 
 
 ### Search / extract (8, 10, 18)

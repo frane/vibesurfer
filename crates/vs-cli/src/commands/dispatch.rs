@@ -139,6 +139,43 @@ pub fn run(cli: &Cli) -> Result<Response> {
         }
     }
 
+    // Local prompt primitives: read from the user's tty before any
+    // wire call. The value (PromptInput) or confirmation (PromptConfirm)
+    // is collected by the CLI in the user's terminal; the agent that
+    // invoked vs prompt-input never sees the bytes.
+    match &cli.command {
+        Command::PromptInput {
+            page,
+            r,
+            message,
+            secret,
+            token,
+            group,
+        } => {
+            let value = read_user_input(message, *secret)?;
+            let mut req = vs_protocol::Request::new("vs_act")
+                .arg(page.clone())
+                .arg(r.to_string())
+                .arg("fill".to_string())
+                .arg(value)
+                .flag_value("session", session_id.clone().unwrap_or_default())
+                .flag_value("token", token.clone());
+            if let Some(g) = group {
+                req = req.flag_value("group", g.clone());
+            }
+            return client.call(&req).context("daemon call");
+        }
+        Command::PromptConfirm { page: _, message } => {
+            read_user_confirm(message)?;
+            return Ok(Response {
+                envelope: vs_protocol::Envelope::Success(vs_protocol::StateToken([0u8; 8])),
+                body: Vec::new(),
+                warnings: Vec::new(),
+            });
+        }
+        _ => {}
+    }
+
     let req = cli.command.to_request(session_id.as_deref())?;
     let resp = client.call(&req).context("daemon call")?;
 
@@ -156,4 +193,41 @@ pub fn run(cli: &Cli) -> Result<Response> {
         _ => {}
     }
     Ok(resp)
+}
+
+/// Prompt the user (via tty) and return the value. When `secret` is
+/// true, terminal echo is disabled and the input is read through
+/// `rpassword`.
+fn read_user_input(message: &str, secret: bool) -> Result<String> {
+    use std::io::Write as _;
+    let mut stderr = std::io::stderr();
+    if secret {
+        // rpassword writes its own prompt and reads from /dev/tty so
+        // it works even when stdin is redirected.
+        let v = rpassword::prompt_password(format!("{message} ")).context("read secret")?;
+        Ok(v)
+    } else {
+        write!(stderr, "{message} ").ok();
+        stderr.flush().ok();
+        let mut buf = String::new();
+        std::io::stdin().read_line(&mut buf).context("read line")?;
+        // Strip the trailing newline; leading whitespace stays.
+        Ok(buf.trim_end_matches(['\r', '\n']).to_string())
+    }
+}
+
+/// Block until the user presses Enter at the tty. EOF / Ctrl-D abort.
+fn read_user_confirm(message: &str) -> Result<()> {
+    use std::io::Write as _;
+    let mut stderr = std::io::stderr();
+    write!(stderr, "{message} [Enter to confirm, Ctrl-C to abort] ").ok();
+    stderr.flush().ok();
+    let mut buf = String::new();
+    let n = std::io::stdin()
+        .read_line(&mut buf)
+        .context("read confirm")?;
+    if n == 0 {
+        anyhow::bail!("ABORTED: stdin closed before confirm");
+    }
+    Ok(())
 }

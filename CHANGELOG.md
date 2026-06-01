@@ -8,6 +8,18 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 
 
+## [v0.1.9] - 2026-06-01
+
+### Added
+- `vs prompt-input <PAGE> <REF> --message="..." [--secret] --token=<TOK>` (short `pi`). The CLI reads a value from the local tty (`rpassword` for `--secret` so terminal echo is off), then ships it to the daemon, which fills the field via the existing trusted-prototype-setter path. The agent that issued the call never sees the bytes the user typed. Intended for any value the agent must not see: passwords, TANs, credit-card numbers, recovery phrases.
+- `vs prompt-confirm <PAGE> --message="..."` (short `pc`). Blocks until the human at the local tty presses Enter; aborts on Ctrl-C / EOF. Use as a human-in-loop gate before a sensitive mutating click.
+- MCP tools `vs_prompt_input` and `vs_prompt_confirm` with the same shape.
+- SKILL.md gets a "Human-in-loop" section under the primitives table, explicitly directing agents to call `vs prompt-input` (not `vs act fill`) whenever a value should not enter the agent context.
+
+### Compatibility
+- No wire-protocol change. Both prompt primitives are pure CLI sugar: `prompt-input` synthesizes a `vs_act fill` request after reading the value; `prompt-confirm` returns locally without any wire call.
+
+
 ## [v0.1.8] - 2026-06-01
 
 ### Added

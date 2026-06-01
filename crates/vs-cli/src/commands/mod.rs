@@ -258,6 +258,34 @@ pub enum Command {
         #[arg(long, short = 'M', default_value = "human")]
         mode: String,
     },
+    /// Prompt the user (in the terminal that ran vs) for a value, then
+    /// fill it into a ref. The value is read from tty by the CLI and
+    /// shipped to the daemon over the local socket; the agent that
+    /// invoked vs prompt-input never sees the bytes. Use `--secret`
+    /// for passwords, TANs, and other credentials (terminal echo off).
+    #[command(visible_alias = "pi")]
+    PromptInput {
+        page: String,
+        #[arg(value_name = "REF")]
+        r: u32,
+        #[arg(long)]
+        message: String,
+        #[arg(long)]
+        secret: bool,
+        #[arg(long)]
+        token: String,
+        #[arg(long)]
+        group: Option<String>,
+    },
+    /// Block until the user presses Enter in the terminal. Returns
+    /// `ok` on confirm or `! ABORTED` if the user sends EOF / Ctrl-C.
+    /// Use as a human-in-loop gate before a sensitive `vs act click`.
+    #[command(visible_alias = "pc")]
+    PromptConfirm {
+        page: String,
+        #[arg(long)]
+        message: String,
+    },
     /// Run the daemon in this process. The `vs` binary doubles as the
     /// daemon — `vs serve` is what auto-spawn re-execs when the socket
     /// is missing. SIGINT shuts down cleanly.
@@ -572,6 +600,9 @@ impl Command {
                     .flag_value("session", s)
                     .flag_value("token", token.clone())
                     .flag_value("mode", mode.clone())
+            }
+            Self::PromptInput { .. } | Self::PromptConfirm { .. } => {
+                anyhow::bail!("vs_prompt_* is local; route via main, not the wire dispatcher");
             }
             Self::Serve { .. } => {
                 anyhow::bail!("vs_serve is local; route via main, not the wire dispatcher");
