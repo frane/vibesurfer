@@ -159,10 +159,10 @@ impl Engine for WpeBackend {
         // decorated-off `gtk::Window` and presenting it gives us that
         // surface; under `xvfb` (CI) the window has no visual effect.
         let window = gtk::Window::new();
-        WindowExt::set_decorated(&window, false);
-        WindowExt::set_default_size(&window, 1280, 800);
-        WindowExt::set_child(&window, Some(&web_view));
-        WindowExt::present(&window);
+        window.set_decorated(false);
+        window.set_default_size(1280, 800);
+        window.set_child(Some(&web_view));
+        window.present();
 
         // Pin the User-Agent to a current Safari string so anti-bot
         // fingerprinters don't flag the WebKitGTK default. See the
@@ -238,7 +238,7 @@ impl Engine for WpeBackend {
             // unmapped from the display server. `close()` queues the
             // destroy; the GLib main context completes it on the next
             // iteration.
-            WindowExt::close(&p.window);
+            p.window.close();
         }
         Ok(())
     }

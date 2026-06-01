@@ -73,7 +73,7 @@ pub(crate) enum InputEvent {
 /// over libXtst, ei_device events over libei, etc.). All methods are
 /// fallible because the underlying platform call may fail at runtime
 /// (display closed, compositor revoked the session, kernel busy).
-pub(crate) trait InputDispatcher: Send {
+pub(crate) trait InputDispatcher: Send + Sync {
     /// Best-effort name for diagnostics / `EngineCapabilities`.
     fn backend_name(&self) -> &'static str;
     /// Dispatch a single event. Implementations may buffer; call
