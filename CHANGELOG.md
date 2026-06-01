@@ -13,6 +13,10 @@ All notable changes to vibesurfer are recorded here. The format follows
 ### Security
 - Sensitive `<input>` values are now masked in the accessibility tree returned by `vs view`. Up through v0.1.9 the snapshot walker's `labelFor` read `el.value` for every input regardless of type — including `<input type="password">` — so any agent that called `vs view` after `vs prompt-input --secret` saw the cleartext password the user had just typed via tty. The `--secret` flag only suppressed terminal echo; the value still landed in the next snapshot. Fixed: inputs whose `type` is `password` or `hidden`, or whose `autocomplete` is `current-password` / `new-password` / `one-time-code` / `cc-number` / `cc-csc`, now report `***` in the tree if a value is set, or the placeholder if empty.
 
+### Fixed
+- Walker and ref-lookup helpers now pierce open shadow roots. OneTrust, Cookiebot, Sourcepoint, and most web-component-based UIs put their cookie consent buttons (and other actionable elements) inside a shadow root that `document.querySelectorAll` doesn't cross. v0.1.10's `visit()` recurses into `el.shadowRoot.children` alongside `el.children`, and the new `window.__vsFindRef(r)` global helper does a shadow-piercing lookup the act / wait / layout / inspect-dom JS now use. The five existing `document.querySelector('[data-vs-ref=...]')` call sites fall back to the document query if the helper isn't installed yet, so older pages still work.
+- MCP `build_cli` arms for `vs_move_to`, `vs_click_at`, `vs_hover_at`, `vs_drag`, `vs_prompt_input`, `vs_prompt_confirm`. Without these the dispatch hit a catch-all "unknown tool" branch and Claude Desktop surfaced "Failed to call tool" with no underlying detail. `vs_prompt_input` still won't read from a tty when invoked via MCP (the `vs mcp` subprocess has none) — the pending-queue mechanism for that lands in v0.1.11. Cursor primitives work over MCP normally.
+
 
 ## [v0.1.9] - 2026-06-01
 

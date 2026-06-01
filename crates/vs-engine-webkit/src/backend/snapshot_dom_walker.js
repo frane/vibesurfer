@@ -118,6 +118,16 @@
             const node = visit(c);
             if (node) children.push(node);
         }
+        // Pierce open shadow roots. Cookie consent layers (OneTrust,
+        // Cookiebot, Sourcepoint) and most web-component-based UIs put
+        // their actual buttons inside a shadow root, which the walker
+        // above would otherwise miss entirely.
+        if (el.shadowRoot) {
+            for (const c of el.shadowRoot.children) {
+                const node = visit(c);
+                if (node) children.push(node);
+            }
+        }
         if (!role && children.length === 0) return null;
         if (!role && children.length === 1) return children[0];
         return {
@@ -142,5 +152,23 @@
         }
     }
     window.__vsRefCounter = counter;
+    // Shadow-piercing ref lookup used by act / wait / inspect helpers.
+    // Reinstalled on every walk so the closure picks up new shadow
+    // roots that appeared between snapshots.
+    window.__vsFindRef = function(r) {
+        const sel = '[data-vs-ref="' + String(r) + '"]';
+        function walk(root) {
+            const direct = root.querySelector(sel);
+            if (direct) return direct;
+            for (const el of root.querySelectorAll('*')) {
+                if (el.shadowRoot) {
+                    const found = walk(el.shadowRoot);
+                    if (found) return found;
+                }
+            }
+            return null;
+        }
+        return walk(document);
+    };
     return JSON.stringify(root);
 })()

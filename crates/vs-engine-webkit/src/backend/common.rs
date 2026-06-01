@@ -170,7 +170,7 @@ fn build_act_js(r: Ref, action: &Action) -> String {
         Action::Focus => "el.focus(); return 'ok';".into(),
     };
     format!(
-        "(function() {{ const el = document.querySelector('[data-vs-ref=\"{r}\"]'); if (!el) return 'err:not_found'; {body} }})()",
+        "(function() {{ const el = (window.__vsFindRef ? window.__vsFindRef({r}) : null) || document.querySelector('[data-vs-ref=\"{r}\"]'); if (!el) return 'err:not_found'; {body} }})()",
         r = r.0
     )
 }
@@ -218,11 +218,11 @@ fn build_wait_predicate(cond: &WaitCondition) -> String {
             q = json_string(t)
         ),
         WaitCondition::RefAppears(r) => format!(
-            "(function() {{ return document.querySelector('[data-vs-ref=\"{r}\"]') ? '1' : '0'; }})()",
+            "(function() {{ const el = (window.__vsFindRef ? window.__vsFindRef({r}) : null) || document.querySelector('[data-vs-ref=\"{r}\"]'); return el ? '1' : '0'; }})()",
             r = r.0
         ),
         WaitCondition::RefGone(r) => format!(
-            "(function() {{ return document.querySelector('[data-vs-ref=\"{r}\"]') ? '0' : '1'; }})()",
+            "(function() {{ const el = (window.__vsFindRef ? window.__vsFindRef({r}) : null) || document.querySelector('[data-vs-ref=\"{r}\"]'); return el ? '0' : '1'; }})()",
             r = r.0
         ),
         WaitCondition::NetIdle => {
@@ -336,7 +336,7 @@ where
         r#"(function() {{
             const refs = {refs_json};
             const out = refs.map(r => {{
-                const el = document.querySelector('[data-vs-ref="' + r + '"]');
+                const el = (window.__vsFindRef ? window.__vsFindRef(r) : null) || document.querySelector(`[data-vs-ref="${{r}}"]`);
                 if (!el) return {{r, found: false}};
                 const rect = el.getBoundingClientRect();
                 const cs = getComputedStyle(el);
@@ -858,7 +858,7 @@ where
     let extras_json = serde_json::to_string(extra_props).unwrap_or_else(|_| "[]".into());
     let js = format!(
         r#"(function() {{
-            var el = document.querySelector('[data-vs-ref="{r}"]');
+            var el = (window.__vsFindRef ? window.__vsFindRef({r}) : null) || document.querySelector(`[data-vs-ref="${{r}}"]`);
             if (!el) return JSON.stringify(null);
             var cs = getComputedStyle(el);
             var defaultProps = ['display','visibility','position','color','background-color','font-size','z-index'];
