@@ -16,6 +16,26 @@
         'lnk', 'btn', 'hd', 'p', 'li', 'cell', 'lbl', 'tf', 'ta', 'sel',
         'chk', 'rad', 'img', 'itm',
     ]);
+    // ARIA role → vs short-form mapping. Modern React UIs (Radix,
+    // Headless UI, Reach UI, custom) render most actionable elements
+    // as `<div role="...">` rather than semantic HTML, so the HTML-tag
+    // table above misses them entirely. v0.1.8 consults `role="..."`
+    // before falling back to the tag map.
+    const ARIA_ROLES = {
+        'button': 'btn', 'link': 'lnk',
+        'checkbox': 'chk', 'switch': 'chk', 'radio': 'rad',
+        'textbox': 'tf', 'searchbox': 'tf', 'combobox': 'sel',
+        'listbox': 'lst', 'menu': 'lst', 'tree': 'lst',
+        'option': 'itm', 'menuitem': 'itm', 'menuitemcheckbox': 'chk',
+        'menuitemradio': 'rad', 'treeitem': 'itm', 'listitem': 'itm',
+        'tab': 'itm', 'tabpanel': 'sec',
+        'dialog': 'dlg', 'alertdialog': 'dlg',
+        'navigation': 'nav', 'main': 'mn', 'banner': 'hdr', 'contentinfo': 'sec',
+        'heading': 'hd', 'img': 'img', 'figure': 'img', 'region': 'sec',
+        'article': 'art', 'form': 'frm', 'search': 'frm',
+        'table': 'tbl', 'grid': 'tbl', 'row': 'row', 'gridcell': 'cell',
+        'cell': 'cell', 'columnheader': 'hdr', 'rowheader': 'hdr',
+    };
     function inputRole(el) {
         const t = (el.getAttribute('type') || 'text').toLowerCase();
         if (t === 'submit' || t === 'button') return 'btn';
@@ -25,6 +45,20 @@
     }
     function roleFor(el) {
         if (el.tagName === 'INPUT') return inputRole(el);
+        const aria = el.getAttribute('role');
+        if (aria) {
+            const m = ARIA_ROLES[aria];
+            if (m) return m;
+        }
+        // Heuristic: any element with an explicit click handler or a
+        // tabindex that makes it focusable should expose `btn` so the
+        // agent can act on it. Catches the Radix/Headless pattern of
+        // `<div role="combobox" tabindex="0">` triggers.
+        if (el.tagName !== 'DIV' && el.tagName !== 'SPAN') {
+            return ROLES[el.tagName] || null;
+        }
+        const ti = el.getAttribute('tabindex');
+        if (ti !== null && ti !== '-1') return 'btn';
         return ROLES[el.tagName] || null;
     }
     /// Direct (non-element-child) text under `el`, joined and trimmed.

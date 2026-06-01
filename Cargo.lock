@@ -1999,6 +1999,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+ "vs-humanize",
  "vs-protocol",
  "webkit6",
  "webview2-com",

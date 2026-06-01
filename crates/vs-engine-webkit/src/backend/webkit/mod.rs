@@ -72,6 +72,11 @@ struct WkPage {
     cookie_baseline: std::cell::RefCell<Option<Vec<super::auth::CookieData>>>,
     /// Per-page monotonic counter for cookie-event sequence numbers.
     cookie_next_seq: std::cell::RefCell<u64>,
+    /// Last known mouse position in CSS pixels (client-space top-left
+    /// origin). Updated after each humanized act dispatch; used as the
+    /// path start for the next move. Initial value (0,0) is the
+    /// page-load default before the agent has moved the pointer.
+    last_mouse: std::cell::Cell<vs_humanize::Point>,
 }
 
 // =============================================================================
@@ -132,6 +137,14 @@ use super::common::{parse_snapshot, SNAPSHOT_DOM_WALKER_JS as SNAPSHOT_JS};
 // =============================================================================
 // Engine impl
 // =============================================================================
+
+/// Stable seed for a per-ref Bezier path. Same ref → same seed → same
+/// path on every act. Different refs vary so an agent clicking through
+/// a list doesn't draw an identical curve N times.
+#[allow(clippy::cast_lossless)]
+fn vs_humanize_seed_for_ref(r: vs_protocol::Ref) -> u64 {
+    (u64::from(r.0)).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xDEAD_BEEF_CAFE_BABE
+}
 
 impl Engine for WkBackend {
     fn open(&mut self, url: &str) -> EngineResult<PageHandle> {
@@ -222,6 +235,7 @@ impl Engine for WkBackend {
                 inspector_installed,
                 cookie_baseline: std::cell::RefCell::new(None),
                 cookie_next_seq: std::cell::RefCell::new(0),
+                last_mouse: std::cell::Cell::new(vs_humanize::Point { x: 0.0, y: 0.0 }),
             },
         );
         Ok(handle)
@@ -256,7 +270,22 @@ impl Engine for WkBackend {
                 id: r.0.to_string(),
             })?;
             let frame = web_view.frame();
-            return input::click_at_rect(&web_view, &window, rect, frame.size.height);
+            let start = p.last_mouse.get();
+            // Default to Human mode for now; v0.1.8 follow-up surfaces a
+            // `--mode={human,careful,robotic}` flag on the wire.
+            let mode = vs_humanize::InputMode::Human;
+            let seed = vs_humanize_seed_for_ref(r);
+            let landed = input::click_at_rect(
+                &web_view,
+                &window,
+                rect,
+                frame.size.height,
+                start,
+                mode,
+                seed,
+            )?;
+            p.last_mouse.set(landed);
+            return Ok(());
         }
 
         super::common::run_act(

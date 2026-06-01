@@ -96,18 +96,22 @@ pub(super) fn click_at_rect(
     window: &Retained<NSWindow>,
     rect: ClientRect,
     webview_height: f64,
-) -> EngineResult<()> {
-    // Center in client (top-left origin).
+    start: vs_humanize::Point,
+    mode: vs_humanize::InputMode,
+    seed: u64,
+) -> EngineResult<vs_humanize::Point> {
+    // Target center in client (top-left origin).
     let cx = rect.x + rect.width / 2.0;
     let cy = rect.y + rect.height / 2.0;
-    // Cocoa is bottom-left origin; flip against view height.
-    let location = NSPoint::new(cx, webview_height - cy);
+    let end = vs_humanize::Point { x: cx, y: cy };
     let window_number = window.windowNumber();
 
-    let make_event = |ty: NSEventType| -> EngineResult<Retained<NSEvent>> {
+    let make_event = |ty: NSEventType, p: vs_humanize::Point| -> EngineResult<Retained<NSEvent>> {
+        // Cocoa is bottom-left origin; flip against view height.
+        let loc = NSPoint::new(p.x, webview_height - p.y);
         NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
             ty,
-            location,
+            loc,
             NSEventModifierFlags::empty(),
             0.0,
             window_number,
@@ -119,12 +123,39 @@ pub(super) fn click_at_rect(
         .ok_or_else(|| EngineError::Other(format!("NSEvent::mouseEventWithType returned nil for {ty:?}")))
     };
 
-    let down = make_event(NSEventType::LeftMouseDown)?;
-    let up = make_event(NSEventType::LeftMouseUp)?;
+    // Humanized lead-in: dispatch a sequence of MouseMoved events along
+    // a Bezier path from `start` to `end`. The native dispatch keeps
+    // every event's `isTrusted = true`, so the visible mouse motion
+    // looks indistinguishable from a real cursor reaching the target
+    // before the click. `Robotic` returns an empty path; `Careful` a
+    // single move; `Human` a full Bezier with Fitts arrival timing.
+    let path = vs_humanize::mouse_path(start, end, mode, seed);
+    let mut prev_ms: u128 = 0;
+    for step in &path {
+        // `Down`/`Up`/`Click` from the humanize sequence are not
+        // dispatched here — the trusted click below sends the canonical
+        // down/up pair so click-count and pressure stay consistent. The
+        // path only contributes the move sequence.
+        if step.kind == vs_humanize::MouseStepKind::Move {
+            let mv = make_event(NSEventType::MouseMoved, step.point)?;
+            web_view.mouseMoved(&mv);
+            let now_ms = step.at.as_millis();
+            let delta = now_ms.saturating_sub(prev_ms);
+            if delta > 0 {
+                let _ = run_loop_until(
+                    || false,
+                    Duration::from_millis(u64::try_from(delta).unwrap_or(0)),
+                );
+            }
+            prev_ms = now_ms;
+        }
+    }
 
+    let down = make_event(NSEventType::LeftMouseDown, end)?;
+    let up = make_event(NSEventType::LeftMouseUp, end)?;
     web_view.mouseDown(&down);
     let _ = run_loop_until(|| false, Duration::from_millis(15));
     web_view.mouseUp(&up);
     let _ = run_loop_until(|| false, Duration::from_millis(30));
-    Ok(())
+    Ok(end)
 }
