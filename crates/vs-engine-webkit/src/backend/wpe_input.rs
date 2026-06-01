@@ -3,37 +3,41 @@
 //!
 //! WebKitGTK 6 / GTK 4 deliberately removed public synthetic-event
 //! construction (`GdkButtonEvent` and friends are ELF-hidden internal
-//! symbols, not in `gdkevents.symbols.in`, so even `unsafe` Rust can't
-//! `dlsym` them). The supported paths for injecting trusted input on
+//! symbols, not in `gdkevents.symbols.in`, so not even unsafe Rust can
+//! reach them). The supported paths for injecting trusted input on
 //! modern Linux are:
 //!
-//!  1. **XTest** — X11 protocol extension. `XTestFakeMotionEvent` /
-//!     `XTestFakeButtonEvent` go through the X server and arrive at
-//!     subscribed clients (our WebKitGTK WebView's hosting GtkWindow)
-//!     as real hardware input. Trusted in JS (`isTrusted = true`).
-//!     Works under `xvfb` (CI) and any X11 / Xwayland session.
+//!  1. **XTest** — X11 protocol extension. `FakeInput` requests go
+//!     through the X server and arrive at subscribed clients (our
+//!     WebKitGTK WebView's hosting GtkWindow) as real hardware input.
+//!     Trusted in JS (`isTrusted = true`). Works under `xvfb` (CI) and
+//!     any X11 / Xwayland session.
 //!  2. **libei** — Wayland emulated-input protocol. Negotiates a virtual
 //!     pointer via the `xdg-desktop-portal` `RemoteDesktop` interface,
 //!     then emits events that the compositor delivers as trusted
 //!     hardware input. Required for pure-Wayland sessions where the
 //!     compositor refuses to launch Xwayland.
 //!
-//! Both libraries are loaded via raw `libc::dlopen`/`dlsym` so neither
-//! becomes a build-time Cargo dependency — the binary still links on a
-//! host that has only one (or neither) installed. Runtime detection
-//! prefers libei under pure Wayland and falls back to XTest otherwise;
-//! if neither loads, `cursor_op` returns `ENGINE_UNSUPPORTED` and the
-//! agent's wire response carries `! ENGINE_UNSUPPORTED` exactly the
-//! same way it did before v0.1.11.
+//! XTest goes through the pure-Rust `x11rb` crate: no `unsafe`, no
+//! `dlopen`/`dlsym`, no libc. libei (Phase B) will route through the
+//! similarly-safe `reis` crate. Runtime detection prefers libei under
+//! pure Wayland and falls back to XTest otherwise; if neither path is
+//! reachable, `cursor_op` returns `ENGINE_UNSUPPORTED` and the wire
+//! response carries `! ENGINE_UNSUPPORTED` exactly the same way it did
+//! before v0.1.11.
 //!
 //! Coordinate space: every dispatcher accepts screen-absolute CSS px.
-//! The caller (the WebView's hosting GtkWindow) maintains the
+//! The caller (the WebView's hosting `gtk::Window`) maintains the
 //! `(window_origin_x, window_origin_y)` translation from the WebView's
 //! local rect (top-left at 0,0) into screen coordinates.
 
-use std::ffi::{c_char, c_int, c_uint, c_ulong, c_void, CString};
 use std::sync::OnceLock;
-use std::time::Duration;
+
+use x11rb::connection::Connection as _;
+use x11rb::protocol::xtest::ConnectionExt as XTestConnectionExt;
+use x11rb::protocol::xproto::Window;
+use x11rb::rust_connection::RustConnection;
+use x11rb::CURRENT_TIME;
 
 use crate::engine::{EngineError, EngineResult};
 
@@ -70,7 +74,7 @@ pub(crate) enum InputEvent {
 /// A pluggable native-input dispatcher.
 ///
 /// Implementors translate `InputEvent`s into platform calls (XTest
-/// over libXtst, ei_device events over libei, etc.). All methods are
+/// over `x11rb`, ei_device events over libei, etc.). All methods are
 /// fallible because the underlying platform call may fail at runtime
 /// (display closed, compositor revoked the session, kernel busy).
 pub(crate) trait InputDispatcher: Send + Sync {
@@ -88,14 +92,14 @@ pub(crate) trait InputDispatcher: Send + Sync {
 // =============================================================================
 
 /// Return the best available input dispatcher for the current session,
-/// or `None` if neither libei nor libXtst could be loaded.
+/// or `None` if neither libei nor XTest could be reached.
 ///
 /// Detection order:
-///   1. If `XDG_SESSION_TYPE=wayland` AND libei loads AND a portal
-///      session can be opened: return `Libei`. (Phase B — currently
-///      returns `None` from the libei probe; see comment in
-///      `LibeiDispatcher::try_new`.)
-///   2. Else if libXtst loads against an open X display: return `Xtest`.
+///   1. If `XDG_SESSION_TYPE=wayland` AND libei portal-session opens:
+///      return `Libei`. (Phase B — currently returns `None` from the
+///      libei probe; see comment in `LibeiDispatcher::try_new`.)
+///   2. Else if `RustConnection::connect` succeeds against the
+///      `DISPLAY` env: return `Xtest`.
 ///   3. Else: `None`.
 pub(crate) fn detect() -> Option<Box<dyn InputDispatcher>> {
     if is_wayland_session() {
@@ -114,8 +118,8 @@ fn is_wayland_session() -> bool {
         && std::env::var("XDG_SESSION_TYPE").as_deref() == Ok("wayland")
 }
 
-/// Cached dispatcher so repeated `cursor_op` calls reuse the X display
-/// / libei session instead of re-loading the library each call.
+/// Cached dispatcher so repeated `cursor_op` calls reuse the X
+/// connection / libei session instead of reconnecting each call.
 static DISPATCHER: OnceLock<Option<Box<dyn InputDispatcher + 'static>>> = OnceLock::new();
 
 /// Resolve (and cache) the dispatcher. Returns `Err(Unsupported)` if
@@ -138,92 +142,39 @@ pub(crate) fn dispatcher() -> EngineResult<&'static (dyn InputDispatcher + 'stat
 /// is available, or `None` if it isn't.
 #[allow(dead_code)]
 pub(crate) fn active_backend_name() -> Option<&'static str> {
-    DISPATCHER.get_or_init(detect).as_deref().map(|d| d.backend_name())
+    DISPATCHER
+        .get_or_init(detect)
+        .as_deref()
+        .map(InputDispatcher::backend_name)
 }
 
 // =============================================================================
-// XTest backend (libXtst.so.6 via dlopen)
+// XTest backend (x11rb pure-Rust X11 client)
 // =============================================================================
 
-type XOpenDisplayFn = unsafe extern "C" fn(*const c_char) -> *mut c_void;
-type XCloseDisplayFn = unsafe extern "C" fn(*mut c_void) -> c_int;
-type XFlushFn = unsafe extern "C" fn(*mut c_void) -> c_int;
-type XSyncFn = unsafe extern "C" fn(*mut c_void, c_int) -> c_int;
-type XTestFakeMotionEventFn =
-    unsafe extern "C" fn(*mut c_void, c_int, c_int, c_int, c_ulong) -> c_int;
-type XTestFakeButtonEventFn = unsafe extern "C" fn(*mut c_void, c_uint, c_int, c_ulong) -> c_int;
+/// XTest event-type codes used in the `FakeInput` request. Mirror of
+/// X11 protocol constants — `x11rb` doesn't expose them as named
+/// constants under `xtest`, only under `xproto::ButtonPressEvent` /
+/// friends, which would require pulling more types just to get u8s.
+const XT_MOTION_NOTIFY: u8 = 6;
+const XT_BUTTON_PRESS: u8 = 4;
+const XT_BUTTON_RELEASE: u8 = 5;
 
-/// XTest dispatcher. Holds dlopen handles for `libX11.so.6` and
-/// `libXtst.so.6` plus the open `Display*`. `Send` because the handles
-/// are opaque pointers without thread-local state — but in practice
-/// only the daemon's engine thread calls into it, matching the rest of
-/// `WpeBackend`.
+/// XTest dispatcher. Holds an `x11rb::rust_connection::RustConnection`
+/// to the default display plus the root window id (used as the target
+/// in `FakeInput` motion requests).
 struct XtestDispatcher {
-    // `_libx11` / `_libxtst` keep the dlopen handles alive for the
-    // lifetime of `DISPATCHER`. Closing them would invalidate the
-    // function pointers below.
-    _libx11: *mut c_void,
-    _libxtst: *mut c_void,
-    display: *mut c_void,
-    x_flush: XFlushFn,
-    x_sync: XSyncFn,
-    fake_motion: XTestFakeMotionEventFn,
-    fake_button: XTestFakeButtonEventFn,
+    conn: RustConnection,
+    root: Window,
 }
-
-// SAFETY: the wrapped pointers are opaque handles; XTest's symbols
-// re-enter the X server which serializes per-display. We only ever
-// touch the dispatcher from the engine thread, so concurrent access
-// isn't a concern in practice.
-unsafe impl Send for XtestDispatcher {}
-unsafe impl Sync for XtestDispatcher {}
 
 impl XtestDispatcher {
     fn try_new() -> Option<Self> {
-        unsafe {
-            let libx11 = libc::dlopen(c"libX11.so.6".as_ptr(), libc::RTLD_LAZY);
-            if libx11.is_null() {
-                return None;
-            }
-            let libxtst = libc::dlopen(c"libXtst.so.6".as_ptr(), libc::RTLD_LAZY);
-            if libxtst.is_null() {
-                libc::dlclose(libx11);
-                return None;
-            }
-            let open_display: XOpenDisplayFn = std::mem::transmute(load_sym(libx11, c"XOpenDisplay")?);
-            let close_display: XCloseDisplayFn =
-                std::mem::transmute(load_sym(libx11, c"XCloseDisplay")?);
-            let x_flush: XFlushFn = std::mem::transmute(load_sym(libx11, c"XFlush")?);
-            let x_sync: XSyncFn = std::mem::transmute(load_sym(libx11, c"XSync")?);
-            let fake_motion: XTestFakeMotionEventFn =
-                std::mem::transmute(load_sym(libxtst, c"XTestFakeMotionEvent")?);
-            let fake_button: XTestFakeButtonEventFn =
-                std::mem::transmute(load_sym(libxtst, c"XTestFakeButtonEvent")?);
-
-            // Default display (DISPLAY env var) — same one the
-            // hosting GtkWindow opens.
-            let display = open_display(std::ptr::null());
-            if display.is_null() {
-                libc::dlclose(libxtst);
-                libc::dlclose(libx11);
-                return None;
-            }
-            // We don't call close_display in normal operation (we hold
-            // the dispatcher for process lifetime). Keep the symbol
-            // resolved anyway so a future explicit shutdown path can
-            // use it — silences "unused".
-            let _ = close_display;
-
-            Some(Self {
-                _libx11: libx11,
-                _libxtst: libxtst,
-                display,
-                x_flush,
-                x_sync,
-                fake_motion,
-                fake_button,
-            })
-        }
+        // `connect(None)` reads `$DISPLAY`. The first roots[0] is the
+        // default screen — same convention every X11 client uses.
+        let (conn, screen_num) = RustConnection::connect(None).ok()?;
+        let root = conn.setup().roots.get(screen_num)?.root;
+        Some(Self { conn, root })
     }
 }
 
@@ -232,36 +183,45 @@ impl InputDispatcher for XtestDispatcher {
         "xtest"
     }
     fn dispatch(&self, ev: InputEvent) -> EngineResult<()> {
-        unsafe {
-            match ev {
-                InputEvent::Move(p) => {
-                    // screen_number = -1 means "use the screen the
-                    // pointer is currently on"; delay = 0.
-                    (self.fake_motion)(self.display, -1, p.x, p.y, 0);
-                }
-                InputEvent::Press(b) => {
-                    (self.fake_button)(self.display, button_code(b), 1, 0);
-                }
-                InputEvent::Release(b) => {
-                    (self.fake_button)(self.display, button_code(b), 0, 0);
-                }
-            }
-            (self.x_flush)(self.display);
-        }
+        let (type_, detail, root_x, root_y) = match ev {
+            InputEvent::Move(p) => (
+                XT_MOTION_NOTIFY,
+                0_u8,
+                clamp_i16(p.x),
+                clamp_i16(p.y),
+            ),
+            InputEvent::Press(b) => (XT_BUTTON_PRESS, button_code(b), 0, 0),
+            InputEvent::Release(b) => (XT_BUTTON_RELEASE, button_code(b), 0, 0),
+        };
+        // FakeInput is fire-and-forget: ignore the void cookie's
+        // error reply; any server-side error surfaces on the next
+        // request anyway.
+        self.conn
+            .xtest_fake_input(type_, detail, CURRENT_TIME, self.root, root_x, root_y, 0)
+            .map_err(|e| EngineError::Other(format!("xtest_fake_input: {e}")))?
+            .ignore_error();
         Ok(())
     }
     fn flush(&self) -> EngineResult<()> {
-        unsafe {
-            // XSync(false) blocks until the X server has processed
-            // every pending request — useful before reading state.
-            (self.x_sync)(self.display, 0);
-        }
+        self.conn
+            .flush()
+            .map_err(|e| EngineError::Other(format!("XFlush: {e}")))?;
+        // `sync` forces a round-trip so any deferred server error
+        // surfaces here rather than on the next `cursor_op`.
+        self.conn
+            .sync()
+            .map_err(|e| EngineError::Other(format!("XSync: {e}")))?;
         Ok(())
     }
 }
 
-fn button_code(b: Button) -> c_uint {
-    // X11 mouse button numbering: 1=left, 2=middle, 3=right.
+#[allow(clippy::cast_possible_truncation)]
+fn clamp_i16(v: i32) -> i16 {
+    v.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16
+}
+
+fn button_code(b: Button) -> u8 {
+    // X11 button numbering: 1=left, 2=middle, 3=right.
     match b {
         Button::Left => 1,
         Button::Middle => 2,
@@ -270,37 +230,29 @@ fn button_code(b: Button) -> c_uint {
 }
 
 // =============================================================================
-// libei backend (libei.so.1 via dlopen) — Phase B scaffold
+// libei backend (Phase B scaffold)
 // =============================================================================
 
-/// libei dispatcher. **Not yet implemented:** the libei protocol
-/// requires a `xdg-desktop-portal` `RemoteDesktop` session (D-Bus) to
-/// obtain the libei socket FD from the compositor, plus an event loop
-/// to handle seat / device-resumed / sequence callbacks before the
-/// first emit. That plumbing lands in v0.1.12; the v0.1.11 detection
-/// already prefers libei under pure Wayland so the upgrade flips on
-/// automatically once `try_new` starts returning `Some`.
+/// libei dispatcher. **Not yet implemented:** libei requires a
+/// `xdg-desktop-portal` `RemoteDesktop` session (D-Bus) to obtain the
+/// libei socket FD from the compositor, plus an event loop for
+/// seat / device-resumed / sequence handshakes before the first
+/// pointer event flows. That plumbing lands in v0.1.12 via the
+/// `reis` crate; the v0.1.11 detection already prefers libei under
+/// pure Wayland so the upgrade flips on automatically once `try_new`
+/// starts returning `Some`.
 ///
-/// Today `try_new` always returns `None`, so detection falls through
-/// to XTest (which on Wayland sessions means Xwayland — works wherever
-/// the user hasn't explicitly disabled Xwayland).
-struct LibeiDispatcher {
-    #[allow(dead_code)]
-    _libei: *mut c_void,
-}
-
-// SAFETY: see `XtestDispatcher` — same single-engine-thread access
-// pattern. The unsafe impls are inert until `try_new` returns Some.
-unsafe impl Send for LibeiDispatcher {}
-unsafe impl Sync for LibeiDispatcher {}
+/// Today `try_new` always returns `None`, so pure-Wayland users
+/// without Xwayland get `ENGINE_UNSUPPORTED`; users on X11 / Xwayland
+/// get XTest.
+struct LibeiDispatcher;
 
 impl LibeiDispatcher {
     fn try_new() -> Option<Self> {
-        // Phase B: implement the portal-session + libei wire here.
-        // Returning None today means pure-Wayland users without
-        // Xwayland get `ENGINE_UNSUPPORTED`; users on X11 / Xwayland
-        // get XTest. Detection scaffolding stays here so phase B is
-        // a single-file change.
+        // Phase B: open xdg-desktop-portal RemoteDesktop session via
+        // zbus, hand the returned FD to `reis::ei::Context`, register
+        // a pointer device, dispatch through it. A single-file change
+        // so detection scaffolding can stay here.
         None
     }
 }
@@ -319,69 +271,3 @@ impl InputDispatcher for LibeiDispatcher {
         Ok(())
     }
 }
-
-// =============================================================================
-// Shared dlopen helper
-// =============================================================================
-
-/// Resolve a symbol from a dlopen handle. Returns `None` if the symbol
-/// isn't exported — used during library probing so a missing function
-/// causes the whole backend to be skipped instead of crashing later.
-unsafe fn load_sym(handle: *mut c_void, name: &core::ffi::CStr) -> Option<*mut c_void> {
-    let p = unsafe { libc::dlsym(handle, name.as_ptr()) };
-    if p.is_null() {
-        None
-    } else {
-        Some(p)
-    }
-}
-
-// =============================================================================
-// Humanized path -> InputEvent sequence
-// =============================================================================
-
-/// Translate a Bezier mouse path from `vs-humanize` into an
-/// `InputEvent` sequence. The caller pumps the sequence into the
-/// dispatcher one event at a time, sleeping between events to honor
-/// the path's per-step timing — same shape as
-/// `webkit::input::move_along_path` on macOS.
-#[allow(dead_code)]
-pub(crate) fn path_to_events(
-    path: &[vs_humanize::MouseStep],
-    window_origin: (i32, i32),
-) -> Vec<(InputEvent, Duration)> {
-    let mut out = Vec::with_capacity(path.len());
-    let mut prev_ms: u128 = 0;
-    for step in path {
-        let dt = step.at.as_millis().saturating_sub(prev_ms);
-        let pt = ScreenPoint {
-            x: window_origin.0 + step.point.x.round() as i32,
-            y: window_origin.1 + step.point.y.round() as i32,
-        };
-        let ev = match step.kind {
-            vs_humanize::MouseStepKind::Move => InputEvent::Move(pt),
-            vs_humanize::MouseStepKind::Down => InputEvent::Press(Button::Left),
-            vs_humanize::MouseStepKind::Up => InputEvent::Release(Button::Left),
-            vs_humanize::MouseStepKind::Click => {
-                // `Click` from the humanize sequence is emitted as a
-                // tightly-paired Down+Up by the caller; we surface
-                // only the Down here and rely on the caller to append
-                // the Up. In practice `vs-humanize` only emits `Click`
-                // alongside an explicit Down/Up pair, so this branch
-                // is unreachable today — return Move as a safe no-op.
-                InputEvent::Move(pt)
-            }
-        };
-        out.push((ev, Duration::from_millis(u64::try_from(dt).unwrap_or(0))));
-        prev_ms = step.at.as_millis();
-    }
-    out
-}
-
-// Silence "unused" on the CString import on toolchains that fold it
-// away; the type is referenced indirectly via `c"..."` literals which
-// expand to `&CStr`, not `CString`.
-#[allow(dead_code)]
-const _: fn() = || {
-    let _: CString;
-};

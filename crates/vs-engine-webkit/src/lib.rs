@@ -19,7 +19,7 @@
 //! runtime without compile-time coupling.
 
 #![cfg_attr(
-    not(any(target_os = "macos", target_os = "windows", target_os = "linux")),
+    not(any(target_os = "macos", target_os = "windows")),
     forbid(unsafe_code)
 )]
 // On macOS we have a small surface of FFI to AppKit/WebKit. The unsafe
@@ -36,7 +36,7 @@
     )
 )]
 // unsafe-free.
-#![cfg_attr(any(target_os = "macos", target_os = "windows", target_os = "linux"), allow(unsafe_code))]
+#![cfg_attr(any(target_os = "macos", target_os = "windows"), allow(unsafe_code))]
 
 pub mod backend;
 pub mod engine;
