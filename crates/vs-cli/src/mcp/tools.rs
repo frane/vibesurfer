@@ -259,6 +259,46 @@ pub fn build_cli(name: &str, args: &Value) -> Result<Cli> {
                 rest,
             }
         }
+        "vs_move_to" => Command::MoveTo {
+            page: req_str(args, "page")?,
+            x: req_f64(args, "x")?,
+            y: req_f64(args, "y")?,
+            mode: opt_str(args, "mode").unwrap_or_else(|| "human".into()),
+        },
+        "vs_click_at" => Command::ClickAt {
+            page: req_str(args, "page")?,
+            x: req_f64(args, "x")?,
+            y: req_f64(args, "y")?,
+            token: req_str(args, "token")?,
+            mode: opt_str(args, "mode").unwrap_or_else(|| "human".into()),
+        },
+        "vs_hover_at" => Command::HoverAt {
+            page: req_str(args, "page")?,
+            x: req_f64(args, "x")?,
+            y: req_f64(args, "y")?,
+            mode: opt_str(args, "mode").unwrap_or_else(|| "human".into()),
+        },
+        "vs_drag" => Command::Drag {
+            page: req_str(args, "page")?,
+            x1: req_f64(args, "x1")?,
+            y1: req_f64(args, "y1")?,
+            x2: req_f64(args, "x2")?,
+            y2: req_f64(args, "y2")?,
+            token: req_str(args, "token")?,
+            mode: opt_str(args, "mode").unwrap_or_else(|| "human".into()),
+        },
+        "vs_prompt_input" => Command::PromptInput {
+            page: req_str(args, "page")?,
+            r: req_u32(args, "ref")?,
+            message: req_str(args, "message")?,
+            secret: opt_bool(args, "secret").unwrap_or(false),
+            token: req_str(args, "token")?,
+            group: opt_str(args, "group"),
+        },
+        "vs_prompt_confirm" => Command::PromptConfirm {
+            page: req_str(args, "page")?,
+            message: req_str(args, "message")?,
+        },
         other => return Err(anyhow!("unknown tool: {other}")),
     };
     Ok(Cli {
@@ -372,6 +412,12 @@ fn req_u32(args: &Value, key: &str) -> Result<u32> {
         .and_then(Value::as_u64)
         .and_then(|n| u32::try_from(n).ok())
         .with_context(|| format!("missing required positive integer `{key}`"))
+}
+
+fn req_f64(args: &Value, key: &str) -> Result<f64> {
+    args.get(key)
+        .and_then(Value::as_f64)
+        .ok_or_else(|| anyhow!("missing required f64 arg `{key}`"))
 }
 
 fn opt_u32(args: &Value, key: &str) -> Option<u32> {
