@@ -38,6 +38,52 @@ pub enum ActTarget {
     Mark(String),
 }
 
+/// Coordinate-addressed input operations: `vs move-to`, `vs click-at`,
+/// `vs hover-at`, `vs drag`. Native event dispatch on backends that
+/// support it (macOS today; Linux + Windows fall through to
+/// `ENGINE_UNSUPPORTED` until M7 wires GDK / CDP input).
+#[derive(Debug, Clone, Copy)]
+pub enum CursorOp {
+    /// Move the pointer to `(x, y)` without clicking.
+    MoveTo { x: f64, y: f64 },
+    /// Click at `(x, y)`. Includes a humanized lead-in from the last
+    /// known cursor position when the mode is `Human`.
+    ClickAt { x: f64, y: f64 },
+    /// Hover (mouseover) at `(x, y)`.
+    HoverAt { x: f64, y: f64 },
+    /// Press at `(x1, y1)`, drag along a humanized path to `(x2, y2)`,
+    /// release.
+    Drag { x1: f64, y1: f64, x2: f64, y2: f64 },
+}
+
+/// Input humanization mode. Wire form: `--mode={human,careful,robotic}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputMode {
+    Human,
+    Careful,
+    Robotic,
+}
+
+impl InputMode {
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "human" | "h" => Some(Self::Human),
+            "careful" | "c" => Some(Self::Careful),
+            "robotic" | "r" => Some(Self::Robotic),
+            _ => None,
+        }
+    }
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Human => "human",
+            Self::Careful => "careful",
+            Self::Robotic => "robotic",
+        }
+    }
+}
+
 /// What [`Engine::act`] does at the target.
 #[derive(Debug, Clone)]
 pub enum Action {
@@ -356,6 +402,21 @@ pub trait Engine {
         Ok(Vec::new())
     }
 
+    /// Coordinate-addressed cursor operation. Backends that don't
+    /// implement native input dispatch fall through to the default
+    /// `ENGINE_UNSUPPORTED` here; agents see `! ENGINE_UNSUPPORTED`
+    /// on the wire and can switch to ref-based `vs act` instead.
+    fn cursor_op(
+        &mut self,
+        _page: PageHandle,
+        _op: CursorOp,
+        _mode: InputMode,
+    ) -> EngineResult<()> {
+        Err(EngineError::Unsupported {
+            engine: self.capabilities().name,
+            primitive: "cursor_op",
+        })
+    }
     /// List scripts loaded by the page.
     fn scripts(&mut self, _page: PageHandle) -> EngineResult<Vec<crate::inspector::ScriptEntry>> {
         Ok(Vec::new())

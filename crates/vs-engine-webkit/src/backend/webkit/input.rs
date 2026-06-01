@@ -159,3 +159,144 @@ pub(super) fn click_at_rect(
     let _ = run_loop_until(|| false, Duration::from_millis(30));
     Ok(end)
 }
+
+/// Trusted MouseMoved sequence from `start` to `end` along a Bezier
+/// path. Used by `cursor_op` (MoveTo / HoverAt) and as the drag
+/// trajectory between mouseDown and mouseUp.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn move_along_path(
+    web_view: &Retained<WKWebView>,
+    window: &Retained<NSWindow>,
+    webview_height: f64,
+    start: vs_humanize::Point,
+    end: vs_humanize::Point,
+    mode: vs_humanize::InputMode,
+    seed: u64,
+    button_down: bool,
+) -> EngineResult<vs_humanize::Point> {
+    let window_number = window.windowNumber();
+    let make_event = |ty: NSEventType, p: vs_humanize::Point| -> EngineResult<Retained<NSEvent>> {
+        let loc = NSPoint::new(p.x, webview_height - p.y);
+        NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+            ty,
+            loc,
+            NSEventModifierFlags::empty(),
+            0.0,
+            window_number,
+            None,
+            0,
+            1,
+            if button_down { 1.0 } else { 0.0 },
+        )
+        .ok_or_else(|| EngineError::Other(format!("NSEvent::mouseEventWithType returned nil for {ty:?}")))
+    };
+    let path = vs_humanize::mouse_path(start, end, mode, seed);
+    let mut prev_ms: u128 = 0;
+    let move_type = if button_down {
+        NSEventType::LeftMouseDragged
+    } else {
+        NSEventType::MouseMoved
+    };
+    for step in &path {
+        if step.kind == vs_humanize::MouseStepKind::Move {
+            let mv = make_event(move_type, step.point)?;
+            if button_down {
+                web_view.mouseDragged(&mv);
+            } else {
+                web_view.mouseMoved(&mv);
+            }
+            let now_ms = step.at.as_millis();
+            let delta = now_ms.saturating_sub(prev_ms);
+            if delta > 0 {
+                let _ = run_loop_until(
+                    || false,
+                    Duration::from_millis(u64::try_from(delta).unwrap_or(0)),
+                );
+            }
+            prev_ms = now_ms;
+        }
+    }
+    // Final settling move so the cursor ends exactly at `end`.
+    let final_mv = make_event(move_type, end)?;
+    if button_down {
+        web_view.mouseDragged(&final_mv);
+    } else {
+        web_view.mouseMoved(&final_mv);
+    }
+    Ok(end)
+}
+
+/// Trusted click at exact coordinates. Routes through `move_along_path`
+/// for the humanized lead-in, then dispatches the down/up pair at
+/// `target`.
+pub(super) fn click_at_xy(
+    web_view: &Retained<WKWebView>,
+    window: &Retained<NSWindow>,
+    webview_height: f64,
+    start: vs_humanize::Point,
+    target: vs_humanize::Point,
+    mode: vs_humanize::InputMode,
+    seed: u64,
+) -> EngineResult<vs_humanize::Point> {
+    let landed = move_along_path(
+        web_view,
+        window,
+        webview_height,
+        start,
+        target,
+        mode,
+        seed,
+        false,
+    )?;
+    let window_number = window.windowNumber();
+    let loc = NSPoint::new(target.x, webview_height - target.y);
+    let make = |ty: NSEventType| -> EngineResult<Retained<NSEvent>> {
+        NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+            ty, loc, NSEventModifierFlags::empty(), 0.0, window_number, None, 0, 1, 1.0,
+        ).ok_or_else(|| EngineError::Other(format!("NSEvent::mouseEventWithType returned nil for {ty:?}")))
+    };
+    let down = make(NSEventType::LeftMouseDown)?;
+    web_view.mouseDown(&down);
+    let _ = run_loop_until(|| false, Duration::from_millis(15));
+    let up = make(NSEventType::LeftMouseUp)?;
+    web_view.mouseUp(&up);
+    let _ = run_loop_until(|| false, Duration::from_millis(30));
+    Ok(landed)
+}
+
+/// Trusted drag from `start` to `target`: mouseDown at `start`, a
+/// humanized dragged path to `target`, mouseUp at `target`.
+pub(super) fn drag_xy(
+    web_view: &Retained<WKWebView>,
+    window: &Retained<NSWindow>,
+    webview_height: f64,
+    start: vs_humanize::Point,
+    target: vs_humanize::Point,
+    mode: vs_humanize::InputMode,
+    seed: u64,
+) -> EngineResult<vs_humanize::Point> {
+    let window_number = window.windowNumber();
+    let make = |ty: NSEventType, p: vs_humanize::Point| -> EngineResult<Retained<NSEvent>> {
+        let loc = NSPoint::new(p.x, webview_height - p.y);
+        NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+            ty, loc, NSEventModifierFlags::empty(), 0.0, window_number, None, 0, 1, 1.0,
+        ).ok_or_else(|| EngineError::Other(format!("NSEvent::mouseEventWithType returned nil for {ty:?}")))
+    };
+    let down = make(NSEventType::LeftMouseDown, start)?;
+    web_view.mouseDown(&down);
+    let _ = run_loop_until(|| false, Duration::from_millis(15));
+    let landed = move_along_path(
+        web_view,
+        window,
+        webview_height,
+        start,
+        target,
+        mode,
+        seed,
+        true,
+    )?;
+    let up = make(NSEventType::LeftMouseUp, target)?;
+    web_view.mouseUp(&up);
+    let _ = run_loop_until(|| false, Duration::from_millis(30));
+    Ok(landed)
+}

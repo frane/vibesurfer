@@ -35,8 +35,8 @@ use objc2_web_kit::{WKNavigationDelegate, WKWebView, WKWebViewConfiguration};
 use vs_protocol::{Ref, Tree};
 
 use crate::engine::{
-    ActTarget, Action, AuthBlob, CaptureScope, Engine, EngineCapabilities, EngineError,
-    EngineResult, LayoutBox, PageHandle, Viewport, WaitCondition,
+    ActTarget, Action, AuthBlob, CaptureScope, CursorOp, Engine, EngineCapabilities, EngineError,
+    EngineResult, InputMode, LayoutBox, PageHandle, Viewport, WaitCondition,
 };
 
 use eval::{eval_js_string, run_loop_until};
@@ -144,6 +144,19 @@ use super::common::{parse_snapshot, SNAPSHOT_DOM_WALKER_JS as SNAPSHOT_JS};
 #[allow(clippy::cast_lossless)]
 fn vs_humanize_seed_for_ref(r: vs_protocol::Ref) -> u64 {
     (u64::from(r.0)).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xDEAD_BEEF_CAFE_BABE
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn vs_humanize_seed_for_xy(op: CursorOp) -> u64 {
+    let (a, b) = match op {
+        CursorOp::MoveTo { x, y } | CursorOp::HoverAt { x, y } | CursorOp::ClickAt { x, y } => {
+            (x, y)
+        }
+        CursorOp::Drag { x1, y1, .. } => (x1, y1),
+    };
+    let xi = a.to_bits();
+    let yi = b.to_bits();
+    xi.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ yi
 }
 
 impl Engine for WkBackend {
@@ -491,6 +504,52 @@ impl Engine for WkBackend {
         let events = super::common::diff_cookies(previous.as_deref(), &current, &mut seq);
         *p.cookie_baseline.borrow_mut() = Some(current);
         Ok(events)
+    }
+
+    fn cursor_op(&mut self, page: PageHandle, op: CursorOp, mode: InputMode) -> EngineResult<()> {
+        let p = self.page_mut(page)?;
+        let web_view = p.web_view.clone();
+        let window = p.window.clone();
+        let webview_height = web_view.frame().size.height;
+        let start = p.last_mouse.get();
+        let humanize_mode = match mode {
+            InputMode::Human => vs_humanize::InputMode::Human,
+            InputMode::Careful => vs_humanize::InputMode::Careful,
+            InputMode::Robotic => vs_humanize::InputMode::Robotic,
+        };
+        let seed = vs_humanize_seed_for_xy(op);
+        let landed = match op {
+            CursorOp::MoveTo { x, y } | CursorOp::HoverAt { x, y } => input::move_along_path(
+                &web_view,
+                &window,
+                webview_height,
+                start,
+                vs_humanize::Point { x, y },
+                humanize_mode,
+                seed,
+                false,
+            )?,
+            CursorOp::ClickAt { x, y } => input::click_at_xy(
+                &web_view,
+                &window,
+                webview_height,
+                start,
+                vs_humanize::Point { x, y },
+                humanize_mode,
+                seed,
+            )?,
+            CursorOp::Drag { x1, y1, x2, y2 } => input::drag_xy(
+                &web_view,
+                &window,
+                webview_height,
+                vs_humanize::Point { x: x1, y: y1 },
+                vs_humanize::Point { x: x2, y: y2 },
+                humanize_mode,
+                seed,
+            )?,
+        };
+        p.last_mouse.set(landed);
+        Ok(())
     }
     fn capabilities(&self) -> EngineCapabilities {
         // Inspector console + network reflect actual install-path
