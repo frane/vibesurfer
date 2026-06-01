@@ -34,17 +34,24 @@ use std::time::Duration;
 use vs_protocol::{Ref, Tree};
 
 use webview2_com::Microsoft::Web::WebView2::Win32::{
-    ICoreWebView2, ICoreWebView2Controller, ICoreWebView2Environment,
-    COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
+    ICoreWebView2, ICoreWebView2CompositionController, ICoreWebView2Controller,
+    ICoreWebView2Environment, ICoreWebView2Environment3,
+    COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, COREWEBVIEW2_MOUSE_EVENT_KIND,
+    COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOWN,
+    COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP, COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE,
+    COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS, COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE,
 };
 use webview2_com::{
     pwstr_from_str, take_pwstr, AddScriptToExecuteOnDocumentCreatedCompletedHandler,
-    CapturePreviewCompletedHandler, CreateCoreWebView2ControllerCompletedHandler,
+    CapturePreviewCompletedHandler, CreateCoreWebView2CompositionControllerCompletedHandler,
     CreateCoreWebView2EnvironmentCompletedHandler, ExecuteScriptCompletedHandler,
     NavigationCompletedEventHandler, WebMessageReceivedEventHandler,
 };
-use windows::core::{HSTRING, PWSTR};
-use windows::Win32::Foundation::{E_POINTER, HWND, RECT};
+use windows::core::{Interface, HSTRING, PWSTR};
+use windows::Win32::Foundation::{E_POINTER, HWND, POINT, RECT};
+use windows::Win32::Graphics::DirectComposition::{
+    DCompositionCreateDevice, IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,
+};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, RegisterClassW, HWND_MESSAGE, WINDOW_EX_STYLE, WNDCLASSW, WS_OVERLAPPED,
@@ -54,8 +61,8 @@ use crate::backend::inspector_bridge::{
     self, InspectorSlots, NetworkIngestSlot, CONSOLE_HANDLER, NETWORK_HANDLER,
 };
 use crate::engine::{
-    ActTarget, Action, AuthBlob, CaptureScope, Engine, EngineCapabilities, EngineError,
-    EngineResult, LayoutBox, PageHandle, Viewport, WaitCondition,
+    ActTarget, Action, AuthBlob, CaptureScope, CursorOp, Engine, EngineCapabilities, EngineError,
+    EngineResult, InputMode, LayoutBox, PageHandle, Viewport, WaitCondition,
 };
 // =============================================================================
 // JS payload shared with Mac / Linux backends.
@@ -69,18 +76,35 @@ use super::common::SNAPSHOT_DOM_WALKER_JS as SNAPSHOT_JS;
 
 #[allow(dead_code)]
 struct W2Page {
-    /// The COM controller drives the WebView2 in a hosted window.
-    /// Held strong so the COM object isn't released while the page is
-    /// open.
+    /// CompositionController is the v0.1.11 input-injection path:
+    /// `SendMouseInput` only exists on this variant (the regular
+    /// `ICoreWebView2Controller` has no input API). Held strong so
+    /// the COM object isn't released while the page is open.
+    comp_controller: ICoreWebView2CompositionController,
+    /// `comp_controller` cast to the regular controller interface for
+    /// `SetBounds`, `Close`, and `CoreWebView2` access. WebView2
+    /// guarantees both interfaces are implemented by the same object.
     controller: ICoreWebView2Controller,
     web_view: ICoreWebView2,
     parent_hwnd: HWND,
+    /// DirectComposition device — owns the visual tree the WebView2
+    /// renders into. `Commit` was called once at setup; we hold the
+    /// device so the visual tree stays alive for the page's lifetime.
+    _dcomp_device: IDCompositionDevice,
+    /// Composition target bound to `parent_hwnd`.
+    _dcomp_target: IDCompositionTarget,
+    /// Root visual passed to `comp_controller.SetRootVisualTarget`.
+    _dcomp_visual: IDCompositionVisual,
     inspector: InspectorSlots,
     /// True iff the inspector install path (user script + script
     /// message subscription) registered successfully for this page.
     inspector_installed: bool,
     cookie_baseline: std::cell::RefCell<Option<Vec<super::auth::CookieData>>>,
     cookie_next_seq: std::cell::RefCell<u64>,
+    /// Last known cursor position in WebView-local CSS px. Updated
+    /// after every `cursor_op` so the next humanized lead-in starts
+    /// where the previous one ended. Defaults to (0, 0) on `open`.
+    last_mouse: std::cell::Cell<vs_humanize::Point>,
 }
 
 // =============================================================================
@@ -387,13 +411,25 @@ impl Engine for Webview2Backend {
                 .map_err(|e| EngineError::Other(format!("Environment: {e}")))?
         };
 
-        // 2. Controller bound to the host HWND.
-        let controller: ICoreWebView2Controller = {
+        // 2. CompositionController bound to the host HWND. The regular
+        //    `CreateCoreWebView2Controller` returns an
+        //    `ICoreWebView2Controller` that has no input-injection API;
+        //    `CompositionController` is the variant Microsoft documents
+        //    for hosted-rendering / off-screen scenarios where the
+        //    embedder wants to drive `SendMouseInput`. Both interfaces
+        //    are implemented by the same COM object — we keep both
+        //    handles, casting at creation, so the rest of the file
+        //    keeps its `controller.SetBounds` / `controller.CoreWebView2`
+        //    pattern unchanged.
+        let env3: ICoreWebView2Environment3 = environment
+            .cast::<ICoreWebView2Environment3>()
+            .map_err(|e| EngineError::Other(format!("cast Environment3: {e}")))?;
+        let comp_controller: ICoreWebView2CompositionController = {
             let (tx, rx) = mpsc::channel();
-            let env = environment.clone();
-            CreateCoreWebView2ControllerCompletedHandler::wait_for_async_operation(
+            let env = env3.clone();
+            CreateCoreWebView2CompositionControllerCompletedHandler::wait_for_async_operation(
                 Box::new(move |handler| unsafe {
-                    env.CreateCoreWebView2Controller(parent, &handler)
+                    env.CreateCoreWebView2CompositionController(parent, &handler)
                         .map_err(webview2_com::Error::WindowsError)
                 }),
                 Box::new(move |error_code, controller| {
@@ -403,11 +439,45 @@ impl Engine for Webview2Backend {
                     Ok(())
                 }),
             )
-            .map_err(|e| EngineError::Other(format!("CreateController: {e:?}")))?;
+            .map_err(|e| EngineError::Other(format!("CreateCompositionController: {e:?}")))?;
             rx.recv()
                 .map_err(|_| EngineError::Other("Controller channel closed".into()))?
                 .map_err(|e| EngineError::Other(format!("Controller: {e}")))?
         };
+        let controller: ICoreWebView2Controller = comp_controller
+            .cast::<ICoreWebView2Controller>()
+            .map_err(|e| EngineError::Other(format!("cast Controller: {e}")))?;
+
+        // 2b. DirectComposition wiring. CompositionController needs a
+        //     root visual to render into — we create one bound to the
+        //     hidden parent HWND, hand it to the controller, and commit
+        //     once. The device + target + visual are stored on the page
+        //     so their refcounts outlive the open() call.
+        let dcomp_device: IDCompositionDevice = unsafe {
+            DCompositionCreateDevice::<_, IDCompositionDevice>(None)
+                .map_err(|e| EngineError::Other(format!("DCompositionCreateDevice: {e}")))?
+        };
+        let dcomp_target: IDCompositionTarget = unsafe {
+            dcomp_device
+                .CreateTargetForHwnd(parent, true)
+                .map_err(|e| EngineError::Other(format!("CreateTargetForHwnd: {e}")))?
+        };
+        let dcomp_visual: IDCompositionVisual = unsafe {
+            dcomp_device
+                .CreateVisual()
+                .map_err(|e| EngineError::Other(format!("CreateVisual: {e}")))?
+        };
+        unsafe {
+            dcomp_target
+                .SetRoot(&dcomp_visual)
+                .map_err(|e| EngineError::Other(format!("SetRoot: {e}")))?;
+            comp_controller
+                .SetRootVisualTarget(&dcomp_visual)
+                .map_err(|e| EngineError::Other(format!("SetRootVisualTarget: {e}")))?;
+            dcomp_device
+                .Commit()
+                .map_err(|e| EngineError::Other(format!("DComposition Commit: {e}")))?;
+        }
 
         unsafe {
             controller.SetBounds(RECT {
@@ -467,13 +537,18 @@ impl Engine for Webview2Backend {
         self.pages.insert(
             handle,
             W2Page {
+                comp_controller,
                 controller,
                 web_view,
                 parent_hwnd: parent,
+                _dcomp_device: dcomp_device,
+                _dcomp_target: dcomp_target,
+                _dcomp_visual: dcomp_visual,
                 inspector,
                 inspector_installed,
                 cookie_baseline: std::cell::RefCell::new(None),
                 cookie_next_seq: std::cell::RefCell::new(0),
+                last_mouse: std::cell::Cell::new(vs_humanize::Point { x: 0.0, y: 0.0 }),
             },
         );
         Ok(handle)
@@ -761,6 +836,59 @@ impl Engine for Webview2Backend {
         Ok(events)
     }
 
+    fn cursor_op(&mut self, page: PageHandle, op: CursorOp, mode: InputMode) -> EngineResult<()> {
+        let p = self.page_mut(page)?;
+        let comp = p.comp_controller.clone();
+        let humanize_mode = match mode {
+            InputMode::Human => vs_humanize::InputMode::Human,
+            InputMode::Careful => vs_humanize::InputMode::Careful,
+            InputMode::Robotic => vs_humanize::InputMode::Robotic,
+        };
+        let start = p.last_mouse.get();
+        let seed = wv2_humanize_seed(op);
+        let landed = match op {
+            CursorOp::MoveTo { x, y } | CursorOp::HoverAt { x, y } => wv2_move_along_path(
+                &comp,
+                start,
+                vs_humanize::Point { x, y },
+                humanize_mode,
+                seed,
+            )?,
+            CursorOp::ClickAt { x, y } => {
+                let landed = wv2_move_along_path(
+                    &comp,
+                    start,
+                    vs_humanize::Point { x, y },
+                    humanize_mode,
+                    seed,
+                )?;
+                wv2_press_release(&comp, landed)?;
+                landed
+            }
+            CursorOp::Drag { x1, y1, x2, y2 } => {
+                let start_pt = vs_humanize::Point { x: x1, y: y1 };
+                let target = vs_humanize::Point { x: x2, y: y2 };
+                let pre = wv2_move_along_path(&comp, start, start_pt, humanize_mode, seed)?;
+                wv2_send_mouse(
+                    &comp,
+                    COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOWN,
+                    pre,
+                )?;
+                std::thread::sleep(Duration::from_millis(15));
+                let landed = wv2_move_along_path(&comp, pre, target, humanize_mode, seed)?;
+                wv2_send_mouse(
+                    &comp,
+                    COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP,
+                    landed,
+                )?;
+                landed
+            }
+        };
+        p.last_mouse.set(landed);
+        Ok(())
+    }
+
+
     fn capabilities(&self) -> EngineCapabilities {
         let any_inspector = self.pages.values().any(|p| p.inspector_installed);
         EngineCapabilities {
@@ -785,6 +913,80 @@ impl Engine for Webview2Backend {
 // modules. `document.cookie` can't see or write `HttpOnly`; the
 // `ICoreWebView2CookieManager` API can. The v0.1.2 fix routes auth
 // save/load through this path on every backend.
+
+// =============================================================================
+// Cursor primitive helpers (SendMouseInput on the CompositionController)
+// =============================================================================
+
+fn wv2_humanize_seed(op: CursorOp) -> u64 {
+    let (a, b, c, d) = match op {
+        CursorOp::MoveTo { x, y } | CursorOp::HoverAt { x, y } | CursorOp::ClickAt { x, y } => {
+            (x, y, 0.0, 0.0)
+        }
+        CursorOp::Drag { x1, y1, x2, y2 } => (x1, y1, x2, y2),
+    };
+    let bits = |v: f64| v.to_bits();
+    bits(a).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ bits(b).wrapping_mul(0xBF58_476D_1CE4_E5B9)
+        ^ bits(c).wrapping_mul(0x94D0_49BB_1331_11EB)
+        ^ bits(d)
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn point_at(p: vs_humanize::Point) -> POINT {
+    POINT {
+        x: p.x.round() as i32,
+        y: p.y.round() as i32,
+    }
+}
+
+fn wv2_send_mouse(
+    comp: &ICoreWebView2CompositionController,
+    kind: COREWEBVIEW2_MOUSE_EVENT_KIND,
+    point: vs_humanize::Point,
+) -> EngineResult<()> {
+    unsafe {
+        comp.SendMouseInput(kind, COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE, 0, point_at(point))
+            .map_err(|e| EngineError::Other(format!("SendMouseInput: {e}")))
+    }
+}
+
+fn wv2_move_along_path(
+    comp: &ICoreWebView2CompositionController,
+    start: vs_humanize::Point,
+    end: vs_humanize::Point,
+    mode: vs_humanize::InputMode,
+    seed: u64,
+) -> EngineResult<vs_humanize::Point> {
+    let path = vs_humanize::mouse_path(start, end, mode, seed);
+    let mut prev_ms: u128 = 0;
+    for step in &path {
+        if step.kind != vs_humanize::MouseStepKind::Move {
+            continue;
+        }
+        wv2_send_mouse(comp, COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE, step.point)?;
+        let dt = step.at.as_millis().saturating_sub(prev_ms);
+        if dt > 0 {
+            std::thread::sleep(Duration::from_millis(u64::try_from(dt).unwrap_or(0)));
+        }
+        prev_ms = step.at.as_millis();
+    }
+    // Final settling move ending exactly at `end`.
+    wv2_send_mouse(comp, COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE, end)?;
+    Ok(end)
+}
+
+fn wv2_press_release(
+    comp: &ICoreWebView2CompositionController,
+    at: vs_humanize::Point,
+) -> EngineResult<()> {
+    wv2_send_mouse(comp, COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOWN, at)?;
+    std::thread::sleep(Duration::from_millis(15));
+    wv2_send_mouse(comp, COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP, at)?;
+    std::thread::sleep(Duration::from_millis(30));
+    Ok(())
+}
+
 mod wv2_cookies {
     use std::sync::mpsc;
 
