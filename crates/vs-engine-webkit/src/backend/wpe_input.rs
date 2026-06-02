@@ -249,7 +249,7 @@ fn button_code(b: Button) -> u8 {
 // calls are cheap D-Bus method calls.
 
 use ashpd::desktop::remote_desktop::{DeviceType, RemoteDesktop};
-use ashpd::desktop::Session;
+use ashpd::desktop::{PersistMode, Session};
 use enumflags2::BitFlags;
 use std::sync::mpsc;
 
@@ -296,12 +296,9 @@ impl LibeiDispatcher {
                     };
                     let types: BitFlags<DeviceType> = DeviceType::Pointer.into();
                     if proxy
-                        .select_devices(
-                            &session,
-                            ashpd::desktop::remote_desktop::SelectDevicesOptions::default()
-                                .types(types),
-                        )
+                        .select_devices(&session, types, None, PersistMode::DoNot)
                         .await
+                        .and_then(|r| r.response())
                         .is_err()
                     {
                         let _ = init_tx.send(None);
@@ -311,8 +308,9 @@ impl LibeiDispatcher {
                     // (one-time, per session) and blocks until the
                     // user approves or denies.
                     if proxy
-                        .start(&session, &ashpd::WindowIdentifier::None)
+                        .start(&session, None)
                         .await
+                        .and_then(|r| r.response())
                         .is_err()
                     {
                         let _ = init_tx.send(None);
