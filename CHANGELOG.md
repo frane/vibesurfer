@@ -8,6 +8,11 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 
 
+## [v0.1.13] - 2026-06-02
+
+### Changed
+- `SKILL.md` refresh — the bundled `crates/vs-cli/SKILL.md` (the one `include_str!`'d into the `vs` binary, so the version every `vs skill install` ships) was still describing v0.1.10 behaviour: claiming Linux + Windows return `ENGINE_UNSUPPORTED` for the cursor primitives, claiming "only the macOS engine routes `vs act click` through native input dispatch", and missing `vs capture --base64`, the v0.1.12 MCP pending-queue, the `vs pending` CLI, and the v0.1.11 HTML5 `DragEvent` synthesis. v0.1.13 is a docs-only release that rewrites those sections + the cross-platform capabilities table and bumps the bundled file to 0.1.13 so MCP-installed agents see accurate guidance.
+
 ## [v0.1.12] - 2026-06-02
 
 ### Added
