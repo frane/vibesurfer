@@ -8,6 +8,27 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 
 
+## [v0.1.11] - 2026-06-02
+
+### Added
+- Trusted native input dispatch on Linux + Windows for the cursor primitives (`vs move-to`, `vs click-at`, `vs hover-at`, `vs drag`). All three engines now emit `MouseEvent`s with `isTrusted = true` in JS — anti-bot pipelines (Google, Cloudflare, hCaptcha) no longer flag clicks as automated. Coverage and approach per platform:
+  - **Linux (WebKitGTK 6)** — XTest `FakeInput` over the pure-Rust `x11rb` client. Connection is opened once per process and cached in a `OnceLock`. Every WebView is now hosted in a hidden, decoration-off `gtk::Window` so the XTest event has a real `GdkSurface` on the X server to land on. Works under xvfb (CI) and any X11 / Xwayland session. Pure Wayland without Xwayland is detected and reserved for the v0.1.12 libei path (scaffold + detection live now; see `wpe_input::LibeiDispatcher::try_new`).
+  - **Windows (WebView2)** — Migrated controller creation from `CreateCoreWebView2Controller` to `CreateCoreWebView2CompositionController` so the page exposes `SendMouseInput`, the Microsoft-documented input-injection API. DirectComposition wiring (device / target / visual created with `DCompositionCreateDevice2`) backs each page; every page also gets its own message-only HWND so DirectComposition doesn't reject the second target with `DCOMPOSITION_ERROR_WINDOW_ALREADY_COMPOSED`.
+  - **macOS (WKWebView)** — unchanged; the existing NSEvent path from v0.1.8 already emitted trusted input.
+
+### Changed
+- `wpe.rs` open()/close() lifecycle: every WebView is parented to a hidden `gtk::Window` and dismissed via `Window::close()` on `Engine::close`. `set_viewport` resizes both the hidden window and the WebView's size request so responsive CSS still tests right at narrow widths.
+- `webview2.rs` per-page state grows `comp_controller`, `_dcomp_device`, `_dcomp_target`, `_dcomp_visual`, `last_mouse`; the singleton `parent_hwnd` is replaced by a per-page HWND created via the same `vs-webview2-host` class.
+
+### Dependency notes
+- Linux gains `x11rb 0.13` (pure-Rust X11 client) with the `xtest` feature. No `unsafe`, no `dlopen`, no `libc` on Linux — the `#![forbid(unsafe_code)]` policy is preserved for the Linux backend.
+- Windows gains the `Win32_Graphics_DirectComposition` feature on the `windows` crate.
+
+### Compatibility
+- No wire-protocol change. Cursor primitives that previously returned `ENGINE_UNSUPPORTED` on Linux / Windows now return the same `state_token` / success envelope they always have on macOS. Agents that branched on `! ENGINE_UNSUPPORTED` will see those branches stop firing.
+- Pure-Wayland Linux without Xwayland still returns `ENGINE_UNSUPPORTED` for the cursor primitives. Agents on those hosts fall back to ref-based `vs act` exactly as before.
+
+
 ## [v0.1.10] - 2026-06-01
 
 ### Security
