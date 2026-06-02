@@ -28,6 +28,9 @@ All notable changes to vibesurfer are recorded here. The format follows
 - No wire-protocol change. Cursor primitives that previously returned `ENGINE_UNSUPPORTED` on Linux / Windows now return the same `state_token` / success envelope they always have on macOS. Agents that branched on `! ENGINE_UNSUPPORTED` will see those branches stop firing.
 - Pure-Wayland Linux without Xwayland still returns `ENGINE_UNSUPPORTED` for the cursor primitives. Agents on those hosts fall back to ref-based `vs act` exactly as before.
 
+### Known limitations
+- `vs drag` dispatches OS-level mouse events (press → motion path → release) on every backend. That triggers the browser's pointer-event pipeline and works for the common case (canvas drag, custom mouse-tracking widgets like React-Flow's pan / pinch, slider thumbs). It does **not** synthesize HTML5 `DragEvent`s with a `DataTransfer` payload — the browser's HTML5 drag-and-drop pipeline gates on real start-drag heuristics that synthetic input doesn't always trip, so pages using HTML5 dnd (the react-dnd HTML5 backend, native `draggable="true"` + `dragstart` / `dragover` / `drop` handlers, React-Flow node sources wired to the HTML5 backend) won't observe a `drop` event from `vs drag`. Workaround until v0.1.12: dispatch the `DragEvent`s in JS via `vs inspect eval` with a constructed `DataTransfer`. Tracked for v0.1.12: a `vs drag-html5` primitive that builds + dispatches the event chain directly so the agent doesn't have to.
+
 
 ## [v0.1.10] - 2026-06-01
 
