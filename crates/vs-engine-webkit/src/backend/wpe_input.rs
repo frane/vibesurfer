@@ -231,30 +231,126 @@ fn button_code(b: Button) -> u8 {
 }
 
 // =============================================================================
-// libei backend (Phase B scaffold)
+// libei backend (xdg-desktop-portal RemoteDesktop + ashpd)
 // =============================================================================
+//
+// We don't talk to libei directly — `ashpd`'s `RemoteDesktop` portal
+// exposes `notify_pointer_motion_absolute` and `notify_pointer_button`
+// as D-Bus methods, which the compositor delivers to focused windows
+// as trusted hardware input. This is the recommended path for
+// non-interactive applications on modern Wayland sessions (GNOME 41+,
+// KDE Plasma 5.27+, sway via wlroots-virtual-pointer).
+//
+// We park a current-thread tokio runtime on a dedicated thread, run
+// the portal session there, and `block_on` for every `dispatch` call.
+// The portal session lifecycle (create_session → select_devices →
+// start) happens once at process startup; the user sees a one-time
+// permission prompt from their compositor. Successive `dispatch`
+// calls are cheap D-Bus method calls.
 
-/// libei dispatcher. **Not yet implemented:** libei requires a
-/// `xdg-desktop-portal` `RemoteDesktop` session (D-Bus) to obtain the
-/// libei socket FD from the compositor, plus an event loop for
-/// seat / device-resumed / sequence handshakes before the first
-/// pointer event flows. That plumbing lands in v0.1.12 via the
-/// `reis` crate; the v0.1.11 detection already prefers libei under
-/// pure Wayland so the upgrade flips on automatically once `try_new`
-/// starts returning `Some`.
-///
-/// Today `try_new` always returns `None`, so pure-Wayland users
-/// without Xwayland get `ENGINE_UNSUPPORTED`; users on X11 / Xwayland
-/// get XTest.
-struct LibeiDispatcher;
+use ashpd::desktop::remote_desktop::{DeviceType, RemoteDesktop};
+use ashpd::desktop::Session;
+use enumflags2::BitFlags;
+use std::sync::mpsc;
+
+/// libei (xdg-desktop-portal RemoteDesktop) dispatcher.
+struct LibeiDispatcher {
+    /// Channel into the dedicated portal-session thread. Owned
+    /// `tokio` runtime stays on that thread; we don't move it.
+    cmd_tx: mpsc::Sender<LibeiCmd>,
+}
+
+enum LibeiCmd {
+    Motion { x: f64, y: f64, ack: mpsc::Sender<EngineResult<()>> },
+    Button { code: u32, pressed: bool, ack: mpsc::Sender<EngineResult<()>> },
+}
 
 impl LibeiDispatcher {
     fn try_new() -> Option<Self> {
-        // Phase B: open xdg-desktop-portal RemoteDesktop session via
-        // zbus, hand the returned FD to `reis::ei::Context`, register
-        // a pointer device, dispatch through it. A single-file change
-        // so detection scaffolding can stay here.
-        None
+        let (cmd_tx, cmd_rx) = mpsc::channel::<LibeiCmd>();
+        let (init_tx, init_rx) = mpsc::sync_channel::<Option<()>>(1);
+        std::thread::Builder::new()
+            .name("vs-libei".to_string())
+            .spawn(move || {
+                let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                else {
+                    let _ = init_tx.send(None);
+                    return;
+                };
+                rt.block_on(async move {
+                    let proxy = match RemoteDesktop::new().await {
+                        Ok(p) => p,
+                        Err(_) => {
+                            let _ = init_tx.send(None);
+                            return;
+                        }
+                    };
+                    let session: Session<'_, RemoteDesktop> = match proxy.create_session().await {
+                        Ok(s) => s,
+                        Err(_) => {
+                            let _ = init_tx.send(None);
+                            return;
+                        }
+                    };
+                    let types: BitFlags<DeviceType> = DeviceType::Pointer.into();
+                    if proxy
+                        .select_devices(
+                            &session,
+                            ashpd::desktop::remote_desktop::SelectDevicesOptions::default()
+                                .types(types),
+                        )
+                        .await
+                        .is_err()
+                    {
+                        let _ = init_tx.send(None);
+                        return;
+                    }
+                    // `start` triggers the compositor's consent prompt
+                    // (one-time, per session) and blocks until the
+                    // user approves or denies.
+                    if proxy
+                        .start(&session, &ashpd::WindowIdentifier::None)
+                        .await
+                        .is_err()
+                    {
+                        let _ = init_tx.send(None);
+                        return;
+                    }
+                    let _ = init_tx.send(Some(()));
+                    while let Ok(cmd) = cmd_rx.recv() {
+                        match cmd {
+                            LibeiCmd::Motion { x, y, ack } => {
+                                let r = proxy
+                                    .notify_pointer_motion_absolute(&session, 0, x, y)
+                                    .await
+                                    .map_err(|e| EngineError::Other(format!("ei motion: {e}")));
+                                let _ = ack.send(r);
+                            }
+                            LibeiCmd::Button { code, pressed, ack } => {
+                                let state = if pressed {
+                                    ashpd::desktop::remote_desktop::KeyState::Pressed
+                                } else {
+                                    ashpd::desktop::remote_desktop::KeyState::Released
+                                };
+                                #[allow(clippy::cast_possible_wrap)]
+                                let r = proxy
+                                    .notify_pointer_button(&session, code as i32, state)
+                                    .await
+                                    .map_err(|e| EngineError::Other(format!("ei button: {e}")));
+                                let _ = ack.send(r);
+                            }
+                        }
+                    }
+                });
+            })
+            .ok()?;
+        // Block on the portal handshake completing. If the compositor
+        // doesn't have a RemoteDesktop portal, or the user denies,
+        // the worker thread returns None and we fall through to XTest.
+        init_rx.recv().ok().flatten()?;
+        Some(Self { cmd_tx })
     }
 }
 
@@ -262,13 +358,44 @@ impl InputDispatcher for LibeiDispatcher {
     fn backend_name(&self) -> &'static str {
         "libei"
     }
-    fn dispatch(&self, _ev: InputEvent) -> EngineResult<()> {
-        Err(EngineError::Unsupported {
-            engine: "wpe",
-            primitive: "cursor_op:libei",
-        })
+    fn dispatch(&self, ev: InputEvent) -> EngineResult<()> {
+        let (ack_tx, ack_rx) = mpsc::channel();
+        let cmd = match ev {
+            InputEvent::Move(p) => LibeiCmd::Motion {
+                x: f64::from(p.x),
+                y: f64::from(p.y),
+                ack: ack_tx,
+            },
+            InputEvent::Press(b) => LibeiCmd::Button {
+                code: linux_button_code(b),
+                pressed: true,
+                ack: ack_tx,
+            },
+            InputEvent::Release(b) => LibeiCmd::Button {
+                code: linux_button_code(b),
+                pressed: false,
+                ack: ack_tx,
+            },
+        };
+        self.cmd_tx
+            .send(cmd)
+            .map_err(|_| EngineError::Other("libei worker thread gone".into()))?;
+        ack_rx
+            .recv()
+            .map_err(|_| EngineError::Other("libei ack channel closed".into()))?
     }
     fn flush(&self) -> EngineResult<()> {
         Ok(())
+    }
+}
+
+/// Linux input subsystem button codes (`linux/input-event-codes.h`).
+/// `BTN_LEFT` = 0x110, `BTN_MIDDLE` = 0x112, `BTN_RIGHT` = 0x111. The
+/// RemoteDesktop portal expects these, not the X11 1/2/3 numbering.
+fn linux_button_code(b: Button) -> u32 {
+    match b {
+        Button::Left => 0x110,
+        Button::Middle => 0x112,
+        Button::Right => 0x111,
     }
 }
