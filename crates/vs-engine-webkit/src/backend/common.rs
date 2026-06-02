@@ -191,7 +191,7 @@ fn build_act_js(r: Ref, action: &Action) -> String {
 /// no-ops.
 pub(crate) fn build_html5_drag_js(x1: f64, y1: f64, x2: f64, y2: f64) -> String {
     format!(
-        r#"(function() {{
+        r"(function() {{
             var x1 = {x1}, y1 = {y1}, x2 = {x2}, y2 = {y2};
             var src = document.elementFromPoint(x1, y1);
             var dst = document.elementFromPoint(x2, y2);
@@ -236,7 +236,7 @@ pub(crate) fn build_html5_drag_js(x1: f64, y1: f64, x2: f64, y2: f64) -> String 
             fire(dst, 'drop', x2, y2);
             fire(src, 'dragend', x2, y2);
             return 'ok';
-        }})()"#
+        }})()"
     )
 }
 
