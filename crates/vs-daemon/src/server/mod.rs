@@ -152,6 +152,11 @@ pub fn dispatch(daemon: &Daemon, req: &Request) -> String {
         "vs_click_at" => engine_ops::handle_cursor(daemon, req, "click_at"),
         "vs_hover_at" => engine_ops::handle_cursor(daemon, req, "hover_at"),
         "vs_drag" => engine_ops::handle_cursor(daemon, req, "drag"),
+        "vs_prompt_input_queue" => engine_ops::handle_prompt_input_queue(daemon, req),
+        "vs_pending_list" => engine_ops::handle_pending_list(daemon, req),
+        "vs_pending_fulfill" => engine_ops::handle_pending_fulfill(daemon, req),
+        "vs_pending_cancel" => engine_ops::handle_pending_cancel(daemon, req),
+        "vs_pending_peek" => engine_ops::handle_pending_peek(daemon, req),
         other => format_error(
             ErrorCode::BadRequest,
             vec![format!("unknown primitive: {other}")],

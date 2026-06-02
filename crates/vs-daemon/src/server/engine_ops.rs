@@ -850,3 +850,115 @@ fn render_performance(daemon: &Daemon, session_id: &str, page_id: &str) -> Strin
     );
     format!("{}{body}", ResponseHead::ok(StateToken::ZERO).encode())
 }
+
+// =============================================================================
+// Pending-input queue ops (v0.1.12)
+// =============================================================================
+
+pub(super) fn handle_prompt_input_queue(daemon: &Daemon, req: &Request) -> String {
+    let session_id = match require_session(req) {
+        Ok(s) => s,
+        Err(msg) => return format_error(ErrorCode::BadRequest, vec![msg]),
+    };
+    let Some(page_id) = req.args.first().cloned() else {
+        return format_error(
+            ErrorCode::BadRequest,
+            vec!["vs_prompt_input_queue: missing page id".into()],
+        );
+    };
+    let Some(r_str) = req.args.get(1) else {
+        return format_error(
+            ErrorCode::BadRequest,
+            vec!["vs_prompt_input_queue: missing ref".into()],
+        );
+    };
+    let Ok(r) = r_str.parse::<Ref>() else {
+        return format_error(ErrorCode::BadRequest, vec!["vs_prompt_input_queue: bad ref".into()]);
+    };
+    let Some(message) = req.args.get(2).cloned() else {
+        return format_error(
+            ErrorCode::BadRequest,
+            vec!["vs_prompt_input_queue: missing message".into()],
+        );
+    };
+    let Some(token) = flag_value(req, "token") else {
+        return format_error(ErrorCode::BadRequest, vec!["vs_prompt_input_queue: missing --token".into()]);
+    };
+    let secret = req.flags.contains_key("secret");
+    let group = flag_value(req, "group");
+    // Timeout default 5 min; overridable via --timeout-ms.
+    let timeout = match flag_value(req, "timeout-ms").and_then(|s| s.parse::<u64>().ok()) {
+        Some(ms) => std::time::Duration::from_millis(ms),
+        None => std::time::Duration::from_secs(300),
+    };
+    match daemon.prompt_input_queue(&session_id, &page_id, r, message, secret, token, group, timeout) {
+        Ok(after) => ResponseHead::ok(after).encode(),
+        Err(e) => format_daemon_error(&e),
+    }
+}
+
+pub(super) fn handle_pending_list(daemon: &Daemon, _req: &Request) -> String {
+    use std::fmt::Write as _;
+    let entries = daemon.pending_list();
+    let mut body = String::new();
+    for e in entries {
+        // Wire form: `<id>\t<page>\t<ref>\t<secret 0|1>\t<message>`.
+        let _ = writeln!(
+            body,
+            "{}\t{}\t{}\t{}\t{}",
+            e.id, e.page, e.r, u8::from(e.secret), e.message
+        );
+    }
+    format!("{}{}", ResponseHead::ok(StateToken([0u8; 8])).encode(), body)
+}
+
+pub(super) fn handle_pending_fulfill(daemon: &Daemon, req: &Request) -> String {
+    let Some(id) = req.args.first().cloned() else {
+        return format_error(
+            ErrorCode::BadRequest,
+            vec!["vs_pending_fulfill: missing id".into()],
+        );
+    };
+    let Some(value) = req.args.get(1).cloned() else {
+        return format_error(
+            ErrorCode::BadRequest,
+            vec!["vs_pending_fulfill: missing value".into()],
+        );
+    };
+    if daemon.pending_fulfill(&id, value) {
+        ResponseHead::ok(StateToken([0u8; 8])).encode()
+    } else {
+        format_error(ErrorCode::NotFound, vec![format!("pending entry {id} not found")])
+    }
+}
+
+pub(super) fn handle_pending_cancel(daemon: &Daemon, req: &Request) -> String {
+    let Some(id) = req.args.first().cloned() else {
+        return format_error(
+            ErrorCode::BadRequest,
+            vec!["vs_pending_cancel: missing id".into()],
+        );
+    };
+    if daemon.pending_cancel(&id) {
+        ResponseHead::ok(StateToken([0u8; 8])).encode()
+    } else {
+        format_error(ErrorCode::NotFound, vec![format!("pending entry {id} not found")])
+    }
+}
+
+pub(super) fn handle_pending_peek(daemon: &Daemon, req: &Request) -> String {
+    let Some(id) = req.args.first().cloned() else {
+        return format_error(
+            ErrorCode::BadRequest,
+            vec!["vs_pending_peek: missing id".into()],
+        );
+    };
+    match daemon.pending_peek(&id) {
+        Some(e) => format!(
+            "{}{}\t{}\t{}\t{}\t{}\n",
+            ResponseHead::ok(StateToken([0u8; 8])).encode(),
+            e.id, e.page, e.r, u8::from(e.secret), e.message
+        ),
+        None => format_error(ErrorCode::NotFound, vec![format!("pending entry {id} not found")]),
+    }
+}

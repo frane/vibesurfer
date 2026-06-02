@@ -173,6 +173,9 @@ pub fn run(cli: &Cli) -> Result<Response> {
                 warnings: Vec::new(),
             });
         }
+        Command::Pending { sub: super::PendingSub::Fulfill { id } } => {
+            return run_pending_fulfill(&mut client, id.clone());
+        }
         _ => {}
     }
 
@@ -248,4 +251,38 @@ fn read_user_confirm(message: &str) -> Result<()> {
         anyhow::bail!("ABORTED: stdin closed before confirm");
     }
     Ok(())
+}
+
+/// Resolve a pending entry id, read the value from the local tty,
+/// and send the fulfill RPC. Extracted from `run()` so clippy's
+/// `too_many_lines` lint stays satisfied.
+fn run_pending_fulfill(client: &mut Client, id: Option<String>) -> Result<Response> {
+    let resolved_id = if let Some(s) = id {
+        s
+    } else {
+        let list_req = vs_protocol::Request::new("vs_pending_list");
+        let list_resp = client.call(&list_req).context("pending list")?;
+        let ids: Vec<&str> = list_resp
+            .body
+            .iter()
+            .filter_map(|l| l.split('\t').next())
+            .filter(|s| !s.is_empty())
+            .collect();
+        match ids.len() {
+            0 => anyhow::bail!("no pending entries to fulfill"),
+            1 => ids[0].to_string(),
+            n => anyhow::bail!("{n} pending entries — pass an explicit id"),
+        }
+    };
+    let peek_req = vs_protocol::Request::new("vs_pending_peek").arg(resolved_id.clone());
+    let peek_resp = client.call(&peek_req).context("pending peek")?;
+    let line = peek_resp.body.first().cloned().unwrap_or_default();
+    let parts: Vec<&str> = line.split('\t').collect();
+    let message = parts.get(4).copied().unwrap_or("value");
+    let secret = parts.get(3).copied() == Some("1");
+    let value = read_user_input(message, secret)?;
+    let req = vs_protocol::Request::new("vs_pending_fulfill")
+        .arg(resolved_id)
+        .arg(value);
+    client.call(&req).context("daemon call")
 }

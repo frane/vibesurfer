@@ -289,13 +289,17 @@ pub fn build_cli(name: &str, args: &Value) -> Result<Cli> {
             token: req_str(args, "token")?,
             mode: opt_str(args, "mode").unwrap_or_else(|| "human".into()),
         },
-        "vs_prompt_input" => Command::PromptInput {
+        "vs_prompt_input" => Command::PromptInputQueue {
+            // MCP route: enqueues a pending entry, blocks until the
+            // local user runs `vs pending fulfill`. The MCP subprocess
+            // has no tty so the local-CLI tty path won't work.
             page: req_str(args, "page")?,
             r: req_u32(args, "ref")?,
             message: req_str(args, "message")?,
             secret: opt_bool(args, "secret").unwrap_or(false),
             token: req_str(args, "token")?,
             group: opt_str(args, "group"),
+            timeout_ms: opt_u32(args, "timeout_ms").map_or(300_000, u64::from),
         },
         "vs_prompt_confirm" => Command::PromptConfirm {
             page: req_str(args, "page")?,

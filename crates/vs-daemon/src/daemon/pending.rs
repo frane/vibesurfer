@@ -49,6 +49,7 @@ pub struct PendingQueue {
 }
 
 impl PendingQueue {
+    #[must_use]
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
     }
@@ -56,6 +57,7 @@ impl PendingQueue {
     /// Enqueue a pending entry and block on the condvar until it is
     /// fulfilled, cancelled, or `timeout` elapses. Returns the value
     /// on fulfillment, `None` on cancellation or timeout.
+    #[must_use]
     pub fn enqueue_and_wait(&self, entry: PendingEntry, timeout: Duration) -> Option<String> {
         let id = entry.id.clone();
         {
@@ -68,44 +70,39 @@ impl PendingQueue {
             let remaining = match deadline.checked_duration_since(Instant::now()) {
                 Some(r) if !r.is_zero() => r,
                 _ => {
-                    // Timed out — drop the entry so list doesn't keep
-                    // surfacing a dead prompt.
                     guard.remove(&id);
                     return None;
                 }
             };
             let (g, _) = self.cv.wait_timeout(guard, remaining).unwrap();
             guard = g;
-            if let Some((_, state)) = guard.get(&id) {
-                match state.clone() {
-                    FulfillState::Pending => continue,
-                    FulfillState::Fulfilled(v) => {
-                        guard.remove(&id);
-                        return Some(v);
-                    }
-                    FulfillState::Cancelled => {
-                        guard.remove(&id);
-                        return None;
-                    }
+            let (_, state) = guard.get(&id)?;
+            match state.clone() {
+                FulfillState::Pending => {}
+                FulfillState::Fulfilled(v) => {
+                    guard.remove(&id);
+                    return Some(v);
                 }
-            } else {
-                return None;
+                FulfillState::Cancelled => {
+                    guard.remove(&id);
+                    return None;
+                }
             }
         }
     }
 
     /// Snapshot of all pending entries (id + user-visible metadata).
-    /// Used by `vs pending list`.
+    #[must_use]
     pub fn list(&self) -> Vec<PendingEntry> {
         let guard = self.inner.lock().unwrap();
         guard
             .values()
-            .filter_map(|(e, s)| matches!(s, FulfillState::Pending).then(|| e.clone()))
+            .filter(|(_, s)| matches!(s, FulfillState::Pending))
+            .map(|(e, _)| e.clone())
             .collect()
     }
 
-    /// Fulfill a pending entry with `value`. Returns `true` if the
-    /// entry was found and was still pending.
+    /// Fulfill a pending entry with `value`. Wakes parked waiters.
     pub fn fulfill(&self, id: &str, value: String) -> bool {
         let mut guard = self.inner.lock().unwrap();
         if let Some((_, state)) = guard.get_mut(id) {
@@ -118,8 +115,7 @@ impl PendingQueue {
         false
     }
 
-    /// Cancel a pending entry. Same semantics as `fulfill` minus the
-    /// value.
+    /// Cancel a pending entry.
     pub fn cancel(&self, id: &str) -> bool {
         let mut guard = self.inner.lock().unwrap();
         if let Some((_, state)) = guard.get_mut(id) {
@@ -132,30 +128,31 @@ impl PendingQueue {
         false
     }
 
-    /// Read a pending entry's metadata. Used by `vs pending fulfill`
-    /// CLI to display the prompt text before reading user input.
+    /// Peek a pending entry (no removal).
+    #[must_use]
     pub fn peek(&self, id: &str) -> Option<PendingEntry> {
         let guard = self.inner.lock().unwrap();
         guard
             .get(id)
-            .and_then(|(e, s)| matches!(s, FulfillState::Pending).then(|| e.clone()))
+            .filter(|(_, s)| matches!(s, FulfillState::Pending))
+            .map(|(e, _)| e.clone())
     }
 }
 
-/// Generate a short, URL-safe id for a new entry. We don't need
-/// cryptographic strength — collisions inside one daemon process are
-/// vanishingly unlikely with 64 random bits.
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::SystemTime;
+
+static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Generate a short, URL-safe id for a new entry.
+#[must_use]
 pub fn new_id() -> String {
-    use std::time::SystemTime;
     let nanos = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    // Mix nanos with a process-local atomic so two enqueues in the
-    // same nanosecond don't collide.
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
+        .map_or(0_u128, |d| d.as_nanos());
     let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let combined = ((nanos as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)) ^ counter;
+    #[allow(clippy::cast_possible_truncation)]
+    let n = nanos as u64;
+    let combined = n.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ counter;
     format!("p_{combined:016x}")
 }

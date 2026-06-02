@@ -292,6 +292,37 @@ pub enum Command {
         #[arg(long)]
         message: String,
     },
+    /// Wire-only `vs_prompt_input` variant — does NOT read from the
+    /// local tty. Used by `vs mcp` so an MCP-driven agent can enqueue
+    /// a prompt the local user fulfills via `vs pending fulfill`.
+    /// Hidden from `--help`: only the MCP server wires it.
+    #[command(hide = true)]
+    PromptInputQueue {
+        page: String,
+        r: u32,
+        #[arg(long)]
+        message: String,
+        #[arg(long, default_value_t = false)]
+        secret: bool,
+        #[arg(long)]
+        token: String,
+        #[arg(long)]
+        group: Option<String>,
+        /// Timeout in milliseconds before the daemon gives up waiting
+        /// for `vs pending fulfill <id>` (default 5 min).
+        #[arg(long = "timeout-ms", default_value_t = 300_000)]
+        timeout_ms: u64,
+    },
+    /// List / fulfill / cancel pending `vs_prompt_input` entries
+    /// queued by an MCP-driven agent. Use `vs pending list` to see
+    /// what's waiting, `vs pending fulfill <id>` to type the value at
+    /// the local tty (`--secret` hides echo), `vs pending cancel <id>`
+    /// to abort.
+    #[command(visible_alias = "pe")]
+    Pending {
+        #[command(subcommand)]
+        sub: PendingSub,
+    },
     /// Run the daemon in this process. The `vs` binary doubles as the
     /// daemon — `vs serve` is what auto-spawn re-execs when the socket
     /// is missing. SIGINT shuts down cleanly.
@@ -307,6 +338,30 @@ pub enum Command {
     /// exposed as one MCP tool. Wire to Claude Desktop / Claude Code
     /// by configuring `vs mcp` as the server command.
     Mcp,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PendingSub {
+    /// Show all pending `vs_prompt_input` entries the daemon is
+    /// holding for fulfillment.
+    #[command(visible_alias = "ls")]
+    List,
+    /// Read the value the daemon is waiting for from the local tty
+    /// (rpassword for `--secret`) and send it to the pending entry.
+    /// On success the parked `vs_prompt_input` call returns and the
+    /// agent observes the filled field.
+    #[command(visible_alias = "f")]
+    Fulfill {
+        /// Pending entry id (from `vs pending list`). If omitted and
+        /// there is exactly one pending entry, that one is used.
+        id: Option<String>,
+    },
+    /// Cancel a pending entry. The parked `vs_prompt_input` call
+    /// returns `BadRequest "cancelled"`.
+    #[command(visible_alias = "c")]
+    Cancel {
+        id: String,
+    },
 }
 
 impl Command {
@@ -613,6 +668,33 @@ impl Command {
             Self::PromptInput { .. } | Self::PromptConfirm { .. } => {
                 anyhow::bail!("vs_prompt_* is local; route via main, not the wire dispatcher");
             }
+            Self::PromptInputQueue {
+                page, r, message, secret, token, group, timeout_ms,
+            } => {
+                let s = require_session(session_id)?;
+                let mut req = Request::new("vs_prompt_input_queue")
+                    .arg(page.clone())
+                    .arg(r.to_string())
+                    .arg(message.clone())
+                    .flag_value("session", s)
+                    .flag_value("token", token.clone())
+                    .flag_value("timeout-ms", timeout_ms.to_string());
+                if *secret { req = req.flag("secret"); }
+                if let Some(g) = group { req = req.flag_value("group", g.clone()); }
+                req
+            }
+            Self::Pending { sub } => match sub {
+                PendingSub::List => Request::new("vs_pending_list"),
+                PendingSub::Fulfill { id } => {
+                    // CLI side reads value from tty before sending the
+                    // wire request — handled in dispatch.rs. Here we
+                    // just stub a placeholder; dispatch overrides the
+                    // value arg with what the user typed.
+                    let id_v = id.clone().unwrap_or_default();
+                    Request::new("vs_pending_fulfill").arg(id_v).arg(String::new())
+                }
+                PendingSub::Cancel { id } => Request::new("vs_pending_cancel").arg(id.clone()),
+            },
             Self::Serve { .. } => {
                 anyhow::bail!("vs_serve is local; route via main, not the wire dispatcher");
             }
@@ -627,7 +709,7 @@ impl Command {
     pub fn needs_session(&self) -> bool {
         !matches!(
             self,
-            Self::SessionOpen { .. } | Self::Status | Self::Serve { .. } | Self::Mcp
+            Self::SessionOpen { .. } | Self::Status | Self::Serve { .. } | Self::Mcp | Self::Pending { .. }
         )
     }
 }

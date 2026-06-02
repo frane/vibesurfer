@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use uuid::Uuid;
-use vs_engine_webkit::EngineRuntime;
+use vs_engine_webkit::{ActTarget as EngineActTarget, Action as EngineAction, EngineRuntime};
 use vs_protocol::{Node, StateToken};
 use vs_store::{ActionInsert, Store};
 
@@ -68,6 +68,7 @@ pub(crate) struct Inner {
     pub(crate) captures_dir: std::path::PathBuf,
     pub(crate) skills_dir: std::path::PathBuf,
     pub(crate) master_key: Option<vs_store::MasterKey>,
+    pub(crate) pending: Arc<pending::PendingQueue>,
 }
 
 impl Daemon {
@@ -83,6 +84,7 @@ impl Daemon {
                 captures_dir: std::env::temp_dir().join("vibesurfer-captures"),
                 skills_dir: std::path::PathBuf::from("./skills"),
                 master_key: None,
+                pending: pending::PendingQueue::new(),
             }),
         }
     }
@@ -489,6 +491,86 @@ impl Daemon {
             .iter()
             .map(|p| crate::dispatch::DispatchOutcome::from_wire(crate::server::dispatch(self, p)))
             .collect()
+    }
+
+    // ----- Pending-input queue (v0.1.12 MCP path for vs_prompt_input) -----
+
+    /// Enqueue a `vs_prompt_input` request and block (up to `timeout`)
+    /// until the user fulfills it via `vs pending fulfill`. On
+    /// fulfillment, runs the actual `vs_act fill` and returns the new
+    /// state token. On cancel / timeout returns `BadRequest`.
+    #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+    pub fn prompt_input_queue(
+        &self,
+        session_id: &str,
+        page_id: &str,
+        r: vs_protocol::Ref,
+        message: String,
+        secret: bool,
+        token: String,
+        group: Option<String>,
+        timeout: std::time::Duration,
+    ) -> Result<StateToken> {
+        let id = pending::new_id();
+        let entry = pending::PendingEntry {
+            id: id.clone(),
+            page: page_id.to_string(),
+            r: r.0,
+            message,
+            secret,
+            token: token.clone(),
+            group: group.clone(),
+            created_at: std::time::Instant::now(),
+        };
+        let value = self
+            .inner
+            .pending
+            .enqueue_and_wait(entry, timeout)
+            .ok_or_else(|| {
+                DaemonError::BadRequest(format!(
+                    "vs_prompt_input: pending entry {id} cancelled or timed out"
+                ))
+            })?;
+        let before_token: StateToken = token.parse().map_err(|_| {
+            DaemonError::BadRequest("vs_prompt_input: bad token (not hex 16)".into())
+        })?;
+        let call = ActCall {
+            session_id: session_id.to_string(),
+            page_id: page_id.to_string(),
+            target: EngineActTarget::Ref(r),
+            action: EngineAction::Fill { value },
+            before_token,
+            args_hash: crate::tokens::args_hash("vs_act", &["fill".into(), "***".into()]),
+            args_redacted: "fill ***".into(),
+            group_label: group,
+        };
+        let resp = self.act(call)?;
+        Ok(resp.token)
+    }
+
+    /// Snapshot of currently-pending prompt entries.
+    #[must_use]
+    pub fn pending_list(&self) -> Vec<pending::PendingEntry> {
+        self.inner.pending.list()
+    }
+
+    /// Fulfill a pending prompt entry with `value`. Returns `true` if
+    /// the id was a live pending entry.
+    #[must_use]
+    pub fn pending_fulfill(&self, id: &str, value: String) -> bool {
+        self.inner.pending.fulfill(id, value)
+    }
+
+    /// Cancel a pending prompt entry. Returns `true` if found.
+    #[must_use]
+    pub fn pending_cancel(&self, id: &str) -> bool {
+        self.inner.pending.cancel(id)
+    }
+
+    /// Peek a pending entry (read without removing).
+    #[must_use]
+    pub fn pending_peek(&self, id: &str) -> Option<pending::PendingEntry> {
+        self.inner.pending.peek(id)
     }
 }
 
