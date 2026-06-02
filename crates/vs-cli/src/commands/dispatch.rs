@@ -177,7 +177,7 @@ pub fn run(cli: &Cli) -> Result<Response> {
     }
 
     let req = cli.command.to_request(session_id.as_deref())?;
-    let resp = client.call(&req).context("daemon call")?;
+    let mut resp = client.call(&req).context("daemon call")?;
 
     match (&cli.command, &resp.envelope) {
         (Command::SessionOpen { .. }, vs_protocol::Envelope::Success(_)) => {
@@ -188,6 +188,24 @@ pub fn run(cli: &Cli) -> Result<Response> {
         (Command::SessionClose, vs_protocol::Envelope::Success(_)) => {
             if let Some(key) = caller_key.as_ref() {
                 let _ = mark_caller_closed(&paths, key);
+            }
+        }
+        (
+            Command::Capture { base64: true, .. },
+            vs_protocol::Envelope::Success(_),
+        ) => {
+            // The body's first line is the on-disk PNG path. Read it
+            // and replace the body with `base64=<bytes>` plus the
+            // original `path=…` so MCP-driven agents can ship pixels
+            // inline without losing the disk artifact.
+            if let Some(path_line) = resp.body.first().cloned() {
+                let path = std::path::PathBuf::from(path_line.trim());
+                if let Ok(bytes) = std::fs::read(&path) {
+                    use base64::engine::general_purpose::STANDARD;
+                    use base64::Engine as _;
+                    let b64 = STANDARD.encode(&bytes);
+                    resp.body = vec![format!("base64={b64}"), format!("path={}", path.display())];
+                }
             }
         }
         _ => {}

@@ -18,6 +18,7 @@ mod engine_ops;
 mod lifecycle;
 mod page_ops;
 mod store_ops;
+pub mod pending;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

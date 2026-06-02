@@ -159,12 +159,18 @@ pub enum Command {
     /// 16. Capture a screenshot. Defaults to viewport scope; pass a
     ///     ref to capture an element, or `--full-page`.
     #[command(visible_alias = "cap")]
+    #[command(visible_alias = "cap")]
     Capture {
         page: String,
         #[arg(value_name = "REF")]
         r: Option<u32>,
         #[arg(long)]
         full_page: bool,
+        /// Emit the PNG bytes as base64 on the response body (instead
+        /// of just a path on disk). Lets MCP-driven agents see the
+        /// screenshot inline; the on-disk PNG is still written.
+        #[arg(long, alias = "b64")]
+        base64: bool,
     },
     /// 17. Set the viewport. `spec` is a preset (e.g. `mobile`,
     ///     `desktop`) or `WxH` (e.g. `1280x720`).
@@ -468,7 +474,10 @@ impl Command {
                 }
                 req
             }
-            Self::Capture { page, r, full_page } => {
+            Self::Capture { page, r, full_page, base64: _ } => {
+                // `base64` is a CLI-side post-process — the daemon
+                // still returns the on-disk path; dispatch.rs reads
+                // the PNG and base64-encodes it before printing.
                 let s = require_session(session_id)?;
                 let mut req = Request::new("vs_capture")
                     .arg(page.clone())

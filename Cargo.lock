@@ -103,6 +103,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
+name = "base64"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
 name = "bit-set"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1973,9 +1979,10 @@ checksum = "03c2856837ef78f57382f06b2b8563a2f512f7185d732608fd9176cb3b8edf0e"
 
 [[package]]
 name = "vibesurfer"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "anyhow",
+ "base64",
  "clap",
  "glib",
  "gtk4",
@@ -2000,7 +2007,7 @@ dependencies = [
 
 [[package]]
 name = "vs-daemon"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "anyhow",
  "blake3",
@@ -2019,7 +2026,7 @@ dependencies = [
 
 [[package]]
 name = "vs-engine-webkit"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "block2",
  "glib",
@@ -2041,11 +2048,11 @@ dependencies = [
 
 [[package]]
 name = "vs-humanize"
-version = "0.1.11"
+version = "0.1.12"
 
 [[package]]
 name = "vs-protocol"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "proptest",
  "thiserror",
@@ -2053,7 +2060,7 @@ dependencies = [
 
 [[package]]
 name = "vs-store"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "apple-native-keyring-store",
  "keyring-core",
