@@ -8,6 +8,16 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 
 
+## [v0.1.12] - 2026-06-02
+
+### Added
+- `vs capture --base64` (alias `--b64`): reads the on-disk PNG and emits `base64=<bytes>\npath=…` on the response body. Off by default for CLI users so they still get a path; ON by default for the MCP path so Claude Desktop / Codex agents can show the pixels inline.
+- MCP pending-queue for `vs_prompt_input`. The `vs mcp` subprocess has no tty, so the v0.1.11 local prompt path didn't work for agents on Claude Desktop / Codex. Now the agent's `vs_prompt_input` call enqueues a pending entry on the daemon and parks on a Condvar; the local user runs `vs pending fulfill` interactively, types the value at the local tty (rpassword for `--secret`), and the agent's tool call returns with the new state token. Wire: `vs_prompt_input_queue`, `vs_pending_list`, `vs_pending_peek`, `vs_pending_fulfill`, `vs_pending_cancel`. CLI: `vs pending list/fulfill/cancel` (alias `pe`).
+
+### Changed
+- `vs_prompt_input` (MCP-only) route now goes through the pending queue instead of trying to read tty in the subprocess. Local `vs prompt-input` is unchanged.
+
+
 ## [v0.1.11] - 2026-06-02
 
 ### Added
