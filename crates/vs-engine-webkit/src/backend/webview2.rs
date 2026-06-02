@@ -880,6 +880,12 @@ impl Engine for Webview2Backend {
                     COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP,
                     landed,
                 )?;
+                // After the OS-level drag, fire the HTML5 DragEvent
+                // chain in JS so react-dnd / React-Flow HTML5 targets
+                // observe the drop.
+                let html5_js = super::common::build_html5_drag_js(x1, y1, x2, y2);
+                let web_view = p.web_view.clone();
+                let _ = execute_script(&web_view, &html5_js);
                 landed
             }
         };

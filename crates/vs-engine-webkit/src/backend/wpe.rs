@@ -531,6 +531,12 @@ impl Engine for WpeBackend {
                     super::wpe_input::Button::Left,
                 ))?;
                 dispatcher.flush()?;
+                // After the OS-level drag, fire the HTML5 DragEvent
+                // chain in JS so react-dnd / React-Flow HTML5 targets
+                // observe the drop.
+                let html5_js = super::common::build_html5_drag_js(x1, y1, x2, y2);
+                let web_view = p.web_view.clone();
+                let _ = eval_js_string(&web_view, &html5_js, Duration::from_secs(2));
                 landed
             }
         };

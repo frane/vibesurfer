@@ -15,6 +15,7 @@ All notable changes to vibesurfer are recorded here. The format follows
   - **Linux (WebKitGTK 6)** — XTest `FakeInput` over the pure-Rust `x11rb` client. Connection is opened once per process and cached in a `OnceLock`. Every WebView is now hosted in a hidden, decoration-off `gtk::Window` so the XTest event has a real `GdkSurface` on the X server to land on. Works under xvfb (CI) and any X11 / Xwayland session. Pure Wayland without Xwayland is detected and reserved for the v0.1.12 libei path (scaffold + detection live now; see `wpe_input::LibeiDispatcher::try_new`).
   - **Windows (WebView2)** — Migrated controller creation from `CreateCoreWebView2Controller` to `CreateCoreWebView2CompositionController` so the page exposes `SendMouseInput`, the Microsoft-documented input-injection API. DirectComposition wiring (device / target / visual created with `DCompositionCreateDevice2`) backs each page; every page also gets its own message-only HWND so DirectComposition doesn't reject the second target with `DCOMPOSITION_ERROR_WINDOW_ALREADY_COMPOSED`.
   - **macOS (WKWebView)** — unchanged; the existing NSEvent path from v0.1.8 already emitted trusted input.
+- `vs drag` now also synthesizes the HTML5 drag-and-drop event chain (`dragstart` → `dragenter` → `dragover` → `drop` → `dragend`) with a real `DataTransfer` after the OS-level mouse path completes. The browser's HTML5 dnd pipeline only fires from real hardware input, so without this synthetic OS-level drag events (NSEvent / XTest / SendMouseInput) would miss `react-dnd`'s HTML5 backend, native `draggable="true"` widgets, and React-Flow nodes wired to HTML5 dnd. Targets that don't care (canvas drag, React-Flow pan, sliders) absorb the extra events as no-ops. If the source handler `preventDefault`s `dragstart`, the rest of the chain is skipped so we don't fabricate a drop the page opted out of.
 
 ### Changed
 - `wpe.rs` open()/close() lifecycle: every WebView is parented to a hidden `gtk::Window` and dismissed via `Window::close()` on `Engine::close`. `set_viewport` resizes both the hidden window and the WebView's size request so responsive CSS still tests right at narrow widths.
@@ -27,10 +28,6 @@ All notable changes to vibesurfer are recorded here. The format follows
 ### Compatibility
 - No wire-protocol change. Cursor primitives that previously returned `ENGINE_UNSUPPORTED` on Linux / Windows now return the same `state_token` / success envelope they always have on macOS. Agents that branched on `! ENGINE_UNSUPPORTED` will see those branches stop firing.
 - Pure-Wayland Linux without Xwayland still returns `ENGINE_UNSUPPORTED` for the cursor primitives. Agents on those hosts fall back to ref-based `vs act` exactly as before.
-
-### Known limitations
-- `vs drag` dispatches OS-level mouse events (press → motion path → release) on every backend. That triggers the browser's pointer-event pipeline and works for the common case (canvas drag, custom mouse-tracking widgets like React-Flow's pan / pinch, slider thumbs). It does **not** synthesize HTML5 `DragEvent`s with a `DataTransfer` payload — the browser's HTML5 drag-and-drop pipeline gates on real start-drag heuristics that synthetic input doesn't always trip, so pages using HTML5 dnd (the react-dnd HTML5 backend, native `draggable="true"` + `dragstart` / `dragover` / `drop` handlers, React-Flow node sources wired to the HTML5 backend) won't observe a `drop` event from `vs drag`. Workaround until v0.1.12: dispatch the `DragEvent`s in JS via `vs inspect eval` with a constructed `DataTransfer`. Tracked for v0.1.12: a `vs drag-html5` primitive that builds + dispatches the event chain directly so the agent doesn't have to.
-
 
 ## [v0.1.10] - 2026-06-01
 

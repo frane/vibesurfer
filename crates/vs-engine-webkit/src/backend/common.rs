@@ -175,6 +175,72 @@ fn build_act_js(r: Ref, action: &Action) -> String {
     )
 }
 
+/// Build the JS that fires the HTML5 drag-and-drop event chain for
+/// `vs drag`. Browsers' HTML5 dnd pipeline (dragstart → dragenter →
+/// dragover → drop → dragend on a `DataTransfer`) only fires on real
+/// hardware input — synthetic OS-level mouse events don't trip the
+/// browser's start-drag heuristic. To cover the
+/// `react-dnd` HTML5 backend, native `draggable="true"` widgets, and
+/// React-Flow nodes wired to HTML5 dnd, every backend's `CursorOp::Drag`
+/// runs the OS-level mouse path (for canvas / mouse-tracking widgets)
+/// AND evaluates this JS afterwards. The JS dispatches untrusted but
+/// otherwise well-formed `DragEvent`s with a `DataTransfer` attached;
+/// library code (react-dnd, react-flow, native handlers) responds to
+/// them the same as a real drag because none of them gate on
+/// `isTrusted`. A page with no drag handlers absorbs the events as
+/// no-ops.
+pub(crate) fn build_html5_drag_js(x1: f64, y1: f64, x2: f64, y2: f64) -> String {
+    format!(
+        r#"(function() {{
+            var x1 = {x1}, y1 = {y1}, x2 = {x2}, y2 = {y2};
+            var src = document.elementFromPoint(x1, y1);
+            var dst = document.elementFromPoint(x2, y2);
+            if (!src) return 'err:no_source';
+            if (!dst) return 'err:no_target';
+            var dt;
+            try {{ dt = new DataTransfer(); }} catch (e) {{ return 'err:no_datatransfer'; }}
+            function fire(target, type, cx, cy) {{
+                var ev;
+                try {{
+                    ev = new DragEvent(type, {{
+                        bubbles: true, cancelable: true, composed: true,
+                        dataTransfer: dt, clientX: cx, clientY: cy, view: window,
+                    }});
+                }} catch (_) {{
+                    // Fallback for engines where DragEvent's `dataTransfer`
+                    // option is unsupported: build a MouseEvent and pin
+                    // `dataTransfer` afterwards. Most modern WebKit /
+                    // WebView2 builds support the constructor option, so
+                    // this branch rarely runs.
+                    ev = new MouseEvent(type, {{
+                        bubbles: true, cancelable: true, composed: true,
+                        clientX: cx, clientY: cy, view: window,
+                    }});
+                    try {{ Object.defineProperty(ev, 'dataTransfer', {{ value: dt }}); }} catch (_) {{}}
+                }}
+                target.dispatchEvent(ev);
+                return ev;
+            }}
+            var startEv = fire(src, 'dragstart', x1, y1);
+            // If the dragstart handler preventDefault'd, the page is
+            // refusing to start a drag — report success but skip the
+            // rest of the chain so we don't fabricate a drop the page
+            // explicitly opted out of.
+            if (startEv.defaultPrevented) return 'ok:cancelled';
+            fire(dst, 'dragenter', x2, y2);
+            fire(dst, 'dragover', x2, y2);
+            // HTML5 spec: `drop` only fires if a handler preventDefault'd
+            // the preceding `dragover`. We dispatch it unconditionally —
+            // most react-dnd / react-flow targets call preventDefault on
+            // dragover; for the rest the drop is a no-op event.
+            fire(dst, 'drop', x2, y2);
+            fire(src, 'dragend', x2, y2);
+            return 'ok';
+        }})()"#
+    )
+}
+
+
 pub(crate) fn run_act<F>(eval: F, target: &ActTarget, action: &Action) -> EngineResult<()>
 where
     F: Fn(&str, Duration) -> EngineResult<String>,

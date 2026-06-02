@@ -538,15 +538,23 @@ impl Engine for WkBackend {
                 humanize_mode,
                 seed,
             )?,
-            CursorOp::Drag { x1, y1, x2, y2 } => input::drag_xy(
-                &web_view,
-                &window,
-                webview_height,
-                vs_humanize::Point { x: x1, y: y1 },
-                vs_humanize::Point { x: x2, y: y2 },
-                humanize_mode,
-                seed,
-            )?,
+            CursorOp::Drag { x1, y1, x2, y2 } => {
+                let landed = input::drag_xy(
+                    &web_view,
+                    &window,
+                    webview_height,
+                    vs_humanize::Point { x: x1, y: y1 },
+                    vs_humanize::Point { x: x2, y: y2 },
+                    humanize_mode,
+                    seed,
+                )?;
+                // After the OS-level drag completes, fire the HTML5
+                // DragEvent chain via JS so react-dnd / native HTML5 /
+                // React-Flow HTML5-backend targets observe the drop.
+                let html5_js = super::common::build_html5_drag_js(x1, y1, x2, y2);
+                let _ = eval_js_string(&web_view, &html5_js, std::time::Duration::from_secs(2));
+                landed
+            }
         };
         p.last_mouse.set(landed);
         Ok(())
