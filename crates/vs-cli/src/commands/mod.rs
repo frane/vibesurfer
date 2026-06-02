@@ -159,7 +159,6 @@ pub enum Command {
     /// 16. Capture a screenshot. Defaults to viewport scope; pass a
     ///     ref to capture an element, or `--full-page`.
     #[command(visible_alias = "cap")]
-    #[command(visible_alias = "cap")]
     Capture {
         page: String,
         #[arg(value_name = "REF")]
