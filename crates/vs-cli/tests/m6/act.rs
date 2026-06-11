@@ -35,7 +35,12 @@ fn cell_act_click() {
             &format!("--token={token}"),
         ]);
         assert_ok("click submit", &r_click);
-        let _ = ctx.vs(&["wait", &page, "stable", "--timeout=2000"]);
+        // The click triggers a real navigation to the dashboard.
+        // `stable` (DOM-quiet) can fire on the still-current login
+        // page before the navigation commits — observed as a flake on
+        // macOS CI — so wait for the dashboard's own text instead.
+        let r_wait = ctx.vs(&["wait", &page, "text", "Dashboard", "--timeout=5000"]);
+        assert_ok("wait for dashboard text", &r_wait);
         let title = eval_js(&ctx, &page, "document.title");
         assert!(
             title.contains("Dashboard"),
