@@ -73,14 +73,11 @@ docker run --rm --privileged -it \
 Useful for `cargo build` / single-test iteration. xvfb is set up via
 `xvfb-run` per command.
 
-## Windows (CI runner, manual verification)
+## Windows (CI runner)
 
-The WebView2 backend is currently `pending-manual-verification` —
-code + tests + CI workflow all exist, but the milestone-closing
-verification needs hands on a Windows machine. The CI workflow at
-`.github/workflows/m6-windows.yml` (lands in the next M6 transaction)
-runs the suite on `windows-latest`; the resulting artefact is the
-manual sign-off the maintainer applies after reviewing the run.
+The WebView2 backend implements every primitive and is verified in CI:
+the `windows` job in `.github/workflows/engine-tests.yml` runs the M6
+cell suite against real WebView2 on `windows-latest` on every push.
 
 `cargo test --test m6 -- --test-threads=1` is the same invocation;
 the Win32 message loop has the same single-threaded constraint as

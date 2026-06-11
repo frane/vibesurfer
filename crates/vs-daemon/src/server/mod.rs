@@ -60,6 +60,17 @@ pub async fn serve(
             );
             e
         })?;
+    // Only the owning user may talk to the daemon: the socket carries
+    // cookie/auth state and drives a real browser. The parent dir is
+    // 0700 (see `Paths::ensure_root`), but the socket itself may live
+    // under a custom path, so tighten it explicitly too.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        if let Err(e) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)) {
+            tracing::warn!(?path, error = %e, "could not restrict socket permissions");
+        }
+    }
     tracing::info!(?path, "vibesurfer daemon listening");
 
     let daemon = Arc::new(daemon);

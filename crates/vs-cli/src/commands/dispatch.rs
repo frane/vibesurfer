@@ -173,7 +173,9 @@ pub fn run(cli: &Cli) -> Result<Response> {
                 warnings: Vec::new(),
             });
         }
-        Command::Pending { sub: super::PendingSub::Fulfill { id } } => {
+        Command::Pending {
+            sub: super::PendingSub::Fulfill { id },
+        } => {
             return run_pending_fulfill(&mut client, id.clone());
         }
         _ => {}
@@ -193,10 +195,7 @@ pub fn run(cli: &Cli) -> Result<Response> {
                 let _ = mark_caller_closed(&paths, key);
             }
         }
-        (
-            Command::Capture { base64: true, .. },
-            vs_protocol::Envelope::Success(_),
-        ) => {
+        (Command::Capture { base64: true, .. }, vs_protocol::Envelope::Success(_)) => {
             // The body's first line is the on-disk PNG path. Read it
             // and replace the body with `base64=<bytes>` plus the
             // original `path=…` so MCP-driven agents can ship pixels

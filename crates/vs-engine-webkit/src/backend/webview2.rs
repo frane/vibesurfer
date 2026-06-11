@@ -37,9 +37,8 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2, ICoreWebView2CompositionController, ICoreWebView2Controller,
     ICoreWebView2Environment, ICoreWebView2Environment3,
     COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, COREWEBVIEW2_MOUSE_EVENT_KIND,
-    COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOWN,
-    COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP, COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE,
-    COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE,
+    COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOWN, COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP,
+    COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE, COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE,
 };
 use webview2_com::{
     pwstr_from_str, take_pwstr, AddScriptToExecuteOnDocumentCreatedCompletedHandler,
@@ -384,6 +383,11 @@ fn install_inspector(web_view: &ICoreWebView2, slots: &InspectorSlots) -> bool {
 // =============================================================================
 
 impl Engine for Webview2Backend {
+    // The COM bring-up (environment → composition controller →
+    // DirectComposition device/target/visual → settings → navigate)
+    // is one linear sequence; splitting it would just scatter the
+    // handle plumbing.
+    #[allow(clippy::too_many_lines)]
     fn open(&mut self, url: &str) -> EngineResult<PageHandle> {
         let parent = self.create_host_hwnd()?;
 
@@ -868,18 +872,10 @@ impl Engine for Webview2Backend {
                 let start_pt = vs_humanize::Point { x: x1, y: y1 };
                 let target = vs_humanize::Point { x: x2, y: y2 };
                 let pre = wv2_move_along_path(&comp, start, start_pt, humanize_mode, seed)?;
-                wv2_send_mouse(
-                    &comp,
-                    COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOWN,
-                    pre,
-                )?;
+                wv2_send_mouse(&comp, COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOWN, pre)?;
                 std::thread::sleep(Duration::from_millis(15));
                 let landed = wv2_move_along_path(&comp, pre, target, humanize_mode, seed)?;
-                wv2_send_mouse(
-                    &comp,
-                    COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP,
-                    landed,
-                )?;
+                wv2_send_mouse(&comp, COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP, landed)?;
                 // After the OS-level drag, fire the HTML5 DragEvent
                 // chain in JS so react-dnd / React-Flow HTML5 targets
                 // observe the drop.
@@ -892,7 +888,6 @@ impl Engine for Webview2Backend {
         p.last_mouse.set(landed);
         Ok(())
     }
-
 
     fn capabilities(&self) -> EngineCapabilities {
         let any_inspector = self.pages.values().any(|p| p.inspector_installed);
@@ -951,8 +946,13 @@ fn wv2_send_mouse(
     point: vs_humanize::Point,
 ) -> EngineResult<()> {
     unsafe {
-        comp.SendMouseInput(kind, COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE, 0, point_at(point))
-            .map_err(|e| EngineError::Other(format!("SendMouseInput: {e}")))
+        comp.SendMouseInput(
+            kind,
+            COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE,
+            0,
+            point_at(point),
+        )
+        .map_err(|e| EngineError::Other(format!("SendMouseInput: {e}")))
     }
 }
 

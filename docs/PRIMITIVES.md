@@ -1,8 +1,16 @@
 # Primitives
 
-The 19 primitives are the entire protocol surface. This document is the
-per-primitive specification — request shape, response shape, side
-effects, and audit row contents.
+This document is the per-primitive specification for the 19 **core**
+primitives (the M0–M5 protocol surface) — request shape, response
+shape, side effects, and audit row contents. Later releases added
+more wire primitives that are not yet specified here: `vs_inspect`
+(v0.1.8, eleven subcommands), the four cursor primitives `vs_move_to`
+/ `vs_click_at` / `vs_hover_at` / `vs_drag` (v0.1.8+),
+`vs_prompt_input` (v0.1.9), and the pending queue
+`vs_prompt_input_queue` / `vs_pending_*` (v0.1.12) — 29 wire
+primitives in total as of v0.1.13. Until they're specified here, the
+bundled [SKILL.md](../crates/vs-cli/SKILL.md) and the
+[CHANGELOG](../CHANGELOG.md) are their reference.
 
 For the wire envelope, framing, tree format, delta ops, and state-token
 mechanics, see [`PROTOCOL.md`](PROTOCOL.md). For role/error/warning code
@@ -160,10 +168,11 @@ counterpart to `vs_view`'s structural data.
 
 Persistent, encrypted auth state.
 
-- `save <name>`: dump cookies, localStorage, sessionStorage,
-  IndexedDB metadata; encrypt with AES-256-GCM via `ring` (key from
-  the OS keyring, falling back to `~/.vibesurfer/key`); insert into
-  `auth_blobs`.
+- `save <name>`: dump cookies (via the host-side cookie store, so
+  HttpOnly cookies are included), localStorage, and sessionStorage —
+  IndexedDB is **not** captured; encrypt with AES-256-GCM via `ring`
+  (key from the OS keyring, falling back to `~/.vibesurfer/key`);
+  insert into `auth_blobs`.
 - `load <name>`: reverse. Emits `? auth_loaded <name>` and forces a
   fresh `vs_view` baseline on next call.
 - `list`: enumerate stored blob names.

@@ -111,7 +111,7 @@ Modern anti-bot systems (Cloudflare, hCaptcha, reCAPTCHA, DataDome) gate first o
 
 On macOS, `vs act click` and the coordinate primitives (`vs click-at`, `vs hover-at`, `vs move-to`, `vs drag`) route through native `NSEvent` mouseDown / mouseUp / mouseMoved on `WKWebView`. Each event carries `isTrusted = true` in JS, same as a real cursor click. The Bezier-pathed lead-in dispatched before every click reproduces Fitts-law arrival timing (digraph-derived control points, optional overshoot) so the visible motion looks like a human reaching the target rather than a teleport.
 
-Linux (WebKitGTK) and Windows (WebView2) currently still dispatch clicks through injected JS, so `isTrusted` is `false` on those engines. The next release (v0.1.9) wires native input on both: GDK `gdk_display_put_event` for WebKitGTK, CDP `Input.dispatchMouseEvent` for WebView2.
+Since v0.1.11 the coordinate primitives are native on Linux and Windows too: XTest over `x11rb` on WebKitGTK (X11 / Xwayland; pure Wayland falls back to `ENGINE_UNSUPPORTED`), `SendMouseInput` on a WebView2 composition controller on Windows. All three engines emit `isTrusted = true` for cursor-primitive clicks. Ref-based `vs act click` is trusted on macOS only — on Linux and Windows it still dispatches through injected JS (`isTrusted = false`); use the coordinate primitives there for fingerprint-sensitive sites.
 
 The walker also honors ARIA `role="..."` (Radix UI, Headless UI, Reach UI, every custom-div-as-button pattern), plus a tabindex heuristic for focusable divs/spans without a role. Modern React UIs surface as actionable refs without coordinate workarounds.
 
@@ -179,7 +179,7 @@ Every primitive call writes one row to a SQLite audit log before it returns. `vs
 
 The daemon auto-spawns on first call. State, captures, and downloads live under `~/.vibesurfer/`. The transport is an AF_UNIX socket on Unix (`~/.vibesurfer/daemon.sock`) and a Windows named pipe on Windows; either way, the CLI handles the difference.
 
-20 primitives total, each documented in [docs/PRIMITIVES.md](docs/PRIMITIVES.md). The full wire format with every sigil and edge case is in [docs/PROTOCOL.md](docs/PROTOCOL.md). The per-platform per-primitive verification matrix is in [docs/REALITY_CHECK.md](docs/REALITY_CHECK.md).
+29 wire primitives total — the 19 core primitives are specified in [docs/PRIMITIVES.md](docs/PRIMITIVES.md); the later additions (`vs_inspect`, the four cursor primitives, prompt-input, and the pending queue) are documented in the bundled [SKILL.md](crates/vs-cli/SKILL.md) and the CHANGELOG. The full wire format with every sigil and edge case is in [docs/PROTOCOL.md](docs/PROTOCOL.md). The per-platform per-primitive verification matrix is in [docs/REALITY_CHECK.md](docs/REALITY_CHECK.md).
 
 ## Configuration
 

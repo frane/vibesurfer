@@ -6,6 +6,26 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
+### Security
+- File-permission hardening on Unix. The fallback AES-256 master key (`~/.vibesurfer/key`) is now created with mode 0600 (and tightened to 0600 when overwriting a pre-existing looser file); the daemon data directory (`~/.vibesurfer`) is created with / tightened to 0700; the daemon socket is chmod'd to 0600 after bind. Previously all three inherited the process umask, which typically left the key, the SQLite store (cookies + auth blobs), and the socket world-readable.
+- Added `SECURITY.md` with a private vulnerability-disclosure path.
+
+### Fixed
+- Closed the check-then-act race in `vs_act`: a per-page mutation lock now covers the stale-token check → engine act → re-snapshot window, so two concurrent acts carrying the same `before_token` can no longer both pass the check. Regression test included.
+- `vs serve --stop` on Windows no longer silently coerces an out-of-range PID to 0 before `OpenProcess`; it errors instead.
+- A snapshot node whose ref exceeds `u32` is now dropped instead of silently aliasing `Ref(0)`.
+- Engine completion paths (`open`/`capture`/`eval` on WebKitGTK and WKWebView) return an engine error instead of `unreachable!()` if the run loop ever reports completion without a result — an invariant break there no longer panics the daemon.
+- `cargo fmt` / `clippy 1.94` violations that had crept into `vs-cli` and the v0.1.12 libei path.
+
+### Changed
+- Docs trued up against the code:
+  - `docs/known-issues.md` no longer claims `NetIdle`/`TokenChange` waits and the Windows backend are unimplemented (all shipped; the M6 suite runs on real WebView2 in CI), and reflects host-side cookie capture (HttpOnly included).
+  - The README's trusted-input section reflects the v0.1.11 state instead of announcing it as future work; the primitive count is corrected to 29 wire primitives; the stale README copies bundled with `vs-cli` / `vs-daemon` are re-synced.
+  - `docs/PRIMITIVES.md` is scoped to the 19 core primitives it actually specifies, points at SKILL.md/CHANGELOG for the v0.1.8+ additions, and no longer claims `vs_auth save` captures IndexedDB (it doesn't).
+  - `docs/ROADMAP.md` and `docs/M6_PLAN.md` are marked historical (M0–M6 shipped); the roadmap's "Beyond M6" list reflects that Windows and the MCP shim shipped.
+  - `docs/DEVELOPMENT.md` no longer describes Windows as pending manual verification.
+  - `dist/vibesurfer.rb` points at v0.1.13 with a real tarball SHA instead of v0.0.1 with a placeholder.
+
 
 
 ## [v0.1.13] - 2026-06-02

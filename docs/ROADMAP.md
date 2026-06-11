@@ -1,5 +1,13 @@
 # Roadmap
 
+> **Status: historical.** Milestones M0–M6 all shipped (v0.1.x). This
+> document is kept as the record of the original build order and exit
+> criteria; it is not a forward-looking plan. Post-M6 work is tracked
+> in the [CHANGELOG](../CHANGELOG.md) per release. Note the primitive
+> counts below describe the M5-era surface (19 primitives); v0.1.8+
+> added `vs_inspect`, the cursor primitives, prompt-input, and the
+> pending queue (29 wire primitives as of v0.1.13).
+
 Build order is sequential. Each milestone has explicit exit criteria.
 Stop at every milestone for review before starting the next.
 
@@ -147,8 +155,10 @@ do a real task within a 600-token bootstrap budget.
 
 ## Beyond M6 (not on the v1 critical path)
 
-- Windows engine support.
+- ~~Windows engine support.~~ *Shipped: the WebView2 backend implements
+  every primitive and the M6 suite runs on `windows-latest` in CI.*
+- ~~MCP shim (translates the protocol for Anthropic-style tool use).~~
+  *Shipped: `vs mcp`.*
 - Branching skill scripts (currently linear only).
-- MCP shim (translates the protocol for Anthropic-style tool use).
 - CDP shim (for Playwright/Puppeteer compatibility, if there's demand).
 - Network exposure of the daemon (with its own auth story).

@@ -873,7 +873,10 @@ pub(super) fn handle_prompt_input_queue(daemon: &Daemon, req: &Request) -> Strin
         );
     };
     let Ok(r) = r_str.parse::<Ref>() else {
-        return format_error(ErrorCode::BadRequest, vec!["vs_prompt_input_queue: bad ref".into()]);
+        return format_error(
+            ErrorCode::BadRequest,
+            vec!["vs_prompt_input_queue: bad ref".into()],
+        );
     };
     let Some(message) = req.args.get(2).cloned() else {
         return format_error(
@@ -882,7 +885,10 @@ pub(super) fn handle_prompt_input_queue(daemon: &Daemon, req: &Request) -> Strin
         );
     };
     let Some(token) = flag_value(req, "token") else {
-        return format_error(ErrorCode::BadRequest, vec!["vs_prompt_input_queue: missing --token".into()]);
+        return format_error(
+            ErrorCode::BadRequest,
+            vec!["vs_prompt_input_queue: missing --token".into()],
+        );
     };
     let secret = req.flags.contains_key("secret");
     let group = flag_value(req, "group");
@@ -891,7 +897,16 @@ pub(super) fn handle_prompt_input_queue(daemon: &Daemon, req: &Request) -> Strin
         Some(ms) => std::time::Duration::from_millis(ms),
         None => std::time::Duration::from_secs(300),
     };
-    match daemon.prompt_input_queue(&session_id, &page_id, r, message, secret, token, group, timeout) {
+    match daemon.prompt_input_queue(
+        &session_id,
+        &page_id,
+        r,
+        message,
+        secret,
+        token,
+        group,
+        timeout,
+    ) {
         Ok(after) => ResponseHead::ok(after).encode(),
         Err(e) => format_daemon_error(&e),
     }
@@ -906,10 +921,18 @@ pub(super) fn handle_pending_list(daemon: &Daemon, _req: &Request) -> String {
         let _ = writeln!(
             body,
             "{}\t{}\t{}\t{}\t{}",
-            e.id, e.page, e.r, u8::from(e.secret), e.message
+            e.id,
+            e.page,
+            e.r,
+            u8::from(e.secret),
+            e.message
         );
     }
-    format!("{}{}", ResponseHead::ok(StateToken([0u8; 8])).encode(), body)
+    format!(
+        "{}{}",
+        ResponseHead::ok(StateToken([0u8; 8])).encode(),
+        body
+    )
 }
 
 pub(super) fn handle_pending_fulfill(daemon: &Daemon, req: &Request) -> String {
@@ -928,7 +951,10 @@ pub(super) fn handle_pending_fulfill(daemon: &Daemon, req: &Request) -> String {
     if daemon.pending_fulfill(&id, value) {
         ResponseHead::ok(StateToken([0u8; 8])).encode()
     } else {
-        format_error(ErrorCode::NotFound, vec![format!("pending entry {id} not found")])
+        format_error(
+            ErrorCode::NotFound,
+            vec![format!("pending entry {id} not found")],
+        )
     }
 }
 
@@ -942,7 +968,10 @@ pub(super) fn handle_pending_cancel(daemon: &Daemon, req: &Request) -> String {
     if daemon.pending_cancel(&id) {
         ResponseHead::ok(StateToken([0u8; 8])).encode()
     } else {
-        format_error(ErrorCode::NotFound, vec![format!("pending entry {id} not found")])
+        format_error(
+            ErrorCode::NotFound,
+            vec![format!("pending entry {id} not found")],
+        )
     }
 }
 
@@ -957,8 +986,15 @@ pub(super) fn handle_pending_peek(daemon: &Daemon, req: &Request) -> String {
         Some(e) => format!(
             "{}{}\t{}\t{}\t{}\t{}\n",
             ResponseHead::ok(StateToken([0u8; 8])).encode(),
-            e.id, e.page, e.r, u8::from(e.secret), e.message
+            e.id,
+            e.page,
+            e.r,
+            u8::from(e.secret),
+            e.message
         ),
-        None => format_error(ErrorCode::NotFound, vec![format!("pending entry {id} not found")]),
+        None => format_error(
+            ErrorCode::NotFound,
+            vec![format!("pending entry {id} not found")],
+        ),
     }
 }

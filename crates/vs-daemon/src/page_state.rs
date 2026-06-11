@@ -5,6 +5,7 @@
 //! used by [`view`](crate::handlers) to compute deltas.
 
 use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 
 use vs_engine_webkit::PageHandle;
 use vs_protocol::{DeltaOp, Ref, StateToken, Tree};
@@ -28,6 +29,12 @@ pub struct PageState {
     pub force_full: bool,
     /// Refs ever seen on this page, for retire-tracking.
     pub seen_refs: HashSet<Ref>,
+    /// Serializes `vs_act`'s token-check → engine-act → re-snapshot
+    /// window. Without it, two concurrent acts carrying the same
+    /// `before_token` would both pass the stale-token check before
+    /// either mutation lands. Kept outside the session-map mutex so
+    /// the (slow) engine call doesn't block unrelated pages.
+    pub mutate_lock: Arc<Mutex<()>>,
 }
 
 impl PageState {
@@ -41,6 +48,7 @@ impl PageState {
             last_token: None,
             force_full: true,
             seen_refs: HashSet::new(),
+            mutate_lock: Arc::new(Mutex::new(())),
         }
     }
 

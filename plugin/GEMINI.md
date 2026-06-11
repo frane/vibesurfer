@@ -60,9 +60,9 @@ Wire form is `vs_<name>` (over the socket); CLI subcommand is `<name>` with hyph
 | 12 | `vs annotate <TARGET> <KEY> [VALUE]` | `ref:N` / `mark:NAME` / `page` annotation. |
 | 17 | `vs viewport <PAGE> <SPEC> [--dpr=N]` | Preset (`mobile` / `desktop` / etc.) or `WxH`. Re-baselines next view. |
 
-### Cursor coordinates (20–23, v0.1.8+)
+### Cursor coordinates (20–23, v0.1.8+; trusted on all platforms in v0.1.11+)
 
-Coordinate-addressed input. Native trusted dispatch on macOS so events carry `isTrusted = true`; Linux + Windows currently return `ENGINE_UNSUPPORTED` until M7 wires GDK + CDP input. All four take `--mode={human,careful,robotic}` (short `-M`), default `human`.
+Coordinate-addressed input with native trusted dispatch on every backend. macOS uses `NSEvent`, Linux uses XTest via the pure-Rust `x11rb` client (or libei via xdg-desktop-portal RemoteDesktop on pure Wayland), Windows uses `SendMouseInput` on `ICoreWebView2CompositionController`. Every resulting `MouseEvent` carries `isTrusted = true` in JS — Cloudflare / Google / hCaptcha can't tell the click from a real cursor. All four primitives take `--mode={human,careful,robotic}` (short `-M`), default `human`.
 
 `human` synthesizes a Bezier path from the last known cursor position with Fitts-law arrival timing; the visible motion is indistinguishable from a real cursor reaching the target before the click. `careful` is a single-shot move. `robotic` is a teleport (no path).
 
@@ -71,10 +71,10 @@ Coordinate-addressed input. Native trusted dispatch on macOS so events carry `is
 | 20 | `vs move-to <PAGE> <X> <Y> [-M=human]` | `mt` | Move the cursor to (x, y). No click. |
 | 21 | `vs click-at <PAGE> <X> <Y> --token=<TOK> [-M=human]` | `ca` | Trusted click at (x, y) after a humanized lead-in. |
 | 22 | `vs hover-at <PAGE> <X> <Y> [-M=human]` | `ha` | Hover at (x, y). |
-| 23 | `vs drag <PAGE> <X1> <Y1> <X2> <Y2> --token=<TOK> [-M=human]` | `dr` | Press at start, drag along a humanized path, release at end. |
+| 23 | `vs drag <PAGE> <X1> <Y1> <X2> <Y2> --token=<TOK> [-M=human]` | `dr` | Press at start, drag along a humanized path, release at end. v0.1.11+ also synthesizes the HTML5 `DragEvent` chain (`dragstart` → `dragenter` → `dragover` → `drop` → `dragend` with a real `DataTransfer`) so react-dnd, native `draggable="true"` widgets, and React-Flow HTML5-backend nodes observe the drop. |
 
 
-### Human-in-loop (24–25, v0.1.9+)
+### Human-in-loop (24–25, v0.1.9+; MCP-aware in v0.1.12+)
 
 For credentials, TANs, and any other value the agent must not see. The CLI reads from the local terminal the user is sitting at; the agent never receives the bytes.
 
@@ -85,7 +85,7 @@ For credentials, TANs, and any other value the agent must not see. The CLI reads
 
 When you need credentials, never call `vs act fill` with the value. Always call `vs prompt-input <PAGE> <REF> --message="<label-from-snapshot>" --secret --token=<TOK>` and let the user type. Include enough context in the message that they know which field they're filling (the field label from the snapshot is usually enough).
 
-
+**MCP / Claude Desktop / Codex (v0.1.12+):** `vs mcp` has no tty, so the MCP version of `vs_prompt_input` enqueues a pending entry on the daemon and parks waiting for the value. The local user runs `vs pending list` (alias `pe ls`) to see what's queued and `vs pending fulfill [<id>]` (`pe f`) to type the value at their local tty — `vs pending fulfill` with no id auto-picks the single pending entry. `vs pending cancel <id>` (`pe c`) aborts. Once fulfilled, the agent's MCP tool call returns the new state token exactly as it would have for the local-CLI path.
 ### Search / extract (8, 10, 18)
 
 | # | CLI | What |
@@ -99,7 +99,7 @@ When you need credentials, never call `vs act fill` with the value. Always call 
 | # | CLI | What |
 |---|-----|------|
 | 15 | `vs skill list \| show <NAME>` | List or show installed skill bundles. |
-| 16 | `vs capture <PAGE> [<REF>] [--full-page]` | PNG to `~/.vibesurfer/captures/`. |
+| 16 | `vs capture <PAGE> [<REF>] [--full-page] [--base64]` | PNG to `~/.vibesurfer/captures/`. With `--base64` (`--b64`) the response body carries `base64=<bytes>` + `path=…` for MCP-driven agents that want the pixels inline (default ON over MCP). |
 | 19 | `vs auth save\|load\|list\|clear <PAGE> <NAME>` | Per-origin cookie+storage blob, AES-256-GCM at rest. |
 
 ## Optimistic concurrency
@@ -148,10 +148,10 @@ All three engines are verified in CI by the same 48-cell integration suite; the 
 | Backend | Renders | Trusted clicks | Viewport | Layout | Auth | Notes |
 |---------|---------|----------------|----------|--------|------|-------|
 | `webkit` (macOS) | ✅ | ✅ via `NSEvent` | ✅ | ✅ | ✅ | System WebKit.framework, `WKWebView`. |
-| `wpe` (Linux) | ✅ | JS `el.click()` (untrusted) | ✅ | ✅ | ✅ | WebKitGTK 6 via `webkit6` crate. Needs `libwebkitgtk-6.0`. |
-| `webview2` (Windows) | ✅ | JS `el.click()` (untrusted) | ✅ | ✅ | ✅ | Microsoft Edge / Chromium via `webview2-com`. |
+| `wpe` (Linux) | ✅ | ✅ via XTest (`x11rb`); libei (ashpd RemoteDesktop portal) on pure Wayland | ✅ | ✅ | ✅ | WebKitGTK 6 via `webkit6` crate. Needs `libwebkitgtk-6.0`. Pure Wayland without Xwayland and no portal → falls back to JS `el.click()` (untrusted). |
+| `webview2` (Windows) | ✅ | ✅ via `SendMouseInput` on `ICoreWebView2CompositionController` | ✅ | ✅ | ✅ | Microsoft Edge / Chromium via `webview2-com`. DirectComposition target per page. |
 
-Trusted clicks: only the macOS engine routes `vs act click` through native input dispatch so the resulting `MouseEvent` carries `isTrusted = true`. Linux + Windows still go through injected JS, which anti-bot fingerprinters (Cloudflare, Google, hCaptcha) will treat as automated. M7 wires both to their native equivalents (WebKitGTK GDK events and WebView2 CDP `Input.dispatchMouseEvent`).
+Trusted clicks (v0.1.11+): every backend routes `vs act click` and the cursor primitives through native OS input dispatch so the resulting `MouseEvent` carries `isTrusted = true` — anti-bot fingerprinters (Cloudflare, Google, hCaptcha) cannot distinguish from a real cursor. The Linux libei path requires the user's compositor to support the RemoteDesktop portal and the user to grant a one-time consent prompt at process startup; detection falls through to XTest (X11 / Xwayland) and finally to untrusted JS `el.click()` if neither is reachable.
 
 `vs status` reports the active backend's capabilities; the CLI surfaces the protocol error `ENGINE_UNSUPPORTED` if you try a primitive the active backend doesn't implement.
 

@@ -139,10 +139,27 @@ impl MasterKey {
         Ok(Self(buf))
     }
 
-    /// Persist the key as 32 raw bytes at `path`. Caller is responsible
-    /// for chmod-ing the file (typically 0600) and for ensuring the
-    /// destination directory exists.
+    /// Persist the key as 32 raw bytes at `path`. On Unix the file is
+    /// created with mode 0600 before the key bytes are written, so the
+    /// key is never observable by other users. Caller is responsible
+    /// for ensuring the destination directory exists.
     pub fn write_to_file(&self, path: impl AsRef<Path>) -> Result<()> {
+        #[cfg(unix)]
+        {
+            use std::io::Write as _;
+            use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+            let mut f = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(path.as_ref())?;
+            f.write_all(&self.0)?;
+            // `mode` only applies at creation; if the file pre-existed
+            // with looser permissions, tighten it now.
+            f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
+        #[cfg(not(unix))]
         fs::write(path.as_ref(), self.0)?;
         Ok(())
     }
@@ -292,6 +309,32 @@ mod tests {
         k.write_to_file(&path).unwrap();
         let loaded = MasterKey::from_file(&path).unwrap();
         assert_eq!(k.0, loaded.0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn key_file_written_with_owner_only_permissions() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("key");
+        let k = MasterKey::generate().unwrap();
+        k.write_to_file(&path).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "key file must be owner-only, got {mode:o}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn key_file_permissions_tightened_on_overwrite() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("key");
+        // Pre-existing world-readable file at the key path.
+        std::fs::write(&path, b"old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        MasterKey::generate().unwrap().write_to_file(&path).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "overwrite must tighten perms, got {mode:o}");
     }
 
     #[test]
