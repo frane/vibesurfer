@@ -109,36 +109,39 @@ jobs:
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
-        if: github.event_name == 'push'
         with:
           files: ${{ steps.stage.outputs.archive }}
           tag_name: ${{ steps.ver.outputs.version }}
+          # On workflow_dispatch the tag may not exist yet; in that
+          # case action-gh-release creates it at the built commit, so
+          # a manual run is a full release, not just an artifact drop.
+          target_commitish: ${{ github.sha }}
           fail_on_unmatched_files: true
-
-      - name: Upload as workflow artifact (manual runs)
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.stage.outputs.archive }}
-          path: ${{ steps.stage.outputs.archive }}
 
   checksums:
     name: checksums
     needs: build
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
       - name: Fetch release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir staging
           cd staging
-          gh release download "${GITHUB_REF_NAME}" --pattern 'vs-*' --repo "${GITHUB_REPOSITORY}"
+          gh release download "${{ steps.ver.outputs.version }}" --pattern 'vs-*' --repo "${GITHUB_REPOSITORY}"
           sha256sum vs-* > checksums.txt
       - name: Upload checksums
         uses: softprops/action-gh-release@v2
         with:
           files: staging/checksums.txt
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ steps.ver.outputs.version }}
