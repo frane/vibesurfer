@@ -93,6 +93,12 @@ impl Daemon {
             .with_before(before_token)
             .with_group(group_label);
         self.audit_call(ctx, |ctx| {
+            // Hold the page's mutation lock across the whole
+            // check-then-act window so a concurrent act with the same
+            // before_token can't slip between the stale-token check
+            // and the engine call.
+            let mutate_lock = self.mutate_lock_for(&session_id, &page_id)?;
+            let _mutate_guard = mutate_lock.lock().expect("poisoned");
             let engine_handle = self.engine_handle_for(&session_id, &page_id)?;
             let current_token = self.current_token(&session_id, &page_id)?;
             if current_token != before_token {

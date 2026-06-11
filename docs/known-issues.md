@@ -2,14 +2,14 @@
 
 Honest list of behaviors that aren't yet what they should be. Each entry has a short reproduction and a planned-or-tracked fix.
 
-## Wait conditions
-
-- **`NetIdle` is not implemented** on any backend. Calling it returns `! ENGINE_UNSUPPORTED webkit wait:net-idle-or-token-change` (or the equivalent on Linux/Windows). Implementing it requires DevTools-Protocol-style request tracking; not on the M5.5 critical path.
-- **`TokenChange` is not implemented**. Same response. Conceptually a daemon-level concern (waits on the page's state token to advance) rather than an engine concern; routing TBD.
-
 ## Act targets
 
 - **`ActTarget::Mark`** (act on a named anchor instead of a live ref) returns `NotImplemented` on every real backend. Marks already round-trip through `vs_mark` / `vs_annotate`; the missing piece is mapping a mark name to a current `data-vs-ref` attribute at act time. Land alongside the next round of mark-driven flows.
+
+## Trusted input coverage
+
+- Ref-based `vs act click` dispatches trusted native input on macOS only. On Linux (WebKitGTK) and Windows (WebView2) it still routes through injected JS (`isTrusted = false`); the coordinate cursor primitives (`vs click-at`, `vs hover-at`, `vs move-to`, `vs drag`) are the trusted path on those engines (since v0.1.11).
+- Pure-Wayland Linux without Xwayland returns `ENGINE_UNSUPPORTED` for the cursor primitives; the libei path landed in v0.1.12 but requires the compositor's RemoteDesktop portal consent.
 
 ## Layout on the stub
 
@@ -17,12 +17,7 @@ Honest list of behaviors that aren't yet what they should be. Each entry has a s
 
 ## Linux WPE viewport
 
-- `WpeBackend::set_viewport` resizes the WebView via GTK's `set_size_request` only. There's no equivalent of WKWebView's `setFrame` semantics on WebKitGTK; the resulting viewport may render at the requested CSS size but the page may not reflow as crisply on retina displays. Acceptable for layout extraction; less acceptable for pixel-perfect screenshots at non-default DPRs.
-
-## Windows WebView2
-
-- The Windows backend has `open` and `snapshot` implemented against `webview2-com`'s sample patterns, but **has not been verified at runtime** on a Windows host (we develop on macOS). CI on `windows-latest` will catch compile-level regressions; runtime correctness remains contingent on the COM message-loop integration with `MainThreadDispatcher`. Mark as "skeleton" in `vs status` until a Windows host actually drives a navigation end-to-end.
-- `act`, `wait`, `capture`, `layout`, `set_viewport` all return `NotImplemented` on Windows. Planned but not yet ported.
+- `WpeBackend::set_viewport` resizes the hidden host window and the WebView's size request. There's no equivalent of WKWebView's `setFrame` semantics on WebKitGTK; the resulting viewport may render at the requested CSS size but the page may not reflow as crisply on retina displays. Acceptable for layout extraction; less acceptable for pixel-perfect screenshots at non-default DPRs.
 
 ## DOM walker
 
@@ -30,7 +25,7 @@ Honest list of behaviors that aren't yet what they should be. Each entry has a s
 
 ## Auth blob portability
 
-- `vs_auth save` snapshots cookies + `localStorage` + `sessionStorage` only; it does **not** capture HttpOnly cookies (JS can't see them) or IndexedDB. For most agent flows that's enough. Native cookie-store extraction (WKHttpCookieStore on macOS, etc.) is a future enhancement.
+- `vs_auth save` snapshots cookies (via the host-side cookie store on all three backends, so HttpOnly cookies are included) plus `localStorage` + `sessionStorage`. It does **not** capture IndexedDB. For most agent flows that's enough.
 
 ## Daemon shutdown ordering
 

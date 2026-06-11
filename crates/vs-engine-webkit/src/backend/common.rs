@@ -78,7 +78,9 @@ pub(crate) fn parse_snapshot(json: &str) -> Result<Tree, String> {
 }
 
 fn build_node(v: &serde_json::Value) -> Option<Node> {
-    let r = v.get("r")?.as_u64()?;
+    // A ref beyond u32 means the page emitted a snapshot we can't
+    // represent — drop the node rather than silently aliasing Ref(0).
+    let r = u32::try_from(v.get("r")?.as_u64()?).ok()?;
     let role_s = v.get("role")?.as_str()?;
     let label = v.get("label").and_then(|x| x.as_str()).unwrap_or("");
     let role = parse_role(role_s);
@@ -91,7 +93,7 @@ fn build_node(v: &serde_json::Value) -> Option<Node> {
         }
     }
     Some(Node {
-        r: Ref(u32::try_from(r).unwrap_or(0)),
+        r: Ref(r),
         role,
         label: label.to_string(),
         ops: ops_for_role(role),
@@ -239,7 +241,6 @@ pub(crate) fn build_html5_drag_js(x1: f64, y1: f64, x2: f64, y2: f64) -> String 
         }})()"
     )
 }
-
 
 pub(crate) fn run_act<F>(eval: F, target: &ActTarget, action: &Action) -> EngineResult<()>
 where

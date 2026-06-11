@@ -14,9 +14,9 @@
 class Vibesurfer < Formula
   desc "A browser for LLMs, not humans — agent-native headless WebKit + line-oriented protocol"
   homepage "https://github.com/frane/vibesurfer"
-  url "https://github.com/frane/vibesurfer/archive/refs/tags/v0.0.1.tar.gz"
+  url "https://github.com/frane/vibesurfer/archive/refs/tags/v0.1.13.tar.gz"
   # Update on each release: `shasum -a 256 <tarball>`.
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  sha256 "7a2fe293af39508e88914673bcaf94b719d9037700da16eed5183cb21029d9cd"
   license "Apache-2.0"
   head "https://github.com/frane/vibesurfer.git", branch: "main"
 

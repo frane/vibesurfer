@@ -68,6 +68,6 @@ pub(super) fn eval_js_string(
     match result {
         Some(Ok(s)) => Ok(s),
         Some(Err(msg)) => Err(EngineError::Other(format!("eval failed: {msg}"))),
-        None => unreachable!(),
+        None => Err(EngineError::Other("eval completed without a result".into())),
     }
 }

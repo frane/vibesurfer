@@ -17,8 +17,8 @@ pub mod responses;
 mod engine_ops;
 mod lifecycle;
 mod page_ops;
-mod store_ops;
 pub mod pending;
+mod store_ops;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -209,6 +209,23 @@ impl Daemon {
             .get(page_id)
             .ok_or_else(|| DaemonError::UnknownPage(page_id.to_string()))?;
         Ok(page.engine_handle)
+    }
+
+    /// Clone the per-page mutation lock so callers can hold it across
+    /// an engine call without keeping the session map locked.
+    pub(crate) fn mutate_lock_for(
+        &self,
+        session_id: &str,
+        page_id: &str,
+    ) -> Result<Arc<Mutex<()>>> {
+        let sessions = self.inner.sessions.lock().expect("poisoned");
+        let page = sessions
+            .get(session_id)
+            .ok_or_else(|| DaemonError::UnknownSession(session_id.to_string()))?
+            .pages
+            .get(page_id)
+            .ok_or_else(|| DaemonError::UnknownPage(page_id.to_string()))?;
+        Ok(page.mutate_lock.clone())
     }
 
     pub(crate) fn current_token(&self, session_id: &str, page_id: &str) -> Result<StateToken> {

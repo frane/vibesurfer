@@ -358,9 +358,7 @@ pub enum PendingSub {
     /// Cancel a pending entry. The parked `vs_prompt_input` call
     /// returns `BadRequest "cancelled"`.
     #[command(visible_alias = "c")]
-    Cancel {
-        id: String,
-    },
+    Cancel { id: String },
 }
 
 impl Command {
@@ -528,7 +526,12 @@ impl Command {
                 }
                 req
             }
-            Self::Capture { page, r, full_page, base64: _ } => {
+            Self::Capture {
+                page,
+                r,
+                full_page,
+                base64: _,
+            } => {
                 // `base64` is a CLI-side post-process — the daemon
                 // still returns the on-disk path; dispatch.rs reads
                 // the PNG and base64-encodes it before printing.
@@ -668,7 +671,13 @@ impl Command {
                 anyhow::bail!("vs_prompt_* is local; route via main, not the wire dispatcher");
             }
             Self::PromptInputQueue {
-                page, r, message, secret, token, group, timeout_ms,
+                page,
+                r,
+                message,
+                secret,
+                token,
+                group,
+                timeout_ms,
             } => {
                 let s = require_session(session_id)?;
                 let mut req = Request::new("vs_prompt_input_queue")
@@ -678,8 +687,12 @@ impl Command {
                     .flag_value("session", s)
                     .flag_value("token", token.clone())
                     .flag_value("timeout-ms", timeout_ms.to_string());
-                if *secret { req = req.flag("secret"); }
-                if let Some(g) = group { req = req.flag_value("group", g.clone()); }
+                if *secret {
+                    req = req.flag("secret");
+                }
+                if let Some(g) = group {
+                    req = req.flag_value("group", g.clone());
+                }
                 req
             }
             Self::Pending { sub } => match sub {
@@ -690,7 +703,9 @@ impl Command {
                     // just stub a placeholder; dispatch overrides the
                     // value arg with what the user typed.
                     let id_v = id.clone().unwrap_or_default();
-                    Request::new("vs_pending_fulfill").arg(id_v).arg(String::new())
+                    Request::new("vs_pending_fulfill")
+                        .arg(id_v)
+                        .arg(String::new())
                 }
                 PendingSub::Cancel { id } => Request::new("vs_pending_cancel").arg(id.clone()),
             },
@@ -708,7 +723,11 @@ impl Command {
     pub fn needs_session(&self) -> bool {
         !matches!(
             self,
-            Self::SessionOpen { .. } | Self::Status | Self::Serve { .. } | Self::Mcp | Self::Pending { .. }
+            Self::SessionOpen { .. }
+                | Self::Status
+                | Self::Serve { .. }
+                | Self::Mcp
+                | Self::Pending { .. }
         )
     }
 }

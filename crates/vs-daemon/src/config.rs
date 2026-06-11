@@ -75,8 +75,17 @@ impl Paths {
         self.root.join("captures")
     }
 
-    /// Ensure the root directory exists.
+    /// Ensure the root directory exists. On Unix the directory is
+    /// created with (or tightened to) mode 0700 — it holds the SQLite
+    /// store, the fallback AES key, and the daemon socket, none of
+    /// which should be visible to other users.
     pub fn ensure_root(&self) -> std::io::Result<()> {
-        std::fs::create_dir_all(&self.root)
+        std::fs::create_dir_all(&self.root)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&self.root, std::fs::Permissions::from_mode(0o700))?;
+        }
+        Ok(())
     }
 }

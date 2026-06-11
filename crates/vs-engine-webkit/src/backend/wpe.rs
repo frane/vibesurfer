@@ -213,7 +213,11 @@ impl Engine for WpeBackend {
         match slot.borrow_mut().take() {
             Some(Ok(())) => {}
             Some(Err(msg)) => return Err(EngineError::Other(format!("navigation failed: {msg}"))),
-            None => unreachable!(),
+            None => {
+                return Err(EngineError::Other(
+                    "navigation completed without a result".into(),
+                ))
+            }
         }
 
         let handle = self.alloc_handle();
@@ -336,7 +340,9 @@ impl Engine for WpeBackend {
         match result {
             Some(Ok(())) => Ok(path),
             Some(Err(msg)) => Err(EngineError::Other(format!("capture: {msg}"))),
-            None => unreachable!(),
+            None => Err(EngineError::Other(
+                "capture completed without a result".into(),
+            )),
         }
     }
 
@@ -506,27 +512,53 @@ impl Engine for WpeBackend {
         let start = p.last_mouse.get();
         let seed = humanize_seed(op);
         let landed = match op {
-            CursorOp::MoveTo { x, y } | CursorOp::HoverAt { x, y } => {
-                cursor_move_along_path(dispatcher, start, vs_humanize::Point { x, y },
-                    (origin_x, origin_y), humanize_mode, seed, false)?
-            }
+            CursorOp::MoveTo { x, y } | CursorOp::HoverAt { x, y } => cursor_move_along_path(
+                dispatcher,
+                start,
+                vs_humanize::Point { x, y },
+                (origin_x, origin_y),
+                humanize_mode,
+                seed,
+                false,
+            )?,
             CursorOp::ClickAt { x, y } => {
-                let landed = cursor_move_along_path(dispatcher, start, vs_humanize::Point { x, y },
-                    (origin_x, origin_y), humanize_mode, seed, false)?;
+                let landed = cursor_move_along_path(
+                    dispatcher,
+                    start,
+                    vs_humanize::Point { x, y },
+                    (origin_x, origin_y),
+                    humanize_mode,
+                    seed,
+                    false,
+                )?;
                 cursor_press_release(dispatcher, landed, (origin_x, origin_y))?;
                 landed
             }
             CursorOp::Drag { x1, y1, x2, y2 } => {
                 let start_pt = vs_humanize::Point { x: x1, y: y1 };
                 let target = vs_humanize::Point { x: x2, y: y2 };
-                let pre = cursor_move_along_path(dispatcher, start, start_pt,
-                    (origin_x, origin_y), humanize_mode, seed, false)?;
+                let pre = cursor_move_along_path(
+                    dispatcher,
+                    start,
+                    start_pt,
+                    (origin_x, origin_y),
+                    humanize_mode,
+                    seed,
+                    false,
+                )?;
                 dispatcher.dispatch(super::wpe_input::InputEvent::Press(
                     super::wpe_input::Button::Left,
                 ))?;
                 std::thread::sleep(Duration::from_millis(15));
-                let landed = cursor_move_along_path(dispatcher, pre, target,
-                    (origin_x, origin_y), humanize_mode, seed, true)?;
+                let landed = cursor_move_along_path(
+                    dispatcher,
+                    pre,
+                    target,
+                    (origin_x, origin_y),
+                    humanize_mode,
+                    seed,
+                    true,
+                )?;
                 dispatcher.dispatch(super::wpe_input::InputEvent::Release(
                     super::wpe_input::Button::Left,
                 ))?;
@@ -543,7 +575,6 @@ impl Engine for WpeBackend {
         p.last_mouse.set(landed);
         Ok(())
     }
-
 
     fn capabilities(&self) -> EngineCapabilities {
         let any_inspector = self.pages.values().any(|p| p.inspector_installed);
@@ -687,7 +718,7 @@ fn eval_js_string(web_view: &WebView, js: &str, budget: Duration) -> EngineResul
     match result {
         Some(Ok(s)) => Ok(s),
         Some(Err(msg)) => Err(EngineError::Other(format!("eval failed: {msg}"))),
-        None => unreachable!(),
+        None => Err(EngineError::Other("eval completed without a result".into())),
     }
 }
 

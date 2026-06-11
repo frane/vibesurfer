@@ -185,12 +185,7 @@ impl InputDispatcher for XtestDispatcher {
     }
     fn dispatch(&self, ev: InputEvent) -> EngineResult<()> {
         let (type_, detail, root_x, root_y) = match ev {
-            InputEvent::Move(p) => (
-                XT_MOTION_NOTIFY,
-                0_u8,
-                clamp_i16(p.x),
-                clamp_i16(p.y),
-            ),
+            InputEvent::Move(p) => (XT_MOTION_NOTIFY, 0_u8, clamp_i16(p.x), clamp_i16(p.y)),
             InputEvent::Press(b) => (XT_BUTTON_PRESS, button_code(b), 0, 0),
             InputEvent::Release(b) => (XT_BUTTON_RELEASE, button_code(b), 0, 0),
         };
@@ -261,8 +256,16 @@ struct LibeiDispatcher {
 }
 
 enum LibeiCmd {
-    Motion { x: f64, y: f64, ack: mpsc::Sender<EngineResult<()>> },
-    Button { code: u32, pressed: bool, ack: mpsc::Sender<EngineResult<()>> },
+    Motion {
+        x: f64,
+        y: f64,
+        ack: mpsc::Sender<EngineResult<()>>,
+    },
+    Button {
+        code: u32,
+        pressed: bool,
+        ack: mpsc::Sender<EngineResult<()>>,
+    },
 }
 
 impl LibeiDispatcher {
@@ -280,19 +283,15 @@ impl LibeiDispatcher {
                     return;
                 };
                 rt.block_on(async move {
-                    let proxy = match RemoteDesktop::new().await {
-                        Ok(p) => p,
-                        Err(_) => {
-                            let _ = init_tx.send(None);
-                            return;
-                        }
+                    let Ok(proxy) = RemoteDesktop::new().await else {
+                        let _ = init_tx.send(None);
+                        return;
                     };
-                    let session: Session<'_, RemoteDesktop> = match proxy.create_session().await {
-                        Ok(s) => s,
-                        Err(_) => {
-                            let _ = init_tx.send(None);
-                            return;
-                        }
+                    let Ok(session): Result<Session<'_, RemoteDesktop>, _> =
+                        proxy.create_session().await
+                    else {
+                        let _ = init_tx.send(None);
+                        return;
                     };
                     let types: BitFlags<DeviceType> = DeviceType::Pointer.into();
                     if proxy

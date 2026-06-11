@@ -1,6 +1,11 @@
 # M6 plan — verification reality
 
-> Status: drafted 2026-05-07 at the start of M6. Updated as cells land.
+> **Status: completed (historical).** Drafted 2026-05-07 at the start
+> of M6. The goal below has been reached: every cell in
+> `docs/REALITY_CHECK.md` is `yes` on all three backends, and the M6
+> suite runs as load-bearing CI jobs on macOS, Linux, and Windows
+> (`.github/workflows/engine-tests.yml`). Kept as the record of how
+> M6 was sequenced.
 
 ## Goal
 

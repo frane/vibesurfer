@@ -835,3 +835,44 @@ fn view_no_warning_when_no_new_errors() {
     let w2 = &d.dispatch(&[r()])[0].wire;
     assert!(!w2.contains("? console_error"), "second view: {w2:?}");
 }
+
+/// Regression for the check-then-act race: two concurrent `act` calls
+/// on the same page must serialize on the page's mutation lock and
+/// complete without deadlock. `TestEngine` acts don't change the
+/// snapshot, so both succeed; the assertion here is liveness plus
+/// distinct audit rows (no lost call).
+#[test]
+fn concurrent_acts_on_same_page_serialize_without_deadlock() {
+    let (d, _dir) = make_daemon();
+    let s = d.session_open(None).unwrap();
+    let p = d.open(&s.session_id, "https://x").unwrap();
+    let v = d.view(&s.session_id, &p.page_id, false).unwrap();
+
+    let call = |hash: &str| vs_daemon::daemon::ActCall {
+        session_id: s.session_id.clone(),
+        page_id: p.page_id.clone(),
+        target: engine::ActTarget::Ref(Ref(4)),
+        action: engine::Action::Click,
+        before_token: v.token,
+        args_hash: hash.into(),
+        args_redacted: "click 4".into(),
+        group_label: None,
+    };
+
+    let d2 = d.clone();
+    let c1 = call("hash-a");
+    let t = std::thread::spawn(move || d2.act(c1));
+    let r2 = d.act(call("hash-b"));
+    let r1 = t.join().expect("act thread panicked");
+    r1.expect("first concurrent act failed");
+    r2.expect("second concurrent act failed");
+
+    let actions = d
+        .audit_log(&vs_store::ActionFilter {
+            session_id: Some(s.session_id.clone()),
+            ..Default::default()
+        })
+        .unwrap();
+    let acts = actions.iter().filter(|a| a.primitive == "vs_act").count();
+    assert_eq!(acts, 2, "both concurrent acts must be audited");
+}

@@ -234,7 +234,11 @@ impl Engine for WkBackend {
         match slot.borrow_mut().take() {
             Some(Ok(())) => {}
             Some(Err(msg)) => return Err(EngineError::Other(format!("navigation failed: {msg}"))),
-            None => unreachable!(),
+            None => {
+                return Err(EngineError::Other(
+                    "navigation completed without a result".into(),
+                ))
+            }
         }
 
         let handle = self.alloc_handle();
