@@ -6,6 +6,10 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
+
+
+## [v0.1.14] - 2026-06-11
+
 ### Security
 - File-permission hardening on Unix. The fallback AES-256 master key (`~/.vibesurfer/key`) is now created with mode 0600 (and tightened to 0600 when overwriting a pre-existing looser file); the daemon data directory (`~/.vibesurfer`) is created with / tightened to 0700; the daemon socket is chmod'd to 0600 after bind. Previously all three inherited the process umask, which typically left the key, the SQLite store (cookies + auth blobs), and the socket world-readable.
 - Added `SECURITY.md` with a private vulnerability-disclosure path.
