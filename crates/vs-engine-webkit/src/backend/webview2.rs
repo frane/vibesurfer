@@ -383,6 +383,11 @@ fn install_inspector(web_view: &ICoreWebView2, slots: &InspectorSlots) -> bool {
 // =============================================================================
 
 impl Engine for Webview2Backend {
+    // The COM bring-up (environment → composition controller →
+    // DirectComposition device/target/visual → settings → navigate)
+    // is one linear sequence; splitting it would just scatter the
+    // handle plumbing.
+    #[allow(clippy::too_many_lines)]
     fn open(&mut self, url: &str) -> EngineResult<PageHandle> {
         let parent = self.create_host_hwnd()?;
 
