@@ -97,6 +97,46 @@ fn cell_inspect_eval() {
     }
 }
 
+// 39b. vs_inspect eval — a multiline expression must survive the
+// line-framed wire instead of being split into bogus request lines
+// (the old behaviour returned an opaque BAD_REQUEST).
+#[test]
+fn cell_inspect_eval_multiline() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/static.html");
+        let expr = "const a = 2;\nconst b = 3;\na * b";
+        let r = ctx.vs(&["inspect", &page, "eval", expr, "--full"]);
+        assert_ok("multiline eval", &r);
+        let out = r.stdout.clone();
+        let result = out
+            .lines()
+            .find_map(|l| l.strip_prefix("result="))
+            .unwrap_or("");
+        assert_eq!(result.trim(), "6", "multiline eval should yield 6:\n{out}");
+    }
+}
+
+// 39c. vs_inspect eval — an expression containing literal double
+// quotes must survive the wire losslessly (previously `"` was
+// substituted to `'`, silently changing the JS).
+#[test]
+fn cell_inspect_eval_double_quotes() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/static.html");
+        // String equality that only holds if the double-quoted literal
+        // arrived intact (single quotes would still pass, so also check
+        // a value that embeds a quote char).
+        let r = eval_js(&ctx, &page, r#"["a","b"].join("") + String.fromCharCode(34)"#);
+        assert_eq!(
+            r.trim(),
+            "ab\"",
+            "double-quoted JS literal must round-trip through the wire; got {r:?}"
+        );
+    }
+}
+
 // 40. vs_inspect storage cookies
 #[test]
 fn cell_inspect_storage_cookies() {

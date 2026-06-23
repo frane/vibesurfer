@@ -508,14 +508,27 @@ where
     }
 }
 
-/// Run `eval_js`: wrap the user expression in a try/catch that returns
-/// a tagged JSON record, then map back to [`EvalResult`].
+/// Run `eval_js`: wrap the user source in a try/catch that returns a
+/// tagged JSON record, then map back to [`EvalResult`].
+///
+/// Two wrappers are tried in order:
+/// 1. **expression mode** — `(function(){ return <expr>; })()`. The
+///    common case; works under strict CSP (no `eval`) and returns the
+///    value of a single expression.
+/// 2. **program mode** — `(0, eval)(<source as string literal>)`,
+///    reached only when expression mode fails to even parse (a
+///    multiline statement block like `const a=1; f(); a`). Indirect
+///    `eval` evaluates the source as a *program* and yields the
+///    completion value of its last statement (REPL semantics), and any
+///    SyntaxError/throw is caught inside the wrapper so the caller gets
+///    a clean `Syntax`/`Thrown` result instead of an opaque engine
+///    error. Passing the source as a JSON-encoded string literal keeps
+///    its newlines from breaking the wrapper's own parse.
 pub(crate) fn run_eval<F>(eval: F, expr: &str) -> EngineResult<crate::inspector::EvalResult>
 where
     F: Fn(&str, Duration) -> EngineResult<String>,
 {
-    use crate::inspector::EvalResult;
-    let wrapped = format!(
+    let expr_wrapper = format!(
         r"(function() {{
             try {{
                 var __v = (function() {{ return {expr}; }})();
@@ -534,54 +547,91 @@ where
             }}
         }})()"
     );
-    match eval(&wrapped, Duration::from_secs(5)) {
-        Ok(json) => {
-            let unwrapped = serde_json::from_str::<String>(&json).unwrap_or(json);
-            let v: serde_json::Value = serde_json::from_str(&unwrapped)
-                .map_err(|e| EngineError::Other(format!("eval: invalid wrapper json: {e}")))?;
-            let kind = v.get("kind").and_then(|x| x.as_str()).unwrap_or("");
-            match kind {
-                "ok" => {
-                    let js_type = v
-                        .get("type")
-                        .and_then(|x| x.as_str())
-                        .unwrap_or("undefined")
-                        .to_string();
-                    let value = v
-                        .get("value")
-                        .and_then(|x| x.as_str())
-                        .unwrap_or("undefined")
-                        .to_string();
-                    Ok(EvalResult::Ok { value, js_type })
-                }
-                "thrown" => {
-                    let kind = v
-                        .get("name")
-                        .and_then(|x| x.as_str())
-                        .unwrap_or("Error")
-                        .to_string();
-                    let message = v
-                        .get("message")
-                        .and_then(|x| x.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    Ok(EvalResult::Thrown { kind, message })
-                }
-                "syntax" => {
-                    let message = v
-                        .get("message")
-                        .and_then(|x| x.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    Ok(EvalResult::Syntax { message })
-                }
-                other => Err(EngineError::Other(format!("eval: unexpected kind {other}"))),
+    match eval(&expr_wrapper, Duration::from_secs(5)) {
+        Ok(json) => parse_eval_json(json),
+        // Expression mode couldn't be parsed at all (e.g. a multiline
+        // statement block, or a malformed expression whose syntax error
+        // lives in the outer script and so escapes the inner try/catch).
+        // Retry as a program; if that also fails to run, surface the
+        // original error.
+        Err(first) => {
+            let src_literal = serde_json::to_string(expr)
+                .unwrap_or_else(|_| "\"\"".to_string());
+            let program_wrapper = format!(
+                r"(function() {{
+                    try {{
+                        var __v = (0, eval)({src_literal});
+                        return JSON.stringify({{
+                            kind: 'ok',
+                            type: typeof __v,
+                            value: (typeof __v === 'string') ? __v : JSON.stringify(__v),
+                        }});
+                    }} catch (e) {{
+                        var msg = (e && e.message) || String(e);
+                        var name = (e && e.name) || 'Error';
+                        if (name === 'SyntaxError') {{
+                            return JSON.stringify({{ kind: 'syntax', message: msg }});
+                        }}
+                        return JSON.stringify({{ kind: 'thrown', name: name, message: msg }});
+                    }}
+                }})()"
+            );
+            match eval(&program_wrapper, Duration::from_secs(5)) {
+                Ok(json) => parse_eval_json(json),
+                Err(_) => match first {
+                    EngineError::Other(msg) if msg.contains("SyntaxError") => {
+                        Ok(crate::inspector::EvalResult::Syntax { message: msg })
+                    }
+                    other => Err(other),
+                },
             }
         }
-        Err(EngineError::Other(msg)) if msg.contains("SyntaxError") => {
-            Ok(EvalResult::Syntax { message: msg })
+    }
+}
+
+/// Decode the tagged JSON record emitted by the `run_eval` wrappers.
+fn parse_eval_json(json: String) -> EngineResult<crate::inspector::EvalResult> {
+    use crate::inspector::EvalResult;
+    let unwrapped = serde_json::from_str::<String>(&json).unwrap_or(json);
+    let v: serde_json::Value = serde_json::from_str(&unwrapped)
+        .map_err(|e| EngineError::Other(format!("eval: invalid wrapper json: {e}")))?;
+    let kind = v.get("kind").and_then(|x| x.as_str()).unwrap_or("");
+    match kind {
+        "ok" => {
+            let js_type = v
+                .get("type")
+                .and_then(|x| x.as_str())
+                .unwrap_or("undefined")
+                .to_string();
+            let value = v
+                .get("value")
+                .and_then(|x| x.as_str())
+                .unwrap_or("undefined")
+                .to_string();
+            Ok(EvalResult::Ok { value, js_type })
         }
-        Err(e) => Err(e),
+        "thrown" => {
+            let kind = v
+                .get("name")
+                .and_then(|x| x.as_str())
+                .unwrap_or("Error")
+                .to_string();
+            let message = v
+                .get("message")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
+            Ok(EvalResult::Thrown { kind, message })
+        }
+        "syntax" => {
+            let message = v
+                .get("message")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
+            Ok(EvalResult::Syntax { message })
+        }
+        other => Err(EngineError::Other(format!("eval: unexpected kind {other}"))),
     }
 }
 

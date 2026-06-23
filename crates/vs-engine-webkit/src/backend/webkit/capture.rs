@@ -9,9 +9,10 @@ use std::time::Duration;
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
+use objc2::MainThreadMarker;
 use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage};
 use objc2_foundation::{NSData, NSDictionary, NSError};
-use objc2_web_kit::WKWebView;
+use objc2_web_kit::{WKSnapshotConfiguration, WKWebView};
 
 use super::eval::run_loop_until;
 use crate::engine::{EngineError, EngineResult, PageHandle};
@@ -20,6 +21,7 @@ pub(super) fn capture_to_png(
     web_view: &WKWebView,
     page: PageHandle,
     captures_dir: Option<&Path>,
+    mtm: MainThreadMarker,
 ) -> EngineResult<PathBuf> {
     let slot: Rc<RefCell<Option<Result<Retained<NSImage>, String>>>> = Rc::new(RefCell::new(None));
     let slot_for_block = slot.clone();
@@ -37,8 +39,20 @@ pub(super) fn capture_to_png(
         *slot_for_block.borrow_mut() = Some(Ok(img));
     });
 
+    // `afterScreenUpdates` defaults to YES, which makes the snapshot
+    // wait for the next *on-screen* rendering update before firing the
+    // completion handler. Our WKWebView is hosted in an offscreen
+    // NSWindow that is never ordered on-screen, so no screen update is
+    // ever scheduled and the handler can wedge until the timeout (seen
+    // under sequential automation; isolated runs occasionally win the
+    // race against a pending paint). Setting it to NO captures the
+    // currently-rendered layer tree immediately, which is exactly what
+    // a headless snapshot wants.
+    let config = unsafe { WKSnapshotConfiguration::new(mtm) };
+    unsafe { config.setAfterScreenUpdates(false) };
+
     unsafe {
-        web_view.takeSnapshotWithConfiguration_completionHandler(None, &block);
+        web_view.takeSnapshotWithConfiguration_completionHandler(Some(&config), &block);
     }
 
     let slot_check = slot.clone();

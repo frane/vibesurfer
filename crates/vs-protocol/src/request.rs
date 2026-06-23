@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::error::{ParseError, Result};
-use crate::tokenize::{quote_value, strip_quotes, Tokenizer};
+use crate::tokenize::strip_quotes;
 
 /// One request from the CLI to the daemon.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,12 +54,18 @@ impl Request {
 
     /// Encode the request as a single wire line, including the trailing
     /// newline.
+    ///
+    /// Args and flag values are backslash-escaped (`\` `\n` `\r` `\t`)
+    /// *before* quoting so a value that itself contains newlines —
+    /// e.g. a multiline `vs inspect eval` expression — survives the
+    /// line-framed transport instead of being split into bogus extra
+    /// request lines. `parse` reverses the escaping.
     #[must_use]
     pub fn encode(&self) -> String {
         let mut out = self.primitive.clone();
         for arg in &self.args {
             out.push(' ');
-            out.push_str(&quote_value(arg));
+            out.push_str(&quote_arg(&escape_wire(arg)));
         }
         for (k, v) in &self.flags {
             out.push(' ');
@@ -67,7 +73,7 @@ impl Request {
             out.push_str(k);
             if let Some(value) = v {
                 out.push('=');
-                out.push_str(&quote_value(value));
+                out.push_str(&quote_arg(&escape_wire(value)));
             }
         }
         out.push('\n');
@@ -82,7 +88,7 @@ impl Request {
                 detail: "empty request line",
             });
         }
-        let mut tokens = Tokenizer::new(trimmed);
+        let mut tokens = raw_tokens(trimmed).into_iter();
         let primitive_tok = tokens.next().ok_or(ParseError::InvalidRequest {
             detail: "missing primitive",
         })?;
@@ -108,12 +114,12 @@ impl Request {
                             detail: "flag with empty name",
                         });
                     }
-                    flags.insert(name.to_string(), Some(strip_quotes(value).to_string()));
+                    flags.insert(name.to_string(), Some(unescape_wire(strip_quotes(value))));
                 } else {
                     flags.insert(rest.to_string(), None);
                 }
             } else {
-                args.push(strip_quotes(tok).to_string());
+                args.push(unescape_wire(strip_quotes(tok)));
             }
         }
         Ok(Self {
@@ -127,6 +133,118 @@ impl Request {
 impl fmt::Display for Request {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.encode().trim_end_matches('\n'))
+    }
+}
+
+/// Backslash-escape the characters that the line-framed, quote-aware
+/// wire would otherwise break on or mangle: the escape char itself, a
+/// literal double quote (so it can't prematurely close a quoted span),
+/// and the CR/LF/TAB control chars (LF/CR would split the request into
+/// extra lines). Everything else passes through untouched, so the
+/// common single-line, quote-free case is a no-op.
+///
+/// Unlike the shared `quote_value`, this is lossless: `"` survives as
+/// `\"` instead of being substituted to `'`, so `vs inspect eval` can
+/// carry JS string literals like `querySelector("a")` verbatim.
+fn escape_wire(s: &str) -> String {
+    if !s.contains(['\\', '"', '\n', '\r', '\t']) {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len() + 8);
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Inverse of [`escape_wire`]. An unknown escape (`\x`) is preserved
+/// verbatim — both backslash and the following char — so JS source like
+/// `/\d/` round-trips even though `\d` isn't one of our escapes.
+fn unescape_wire(s: &str) -> String {
+    if !s.contains('\\') {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            // `\\` → `\`; a trailing lone `\` (None) also yields `\`.
+            Some('\\') | None => out.push('\\'),
+            Some('"') => out.push('"'),
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some('t') => out.push('\t'),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+        }
+    }
+    out
+}
+
+/// Wrap an already-[`escape_wire`]d value in `"..."` if it contains
+/// token-breaking whitespace or is empty; otherwise leave it bare.
+///
+/// Unlike the shared `quote_value`, this performs **no** `"` → `'`
+/// substitution — `escape_wire` has already turned every literal quote
+/// into `\"`, and substituting here would corrupt that back into `\'`.
+fn quote_arg(escaped: &str) -> String {
+    if escaped.is_empty() || escaped.contains([' ', '\t']) {
+        format!("\"{escaped}\"")
+    } else {
+        escaped.to_string()
+    }
+}
+
+/// Split a request line into raw tokens (quotes and escapes intact),
+/// breaking on unquoted whitespace. This is a request-local, escape-
+/// aware variant of the shared [`Tokenizer`]: a backslash escapes the
+/// following char, so an escaped quote (`\"`) inside a quoted span does
+/// not close it and an embedded space does not split the token. The
+/// shared tokenizer is intentionally left escape-unaware — the tree and
+/// delta grammars rely on its `'`-substitution contract — which is why
+/// requests get their own splitter here.
+fn raw_tokens(s: &str) -> Vec<&str> {
+    let mut tokens = Vec::new();
+    let mut rest = s;
+    loop {
+        let trimmed = rest.trim_start_matches([' ', '\t']);
+        if trimmed.is_empty() {
+            return tokens;
+        }
+        let mut in_quotes = false;
+        let mut end = trimmed.len();
+        let mut chars = trimmed.char_indices();
+        while let Some((i, c)) = chars.next() {
+            match c {
+                // Consume the escaped char too (UTF-8 safe via the
+                // iterator), so it can never be treated as a delimiter
+                // or quote toggle.
+                '\\' => {
+                    chars.next();
+                }
+                '"' => in_quotes = !in_quotes,
+                ' ' | '\t' if !in_quotes => {
+                    end = i;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        tokens.push(&trimmed[..end]);
+        rest = &trimmed[end..];
     }
 }
 
@@ -211,6 +329,67 @@ mod tests {
         let s = r.encode();
         // Flags ordered alphabetically.
         assert_eq!(s, "vs_capture 7 --full-page --viewport=mobile\n");
+        assert_eq!(Request::parse(&s).unwrap(), r);
+    }
+
+    #[test]
+    fn multiline_arg_survives_framing() {
+        // A multiline eval expression must not break the single-line
+        // wire framing: the encoded form has exactly one '\n' (the
+        // terminator), and parse round-trips the original newlines.
+        let expr = "const x = 1;\nconst y = 2;\nx + y";
+        let r = Request::new("vs_inspect")
+            .arg("eval")
+            .arg("3")
+            .arg(expr);
+        let s = r.encode();
+        assert_eq!(
+            s.matches('\n').count(),
+            1,
+            "encoded request must be a single wire line; got {s:?}"
+        );
+        assert_eq!(Request::parse(&s).unwrap(), r);
+    }
+
+    #[test]
+    fn backslash_and_tab_round_trip() {
+        let expr = "a\tb /\\d+/ c\\nd"; // real tab, regex backslash, literal \n
+        let r = Request::new("vs_inspect").arg("eval").arg("1").arg(expr);
+        let s = r.encode();
+        assert_eq!(s.matches('\n').count(), 1);
+        assert_eq!(Request::parse(&s).unwrap(), r);
+    }
+
+    #[test]
+    fn double_quotes_in_arg_round_trip() {
+        // The whole point of the request-local escaping: a JS string
+        // literal with double quotes survives losslessly (the shared
+        // quote_value would have mangled `"` → `'`).
+        for expr in [
+            r#"document.querySelector("a").href"#,
+            r#"x === "with space" && y"#,
+            r#"JSON.parse("{\"k\":1}")"#, // already-escaped quotes inside JS
+        ] {
+            let r = Request::new("vs_inspect").arg("eval").arg("1").arg(expr);
+            let s = r.encode();
+            assert_eq!(
+                s.matches('\n').count(),
+                1,
+                "single wire line expected for {expr:?}; got {s:?}"
+            );
+            assert_eq!(
+                Request::parse(&s).unwrap(),
+                r,
+                "round-trip failed for {expr:?} (encoded {s:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn multiline_flag_value_round_trips() {
+        let r = Request::new("vs_act").flag_value("text", "line1\nline2");
+        let s = r.encode();
+        assert_eq!(s.matches('\n').count(), 1);
         assert_eq!(Request::parse(&s).unwrap(), r);
     }
 

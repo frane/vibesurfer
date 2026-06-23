@@ -14,6 +14,22 @@ use crate::daemon::{
 /// with `--full`.
 const REQUEST_BODY_TRUNCATE: usize = 4096;
 
+/// Truncate `s` to at most `max` *bytes*, snapping down to the nearest
+/// UTF-8 char boundary. Slicing `&s[..max]` directly panics when `max`
+/// lands mid-codepoint — and a panic inside an engine job surfaces as a
+/// bogus `! ENGINE_CRASH` (empty-args, "no message") and can destabilize
+/// the daemon, so every eval/storage/script truncation routes here.
+fn truncate_on_boundary(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 pub(super) fn handle_skill(daemon: &Daemon, req: &Request) -> String {
     let session_id = match require_session(req) {
         Ok(s) => s,
@@ -633,7 +649,10 @@ fn render_eval(daemon: &Daemon, session_id: &str, page_id: &str, req: &Request) 
         Ok(EvalResult::Ok { value, js_type }) => {
             let len = value.len();
             let body = if truncate && len > max {
-                format!("result={}...\ntype={js_type} len={len}\n", &value[..max])
+                format!(
+                    "result={}...\ntype={js_type} len={len}\n",
+                    truncate_on_boundary(&value, max)
+                )
             } else {
                 format!("result={value}\ntype={js_type} len={len}\n")
             };
@@ -676,7 +695,7 @@ fn render_storage(daemon: &Daemon, session_id: &str, page_id: &str, req: &Reques
         let value = if entry.sensitive && !unsafe_log {
             "***".to_string()
         } else if truncate && entry.value.len() > max {
-            format!("{}...", &entry.value[..max])
+            format!("{}...", truncate_on_boundary(&entry.value, max))
         } else {
             entry.value.clone()
         };
@@ -733,7 +752,7 @@ fn render_script(daemon: &Daemon, session_id: &str, page_id: &str, req: &Request
     match daemon.inspect_script_source(session_id, page_id, seq) {
         Ok(Some(s)) => {
             let body = if truncate && s.body.len() > max {
-                format!("{}...\n", &s.body[..max])
+                format!("{}...\n", truncate_on_boundary(&s.body, max))
             } else {
                 let mut b = s.body.clone();
                 if !b.ends_with('\n') {
@@ -996,5 +1015,32 @@ pub(super) fn handle_pending_peek(daemon: &Daemon, req: &Request) -> String {
             ErrorCode::NotFound,
             vec![format!("pending entry {id} not found")],
         ),
+    }
+}
+
+#[cfg(test)]
+mod truncate_tests {
+    use super::truncate_on_boundary;
+
+    #[test]
+    fn no_truncation_when_short() {
+        assert_eq!(truncate_on_boundary("hello", 10), "hello");
+        assert_eq!(truncate_on_boundary("hello", 5), "hello");
+    }
+
+    #[test]
+    fn snaps_below_multibyte_boundary() {
+        // "héllo": 'é' is 2 bytes (0xC3 0xA9) at indices 1..3. A naive
+        // &s[..2] would panic mid-codepoint; we must snap down to 1.
+        let s = "héllo";
+        assert_eq!(truncate_on_boundary(s, 2), "h");
+        assert_eq!(truncate_on_boundary(s, 3), "hé");
+    }
+
+    #[test]
+    fn handles_4byte_emoji() {
+        let s = "a😀b"; // emoji is 4 bytes at 1..5
+        assert_eq!(truncate_on_boundary(s, 3), "a");
+        assert_eq!(truncate_on_boundary(s, 5), "a😀");
     }
 }

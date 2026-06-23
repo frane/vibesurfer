@@ -259,7 +259,23 @@ impl Engine for WkBackend {
     }
 
     fn close(&mut self, page: PageHandle) -> EngineResult<()> {
-        self.pages.remove(&page);
+        if let Some(p) = self.pages.remove(&page) {
+            // Tear the page down explicitly instead of relying solely on
+            // the Retained handles dropping. Stop any in-flight load,
+            // detach the navigation delegate so no late callback fires
+            // into a half-dead page, pull the webview out of its host
+            // window, and close the window. Leaked offscreen windows +
+            // their WebKit auxiliary processes were piling up across a
+            // long session and eventually starving new navigations
+            // (`could not connect to the server`); prompt teardown keeps
+            // the process-pool footprint flat.
+            unsafe {
+                p.web_view.stopLoading();
+                p.web_view.setNavigationDelegate(None);
+                p.window.setContentView(None);
+                p.window.close();
+            }
+        }
         Ok(())
     }
 
@@ -332,9 +348,10 @@ impl Engine for WkBackend {
 
     fn capture(&mut self, page: PageHandle, _scope: CaptureScope) -> EngineResult<PathBuf> {
         let captures_dir = self.captures_dir.clone();
+        let mtm = self.mtm;
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
-        capture::capture_to_png(&web_view, page, captures_dir.as_deref())
+        capture::capture_to_png(&web_view, page, captures_dir.as_deref(), mtm)
     }
 
     fn layout(&mut self, page: PageHandle, refs: &[Ref]) -> EngineResult<Vec<LayoutBox>> {

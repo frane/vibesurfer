@@ -29,6 +29,36 @@ fn cell_capture() {
     }
 }
 
+// 31b. vs_capture — back-to-back captures after eval/viewport must not
+// wedge on the snapshot's wait-for-screen-update. Reproduces the
+// sequential-automation TIMEOUT bug (offscreen window never paints
+// on-screen, so `afterScreenUpdates=YES` never fires its handler).
+#[test]
+fn cell_capture_sequential() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/static.html");
+        for i in 0..5 {
+            let r = ctx.vs(&["viewport", &page, "1200x800"]);
+            assert_ok(&format!("viewport #{i}"), &r);
+            let ready = eval_js(&ctx, &page, "document.readyState");
+            assert!(
+                ready.contains("complete"),
+                "readyState should be complete on iter {i}; got {ready:?}"
+            );
+            let r = ctx.vs(&["capture", &page]);
+            assert_ok(&format!("capture #{i}"), &r);
+            let path = body_rest(&r).lines().next().unwrap_or("").trim().to_string();
+            let bytes = std::fs::read(&path).expect("read capture");
+            assert!(
+                bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]) && bytes.len() > 100,
+                "capture #{i} must be a non-trivial PNG; len={}",
+                bytes.len()
+            );
+        }
+    }
+}
+
 // 32. vs_viewport — switch to mobile, observe @media reflow.
 #[test]
 fn cell_viewport() {

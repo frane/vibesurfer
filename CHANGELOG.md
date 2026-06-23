@@ -8,6 +8,15 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 
 
+## [v0.1.15] - 2026-06-23
+
+### Fixed
+- `vs capture` no longer wedges to `TIMEOUT` on fully-loaded static pages under sequential automation (macOS WKWebView). The snapshot was taken with the default `afterScreenUpdates = YES`, which blocks the completion handler until the next *on-screen* rendering update — but the WKWebView lives in an offscreen `NSWindow` that's never ordered on-screen, so no such update is scheduled and the handler never fired (isolated runs only succeeded when they happened to race a pending paint). `capture` now passes a `WKSnapshotConfiguration` with `afterScreenUpdates = NO`, snapshotting the currently-rendered layer tree immediately. Regression-guarded by a new `cell_capture_sequential` cell that runs viewport→eval→capture five times back-to-back.
+- `vs inspect eval` now accepts **multiline** expressions, statement blocks, and **literal double quotes**. Three bugs stacked here: (1) the line-framed wire transport split any arg containing a newline into bogus extra request lines, so a multiline expression came back as an opaque `BAD_REQUEST`; (2) the shared quoting substituted `"` → `'`, silently rewriting JS string literals like `querySelector("a")`; (3) the eval wrapper only handled a single *expression* (`return <expr>`), so a statement block like `const a=1; f(); a` was a parse error the inner `try/catch` couldn't see, surfacing as `eval failed: A JavaScript exception occurred`. Fixes: `Request::encode`/`parse` now use request-local, lossless backslash escaping (`\ " \n \r \t`) plus an escape-aware tokenizer — so args survive framing and carry `"` verbatim — while the shared tree/delta tokenizer (which relies on the `'`-substitution contract) is left untouched. And `run_eval` now falls back to program mode via indirect `eval` (REPL completion-value semantics) whenever expression mode fails to parse, which also turns malformed input into a clean `EVAL_SYNTAX`/`EVAL_ERROR` with a message instead of an opaque engine error. Expression mode still runs first, so CSP pages without `unsafe-eval` are unaffected for the common single-expression case.
+- Engine operations that panic (e.g. a mid-codepoint byte slice) no longer take the daemon down or surface as a message-less `! ENGINE_CRASH`. The dispatch layer now wraps each engine job in `catch_unwind` and returns a clean `engine panicked: <msg>` error — important on macOS, where the job runs inside an Obj-C run-loop frame and an unwinding panic is undefined behavior that could leave the daemon unable to accept new connections.
+- UTF-8 truncation in `vs inspect eval`/`storage`/`script` output (`result=…`, storage values, script source) now snaps to a char boundary instead of slicing mid-codepoint, which previously panicked on multi-byte content (and, per the above, manifested as a spurious `ENGINE_CRASH`).
+- `vs close` now tears down the page's WKWebView and its offscreen host window explicitly (`stopLoading`, detach nav delegate, close window) instead of leaving teardown to handle-drop. Leaked windows + their WebKit auxiliary processes were accumulating across long sessions and eventually starving new navigations (`could not connect to the server`).
+
 ## [v0.1.14] - 2026-06-11
 
 ### Security
@@ -29,7 +38,6 @@ All notable changes to vibesurfer are recorded here. The format follows
   - `docs/ROADMAP.md` and `docs/M6_PLAN.md` are marked historical (M0–M6 shipped); the roadmap's "Beyond M6" list reflects that Windows and the MCP shim shipped.
   - `docs/DEVELOPMENT.md` no longer describes Windows as pending manual verification.
   - `dist/vibesurfer.rb` points at v0.1.13 with a real tarball SHA instead of v0.0.1 with a placeholder.
-
 
 
 ## [v0.1.13] - 2026-06-02

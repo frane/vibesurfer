@@ -29,6 +29,16 @@ use crate::engine::{
 /// One unit of work for the engine thread.
 type Job = Box<dyn FnOnce(&mut dyn Engine) + Send>;
 
+/// Extract a human-readable message from a `catch_unwind` payload.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    let detail = payload
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown panic".to_string());
+    format!("engine panicked: {detail}")
+}
+
 /// Owns the engine thread and exposes a synchronous facade.
 ///
 /// Drop semantics: dropping the runtime closes the command channel,
@@ -136,7 +146,17 @@ impl EngineRuntime {
         let sender = self.sender.as_ref().ok_or(EngineError::Closed)?;
         let (reply_tx, reply_rx) = mpsc::sync_channel::<EngineResult<R>>(1);
         let job: Job = Box::new(move |engine| {
-            let result = f(engine);
+            // Isolate a panicking engine op: on macOS the job runs on
+            // the Cocoa main thread inside an Obj-C run-loop frame, so an
+            // unwinding panic is undefined behavior that can take the
+            // whole daemon down ("could not connect to the server" on the
+            // next request). Catch it here and hand back a clean, message-
+            // bearing error instead — far better than the bare
+            // `ENGINE_CRASH` (empty-args) the dropped reply channel would
+            // otherwise produce.
+            let result =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(engine)))
+                    .unwrap_or_else(|payload| Err(EngineError::Other(panic_message(&payload))));
             let _ = reply_tx.send(result);
         });
         sender.send(job).map_err(|_| EngineError::Closed)?;
