@@ -154,9 +154,8 @@ impl EngineRuntime {
             // bearing error instead — far better than the bare
             // `ENGINE_CRASH` (empty-args) the dropped reply channel would
             // otherwise produce.
-            let result =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(engine)))
-                    .unwrap_or_else(|payload| Err(EngineError::Other(panic_message(&payload))));
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(engine)))
+                .unwrap_or_else(|payload| Err(EngineError::Other(panic_message(&payload))));
             let _ = reply_tx.send(result);
         });
         sender.send(job).map_err(|_| EngineError::Closed)?;

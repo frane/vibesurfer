@@ -128,7 +128,11 @@ fn cell_inspect_eval_double_quotes() {
         // String equality that only holds if the double-quoted literal
         // arrived intact (single quotes would still pass, so also check
         // a value that embeds a quote char).
-        let r = eval_js(&ctx, &page, r#"["a","b"].join("") + String.fromCharCode(34)"#);
+        let r = eval_js(
+            &ctx,
+            &page,
+            r#"["a","b"].join("") + String.fromCharCode(34)"#,
+        );
         assert_eq!(
             r.trim(),
             "ab\"",

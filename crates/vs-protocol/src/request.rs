@@ -338,10 +338,7 @@ mod tests {
         // wire framing: the encoded form has exactly one '\n' (the
         // terminator), and parse round-trips the original newlines.
         let expr = "const x = 1;\nconst y = 2;\nx + y";
-        let r = Request::new("vs_inspect")
-            .arg("eval")
-            .arg("3")
-            .arg(expr);
+        let r = Request::new("vs_inspect").arg("eval").arg("3").arg(expr);
         let s = r.encode();
         assert_eq!(
             s.matches('\n').count(),

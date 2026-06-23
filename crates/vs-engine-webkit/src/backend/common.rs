@@ -555,8 +555,7 @@ where
         // Retry as a program; if that also fails to run, surface the
         // original error.
         Err(first) => {
-            let src_literal = serde_json::to_string(expr)
-                .unwrap_or_else(|_| "\"\"".to_string());
+            let src_literal = serde_json::to_string(expr).unwrap_or_else(|_| "\"\"".to_string());
             let program_wrapper = format!(
                 r"(function() {{
                     try {{

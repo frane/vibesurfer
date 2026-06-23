@@ -48,7 +48,12 @@ fn cell_capture_sequential() {
             );
             let r = ctx.vs(&["capture", &page]);
             assert_ok(&format!("capture #{i}"), &r);
-            let path = body_rest(&r).lines().next().unwrap_or("").trim().to_string();
+            let path = body_rest(&r)
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
             let bytes = std::fs::read(&path).expect("read capture");
             assert!(
                 bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]) && bytes.len() > 100,
