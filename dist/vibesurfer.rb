@@ -16,7 +16,7 @@ class Vibesurfer < Formula
   homepage "https://github.com/frane/vibesurfer"
   url "https://github.com/frane/vibesurfer/archive/refs/tags/v0.1.15.tar.gz"
   # Update on each release: `shasum -a 256 <tarball>`.
-  sha256 "d89e22c5796604a92c0f66e0429ee4e9262452e4d8b2cef7e87a4e6793c691c8"
+  sha256 "e0bb86e7d5c032899f58c785463508ba379f6a129d43d0a079e321d32b630fbd"
   license "Apache-2.0"
   head "https://github.com/frane/vibesurfer.git", branch: "main"
 
