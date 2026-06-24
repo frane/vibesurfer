@@ -156,11 +156,21 @@ pub enum Command {
         sub: Option<String>,
         name: Option<String>,
     },
-    /// 16. Capture a screenshot. Defaults to viewport scope; pass a
+    /// 16. Capture a screenshot, or `vs capture clean` to prune old
+    ///     screenshots. For a shot: defaults to viewport scope; pass a
     ///     ref to capture an element, or `--full-page`.
-    #[command(visible_alias = "cap")]
+    #[command(
+        visible_alias = "cap",
+        args_conflicts_with_subcommands = true,
+        subcommand_negates_reqs = true
+    )]
     Capture {
-        page: String,
+        /// `clean` prunes the captures directory instead of taking a
+        /// screenshot. Mutually exclusive with the screenshot args.
+        #[command(subcommand)]
+        clean: Option<CaptureSub>,
+        /// Page id to screenshot (required unless using `clean`).
+        page: Option<String>,
         #[arg(value_name = "REF")]
         r: Option<u32>,
         #[arg(long)]
@@ -337,6 +347,27 @@ pub enum Command {
     /// exposed as one MCP tool. Wire to Claude Desktop / Claude Code
     /// by configuring `vs mcp` as the server command.
     Mcp,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CaptureSub {
+    /// Delete screenshot PNGs from the captures directory
+    /// (`~/.vibesurfer/captures`, or `$VS_CAPTURES_DIR`). With no flags,
+    /// applies the default retention (keep the newest 200, drop anything
+    /// older than 30 days) — the same cap the daemon enforces
+    /// automatically after each capture.
+    Clean {
+        /// Delete every capture, ignoring the keep/age limits.
+        #[arg(long)]
+        all: bool,
+        /// Delete captures older than this (e.g. `7d`, `12h`, `30m`,
+        /// `90s`; a bare number is seconds).
+        #[arg(long, value_name = "DUR")]
+        older_than: Option<String>,
+        /// Keep only the newest N captures; delete the rest.
+        #[arg(long, value_name = "N")]
+        keep: Option<usize>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -527,14 +558,21 @@ impl Command {
                 req
             }
             Self::Capture {
+                clean: _,
                 page,
                 r,
                 full_page,
                 base64: _,
             } => {
-                // `base64` is a CLI-side post-process — the daemon
-                // still returns the on-disk path; dispatch.rs reads
-                // the PNG and base64-encodes it before printing.
+                // `clean` is handled locally in dispatch.rs before any
+                // wire call, so by here we're taking a screenshot and a
+                // page id is required. `base64` is a CLI-side
+                // post-process — the daemon still returns the on-disk
+                // path; dispatch.rs reads the PNG and base64-encodes it
+                // before printing.
+                let page = page.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("vs capture: missing page id (or use `vs capture clean`)")
+                })?;
                 let s = require_session(session_id)?;
                 let mut req = Request::new("vs_capture")
                     .arg(page.clone())

@@ -6,6 +6,9 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Screenshot retention. `vs capture` used to write a PNG per shot to `~/.vibesurfer/captures/` and never delete any, so the directory grew without bound (63 MB / 268 files on one dev box). Now the daemon auto-caps the directory after every capture — keep the newest 200, drop anything older than 30 days, logged not silent — and the just-written file is always retained. A new `vs capture clean` subcommand prunes on demand: `--all` wipes everything, `--older-than <7d|12h|30m|90s>` drops by age, `--keep <N>` keeps the newest N; with no flags it applies the same default cap. The command is a pure local filesystem op (no session, no daemon) and only ever touches `*.png` files, so anything else in the directory is left alone.
+
 
 
 ## [v0.1.15] - 2026-06-23

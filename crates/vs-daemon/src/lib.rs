@@ -12,6 +12,7 @@
     clippy::cast_sign_loss
 )]
 
+pub mod captures;
 pub mod config;
 pub mod daemon;
 pub mod dispatch;

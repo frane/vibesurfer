@@ -99,7 +99,7 @@ When you need credentials, never call `vs act fill` with the value. Always call 
 | # | CLI | What |
 |---|-----|------|
 | 15 | `vs skill list \| show <NAME>` | List or show installed skill bundles. |
-| 16 | `vs capture <PAGE> [<REF>] [--full-page] [--base64]` | PNG to `~/.vibesurfer/captures/`. With `--base64` (`--b64`) the response body carries `base64=<bytes>` + `path=…` for MCP-driven agents that want the pixels inline (default ON over MCP). |
+| 16 | `vs capture <PAGE> [<REF>] [--full-page] [--base64]` | PNG to `~/.vibesurfer/captures/`. With `--base64` (`--b64`) the response body carries `base64=<bytes>` + `path=…` for MCP-driven agents that want the pixels inline (default ON over MCP). The dir is auto-capped (newest 200 / 30 days) after each shot; `vs capture clean [--all] [--older-than 7d] [--keep 50]` prunes it on demand. |
 | 19 | `vs auth save\|load\|list\|clear <PAGE> <NAME>` | Per-origin cookie+storage blob, AES-256-GCM at rest. |
 
 ## Optimistic concurrency
@@ -161,7 +161,7 @@ Trusted clicks (v0.1.11+): every backend routes `vs act click` and the cursor pr
 |------|------|
 | `~/.vibesurfer/daemon.sock` | Unix socket the CLI talks to. |
 | `~/.vibesurfer/state.db` | SQLite (sessions, pages, refs, marks, annotations, auth blobs, audit log). |
-| `~/.vibesurfer/captures/` | PNG screenshots from `vs capture`. |
+| `~/.vibesurfer/captures/` | PNG screenshots from `vs capture`. Auto-capped (newest 200 / 30 days); prune with `vs capture clean`. |
 | `~/.vibesurfer/skills/` | Composed skill bundles, listed by `vs skill list`. |
 | `~/.vibesurfer/active-session` | Plain-text id of the active session. |
 | `~/.vibesurfer/key` | Master key (fallback if no system keyring). |

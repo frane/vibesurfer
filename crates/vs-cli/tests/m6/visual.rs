@@ -64,6 +64,44 @@ fn cell_capture_sequential() {
     }
 }
 
+// 31c. vs_capture clean — prune the captures directory.
+#[test]
+fn cell_capture_clean() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/static.html");
+        for _ in 0..3 {
+            assert_ok("capture", &ctx.vs(&["capture", &page]));
+        }
+        let cap_dir = ctx.home_path().join("captures");
+        let png_count = |dir: &std::path::Path| -> usize {
+            std::fs::read_dir(dir)
+                .map(|rd| {
+                    rd.filter_map(Result::ok)
+                        .filter(|e| e.path().extension().is_some_and(|x| x == "png"))
+                        .count()
+                })
+                .unwrap_or(0)
+        };
+        assert!(
+            png_count(&cap_dir) >= 3,
+            "expected >=3 captures in {cap_dir:?}"
+        );
+        let r = ctx.vs(&["capture", "clean", "--all"]);
+        assert_ok("capture clean --all", &r);
+        let body = body_rest(&r);
+        assert!(
+            body.contains("deleted="),
+            "clean should report a summary; got {body:?}"
+        );
+        assert_eq!(
+            png_count(&cap_dir),
+            0,
+            "no PNGs should remain after `capture clean --all`"
+        );
+    }
+}
+
 // 32. vs_viewport — switch to mobile, observe @media reflow.
 #[test]
 fn cell_viewport() {

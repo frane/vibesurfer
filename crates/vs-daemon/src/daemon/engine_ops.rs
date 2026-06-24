@@ -86,6 +86,23 @@ impl Daemon {
             let engine_handle = self.engine_handle_for(session_id, page_id)?;
             std::fs::create_dir_all(&self.inner.captures_dir).map_err(DaemonError::Io)?;
             let path = self.inner.engine.capture(engine_handle, scope)?;
+            // Auto-cap: keep the captures dir bounded so PNGs don't grow
+            // without limit. The file just written is the newest, so the
+            // newest-N + max-age policy never deletes it.
+            let stats = crate::captures::prune(
+                &self.inner.captures_dir,
+                &crate::captures::RetentionPolicy::default_cap(),
+                std::time::SystemTime::now(),
+            );
+            if stats.deleted > 0 {
+                eprintln!(
+                    "vs: auto-pruned {} old capture(s), {} KiB freed ({} kept) in {}",
+                    stats.deleted,
+                    stats.freed_bytes / 1024,
+                    stats.kept,
+                    self.inner.captures_dir.display(),
+                );
+            }
             let token = self
                 .current_token(session_id, page_id)
                 .unwrap_or(StateToken::ZERO);

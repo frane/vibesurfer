@@ -104,6 +104,17 @@ fn mark_caller_closed(paths: &Paths, key: &str) -> Result<()> {
 /// key so concurrent agents in different shells stay isolated.
 pub fn run(cli: &Cli) -> Result<Response> {
     let paths = resolve_paths(cli.home.as_ref());
+
+    // `vs capture clean` is a pure local filesystem op — it needs no
+    // session and no daemon, so handle it before connecting (which would
+    // otherwise auto-spawn a daemon just to delete files).
+    if let Command::Capture {
+        clean: Some(sub), ..
+    } = &cli.command
+    {
+        return run_capture_clean(&paths, sub);
+    }
+
     let mut session_id = resolve_session(cli, &paths)?;
     let mut client = connect(cli, &paths)?;
     let caller_key = caller::caller_key();
@@ -250,6 +261,55 @@ fn read_user_confirm(message: &str) -> Result<()> {
         anyhow::bail!("ABORTED: stdin closed before confirm");
     }
     Ok(())
+}
+
+/// Prune the captures directory per `vs capture clean` flags. Runs
+/// entirely CLI-side against `paths.captures()` — no daemon required.
+fn run_capture_clean(paths: &Paths, sub: &super::CaptureSub) -> Result<Response> {
+    use vs_daemon::captures::{self, RetentionPolicy};
+    let super::CaptureSub::Clean {
+        all,
+        older_than,
+        keep,
+    } = sub;
+
+    let dir = paths.captures();
+    let policy = if *all {
+        RetentionPolicy {
+            all: true,
+            ..Default::default()
+        }
+    } else if older_than.is_some() || keep.is_some() {
+        let max_age =
+            match older_than {
+                Some(s) => Some(captures::parse_duration(s).with_context(|| {
+                    format!("bad --older-than {s:?} (use e.g. 7d, 12h, 30m, 90s)")
+                })?),
+                None => None,
+            };
+        RetentionPolicy {
+            all: false,
+            keep: *keep,
+            max_age,
+        }
+    } else {
+        // No flags: apply the same default cap the daemon auto-enforces.
+        RetentionPolicy::default_cap()
+    };
+
+    let stats = captures::prune(&dir, &policy, std::time::SystemTime::now());
+    let body = vec![format!(
+        "deleted={} freed_kib={} kept={} dir={}",
+        stats.deleted,
+        stats.freed_bytes / 1024,
+        stats.kept,
+        dir.display()
+    )];
+    Ok(Response {
+        envelope: vs_protocol::Envelope::Success(vs_protocol::StateToken([0u8; 8])),
+        body,
+        warnings: Vec::new(),
+    })
 }
 
 /// Resolve a pending entry id, read the value from the local tty,

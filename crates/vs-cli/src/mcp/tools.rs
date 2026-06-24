@@ -217,7 +217,8 @@ pub fn build_cli(name: &str, args: &Value) -> Result<Cli> {
             name: opt_str(args, "name"),
         },
         "vs_capture" => Command::Capture {
-            page: req_str(args, "page")?,
+            clean: None,
+            page: Some(req_str(args, "page")?),
             r: opt_u32(args, "ref"),
             full_page: opt_bool(args, "full_page").unwrap_or(false),
             // Default base64 ON over MCP — agents need bytes inline.

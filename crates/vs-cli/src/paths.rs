@@ -46,4 +46,16 @@ impl Paths {
     pub fn caller_session(&self, caller_key: &str) -> PathBuf {
         self.root.join("callers").join(caller_key)
     }
+
+    /// Where the daemon writes screenshot PNGs. Mirrors
+    /// `vs_daemon::config::Paths::captures` — defaults to
+    /// `<root>/captures`, overridable via `VS_CAPTURES_DIR` — so
+    /// `vs capture clean` prunes exactly what the daemon wrote.
+    #[must_use]
+    pub fn captures(&self) -> PathBuf {
+        if let Some(p) = std::env::var_os("VS_CAPTURES_DIR") {
+            return PathBuf::from(p);
+        }
+        self.root.join("captures")
+    }
 }
