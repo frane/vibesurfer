@@ -64,16 +64,23 @@ fn cell_capture_sequential() {
     }
 }
 
-// 31c. vs_capture clean — prune the captures directory.
+// 31c. vs_capture clean — prune the captures directory. Seeds the
+// captures dir directly (rather than via real captures) so the count is
+// deterministic across backends — macOS names shots `wk-<page>-<ts>.png`
+// (unique) while the Linux/Windows backends use `capture-<page>.png`
+// (same-page shots overwrite), which is irrelevant to what `clean` does.
 #[test]
 fn cell_capture_clean() {
     for _ in each_available_backend() {
         let ctx = TestContext::start();
-        let (_s, page, _t) = open_fixture(&ctx, "/static.html");
-        for _ in 0..3 {
-            assert_ok("capture", &ctx.vs(&["capture", &page]));
-        }
         let cap_dir = ctx.home_path().join("captures");
+        std::fs::create_dir_all(&cap_dir).expect("mk captures dir");
+        for i in 0..3 {
+            std::fs::write(cap_dir.join(format!("wk-{i}-{i}.png")), b"\x89PNG").unwrap();
+        }
+        // A non-PNG must survive the prune.
+        std::fs::write(cap_dir.join("notes.txt"), b"keep").unwrap();
+
         let png_count = |dir: &std::path::Path| -> usize {
             std::fs::read_dir(dir).map_or(0, |rd| {
                 rd.filter_map(Result::ok)
@@ -81,21 +88,23 @@ fn cell_capture_clean() {
                     .count()
             })
         };
-        assert!(
-            png_count(&cap_dir) >= 3,
-            "expected >=3 captures in {cap_dir:?}"
-        );
+        assert_eq!(png_count(&cap_dir), 3, "seeded 3 PNGs in {cap_dir:?}");
+
         let r = ctx.vs(&["capture", "clean", "--all"]);
         assert_ok("capture clean --all", &r);
         let body = body_rest(&r);
         assert!(
-            body.contains("deleted="),
-            "clean should report a summary; got {body:?}"
+            body.contains("deleted=3"),
+            "clean should report deleted=3; got {body:?}"
         );
         assert_eq!(
             png_count(&cap_dir),
             0,
             "no PNGs should remain after `capture clean --all`"
+        );
+        assert!(
+            cap_dir.join("notes.txt").exists(),
+            "clean must not touch non-PNG files"
         );
     }
 }
