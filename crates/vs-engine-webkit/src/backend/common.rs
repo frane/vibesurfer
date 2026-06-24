@@ -547,51 +547,56 @@ where
             }}
         }})()"
     );
-    match eval(&expr_wrapper, Duration::from_secs(5)) {
-        Ok(json) => parse_eval_json(json),
-        // Expression mode couldn't be parsed at all (e.g. a multiline
-        // statement block, or a malformed expression whose syntax error
-        // lives in the outer script and so escapes the inner try/catch).
-        // Retry as a program; if that also fails to run, surface the
-        // original error.
-        Err(first) => {
-            let src_literal = serde_json::to_string(expr).unwrap_or_else(|_| "\"\"".to_string());
-            let program_wrapper = format!(
-                r"(function() {{
-                    try {{
-                        var __v = (0, eval)({src_literal});
-                        return JSON.stringify({{
-                            kind: 'ok',
-                            type: typeof __v,
-                            value: (typeof __v === 'string') ? __v : JSON.stringify(__v),
-                        }});
-                    }} catch (e) {{
-                        var msg = (e && e.message) || String(e);
-                        var name = (e && e.name) || 'Error';
-                        if (name === 'SyntaxError') {{
-                            return JSON.stringify({{ kind: 'syntax', message: msg }});
-                        }}
-                        return JSON.stringify({{ kind: 'thrown', name: name, message: msg }});
-                    }}
-                }})()"
-            );
-            match eval(&program_wrapper, Duration::from_secs(5)) {
-                Ok(json) => parse_eval_json(json),
-                Err(_) => match first {
-                    EngineError::Other(msg) if msg.contains("SyntaxError") => {
-                        Ok(crate::inspector::EvalResult::Syntax { message: msg })
-                    }
-                    other => Err(other),
-                },
-            }
+    // Expression mode. When `expr` is a statement block the wrapper
+    // itself fails to compile, and engines signal that differently:
+    // WebKit / WebKitGTK return an `Err`, while WebView2's
+    // `ExecuteScript` returns the JSON string `"null"` (it reports an
+    // uncompilable or throwing script as JSON null rather than an
+    // error). Treat *both* — an `Err`, or an `Ok` whose payload doesn't
+    // parse as our tagged record — as "expression mode didn't apply"
+    // and fall through to program mode.
+    if let Ok(json) = eval(&expr_wrapper, Duration::from_secs(5)) {
+        if let Ok(result) = parse_eval_json(&json) {
+            return Ok(result);
         }
     }
+
+    // Program mode via indirect `eval`: evaluates the source as a
+    // program (REPL completion-value semantics) and catches any
+    // SyntaxError / throw inside the wrapper, so a statement block
+    // resolves and malformed input comes back as a clean
+    // Syntax/Thrown record instead of an opaque engine error.
+    let src_literal = serde_json::to_string(expr).unwrap_or_else(|_| "\"\"".to_string());
+    let program_wrapper = format!(
+        r"(function() {{
+            try {{
+                var __v = (0, eval)({src_literal});
+                return JSON.stringify({{
+                    kind: 'ok',
+                    type: typeof __v,
+                    value: (typeof __v === 'string') ? __v : JSON.stringify(__v),
+                }});
+            }} catch (e) {{
+                var msg = (e && e.message) || String(e);
+                var name = (e && e.name) || 'Error';
+                if (name === 'SyntaxError') {{
+                    return JSON.stringify({{ kind: 'syntax', message: msg }});
+                }}
+                return JSON.stringify({{ kind: 'thrown', name: name, message: msg }});
+            }}
+        }})()"
+    );
+    let json = eval(&program_wrapper, Duration::from_secs(5))?;
+    parse_eval_json(&json)
 }
 
 /// Decode the tagged JSON record emitted by the `run_eval` wrappers.
-fn parse_eval_json(json: String) -> EngineResult<crate::inspector::EvalResult> {
+/// Returns `Err` if `json` isn't one of those records — e.g. the bare
+/// `"null"` WebView2 hands back when a wrapper fails to compile — which
+/// the caller uses as the signal to fall through to program mode.
+fn parse_eval_json(json: &str) -> EngineResult<crate::inspector::EvalResult> {
     use crate::inspector::EvalResult;
-    let unwrapped = serde_json::from_str::<String>(&json).unwrap_or(json);
+    let unwrapped = serde_json::from_str::<String>(json).unwrap_or_else(|_| json.to_string());
     let v: serde_json::Value = serde_json::from_str(&unwrapped)
         .map_err(|e| EngineError::Other(format!("eval: invalid wrapper json: {e}")))?;
     let kind = v.get("kind").and_then(|x| x.as_str()).unwrap_or("");
@@ -1157,5 +1162,67 @@ where
         Err(EngineError::Other(format!(
             "load_storage: unexpected: {unwrapped}"
         )))
+    }
+}
+
+#[cfg(test)]
+mod eval_tests {
+    use super::run_eval;
+    use crate::engine::{EngineError, EngineResult};
+    use crate::inspector::EvalResult;
+    use std::time::Duration;
+
+    // Program-mode wrappers contain `(0, eval)`; expression-mode ones do
+    // not. Tests use that to fake each engine's behavior per mode.
+    fn is_program_mode(js: &str) -> bool {
+        js.contains("(0, eval)")
+    }
+
+    #[test]
+    fn single_expression_uses_expression_mode() {
+        // A plain expression resolves in expression mode — no fallback.
+        let eval = |js: &str, _b: Duration| -> EngineResult<String> {
+            assert!(!is_program_mode(js), "should not reach program mode");
+            Ok(r#"{"kind":"ok","type":"number","value":"2"}"#.to_string())
+        };
+        match run_eval(eval, "1 + 1").unwrap() {
+            EvalResult::Ok { value, .. } => assert_eq!(value, "2"),
+            other => panic!("expected Ok(2), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn webkit_err_triggers_program_fallback() {
+        // WKWebView / WebKitGTK: a statement block makes the
+        // expression wrapper a syntax error -> the engine returns Err.
+        let eval = |js: &str, _b: Duration| -> EngineResult<String> {
+            if is_program_mode(js) {
+                Ok(r#"{"kind":"ok","type":"number","value":"6"}"#.to_string())
+            } else {
+                Err(EngineError::Other("SyntaxError: ...".into()))
+            }
+        };
+        match run_eval(eval, "const a=2;\nconst b=3;\na*b").unwrap() {
+            EvalResult::Ok { value, .. } => assert_eq!(value, "6"),
+            other => panic!("expected Ok(6), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn webview2_null_triggers_program_fallback() {
+        // WebView2: ExecuteScript returns the bare string "null" for an
+        // uncompilable wrapper instead of an Err. run_eval must still
+        // fall through to program mode rather than surfacing an error.
+        let eval = |js: &str, _b: Duration| -> EngineResult<String> {
+            if is_program_mode(js) {
+                Ok(r#"{"kind":"ok","type":"number","value":"6"}"#.to_string())
+            } else {
+                Ok("null".to_string())
+            }
+        };
+        match run_eval(eval, "const a=2;\nconst b=3;\na*b").unwrap() {
+            EvalResult::Ok { value, .. } => assert_eq!(value, "6"),
+            other => panic!("expected Ok(6), got {other:?}"),
+        }
     }
 }
