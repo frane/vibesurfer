@@ -75,13 +75,11 @@ fn cell_capture_clean() {
         }
         let cap_dir = ctx.home_path().join("captures");
         let png_count = |dir: &std::path::Path| -> usize {
-            std::fs::read_dir(dir)
-                .map(|rd| {
-                    rd.filter_map(Result::ok)
-                        .filter(|e| e.path().extension().is_some_and(|x| x == "png"))
-                        .count()
-                })
-                .unwrap_or(0)
+            std::fs::read_dir(dir).map_or(0, |rd| {
+                rd.filter_map(Result::ok)
+                    .filter(|e| e.path().extension().is_some_and(|x| x == "png"))
+                    .count()
+            })
         };
         assert!(
             png_count(&cap_dir) >= 3,
