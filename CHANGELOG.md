@@ -8,6 +8,12 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 
 
+## [v0.1.17] - 2026-06-25
+
+### Fixed
+- Windows (WebView2): sequential `vs capture` no longer hangs the daemon. The offscreen composition controller was left with `IsVisible = false` (the default), which suspends rendering — a single `CapturePreview` caught the post-load frame, but after a `viewport`/`SetBounds` the WebView had to re-render and an invisible controller never does, so the next `CapturePreview` completion handler never fired and the call blocked forever. The controller is now marked visible at setup (offscreen composition, nothing shown on screen), so `CapturePreview` always has a current frame to read.
+- Windows (WebView2): multiline / statement-block `vs inspect eval` now works. `ICoreWebView2.ExecuteScript` returns the JSON string `"null"` when a script fails to compile, whereas WKWebView/WebKitGTK return an error; `run_eval` only fell back to program mode on an error, so on WebView2 a statement block came back as `"null"` and surfaced as a failure. The program-mode fallback now triggers on any non-parseable expression-mode result.
+
 ## [v0.1.16] - 2026-06-24
 
 ### Added

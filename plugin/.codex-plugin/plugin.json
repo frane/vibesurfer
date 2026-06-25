@@ -1,6 +1,6 @@
 {
   "name": "vibesurfer",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "description": "Agent-native headless browser.",
   "author": {
     "name": "Frane Bandov",
