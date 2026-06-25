@@ -501,7 +501,7 @@ impl Engine for Webview2Backend {
         // the call hangs (seen as the sequential-capture wedge on
         // Windows). Visible + offscreen composition = continuous frames
         // CapturePreview can always read, with nothing shown on screen.
-        unsafe { controller.SetIsVisible(true.into()) }
+        unsafe { controller.SetIsVisible(true) }
             .map_err(|e| EngineError::Other(format!("SetIsVisible: {e}")))?;
 
         let web_view: ICoreWebView2 = unsafe { controller.CoreWebView2() }
