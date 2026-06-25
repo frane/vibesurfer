@@ -492,6 +492,18 @@ impl Engine for Webview2Backend {
         }
         .map_err(|e| EngineError::Other(format!("SetBounds: {e}")))?;
 
+        // Mark the (offscreen, composition-hosted) controller visible.
+        // `IsVisible` defaults to FALSE, which suspends rendering — a
+        // single `CapturePreview` catches the initial post-load frame,
+        // but after a `viewport`/`SetBounds` the WebView must re-render
+        // at the new size, which an invisible controller never does, so
+        // the next `CapturePreview` completion handler never fires and
+        // the call hangs (seen as the sequential-capture wedge on
+        // Windows). Visible + offscreen composition = continuous frames
+        // CapturePreview can always read, with nothing shown on screen.
+        unsafe { controller.SetIsVisible(true.into()) }
+            .map_err(|e| EngineError::Other(format!("SetIsVisible: {e}")))?;
+
         let web_view: ICoreWebView2 = unsafe { controller.CoreWebView2() }
             .map_err(|e| EngineError::Other(format!("CoreWebView2: {e}")))?;
 

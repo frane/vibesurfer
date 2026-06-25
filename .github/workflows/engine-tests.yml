@@ -68,7 +68,9 @@ jobs:
   windows:
     name: Windows (real WebView2)
     runs-on: windows-latest
-    timeout-minutes: 30
+    # A healthy run is ~5min; 12 caps a wedged WebView2 op without
+    # burning a full 30 (a single hung CapturePreview used to stall here).
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
