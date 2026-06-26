@@ -8,6 +8,11 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 
 
+## [v0.1.18] - 2026-06-26
+
+### Fixed
+- `vs act <ref> click` on the JS dispatch path (Linux/Windows — macOS already used native NSEvents) now emits a full pointer/mouse event sequence (`pointerover → mouseover → pointermove → pointerdown → mousedown → focus → pointerup → mouseup → click`, center coords, real button/buttons semantics) instead of a bare `el.click()`. Libraries that gate behavior on pointer events — Radix UI's Select/DropdownMenu/Combobox/Popover most visibly — select on `pointerup` and dismiss on `pointerdown`; with a click-only synthetic event the value committed but the popover never closed and its focus-trap overlay then swallowed every subsequent click, wedging the page. Falls back to `el.click()` if `PointerEvent` can't be constructed. Reported via the `#vibesurfer` channel; guarded by a new `cell_act_click_fires_pointer_sequence` cell across all backends.
+
 ## [v0.1.17] - 2026-06-25
 
 ### Fixed
