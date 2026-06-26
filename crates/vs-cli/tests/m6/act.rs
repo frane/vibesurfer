@@ -234,6 +234,39 @@ fn cell_act_focus() {
     }
 }
 
+// vs_act click must emit a full pointer/mouse sequence, not just a bare
+// `click`. Regression for the #vibesurfer Radix Select wedge: libraries
+// that select on `pointerup` and dismiss on `pointerdown` (Radix's
+// dismissable layer) need the real sequence, or the popover never closes
+// and its overlay swallows every later click. Runs on all backends — the
+// macOS native NSEvent path and the JS path must both deliver it.
+#[test]
+fn cell_act_click_fires_pointer_sequence() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/click-sequence.html");
+        let r = ctx.vs(&["view", &page, "--full"]);
+        let body = body_rest(&r);
+        let token = token_of(&r);
+        let n = ref_for(&body, "btn", "Click me");
+        let r = ctx.vs(&[
+            "act",
+            &page,
+            &n.to_string(),
+            "click",
+            &format!("--token={token}"),
+        ]);
+        assert_ok("click sequence button", &r);
+        let seq = eval_js(&ctx, &page, "window.__seq.join(',')");
+        for ev in ["pointerdown", "pointerup", "click"] {
+            assert!(
+                seq.contains(ev),
+                "act click must fire `{ev}` (so Radix-style pointer handlers work); got {seq:?}"
+            );
+        }
+    }
+}
+
 // Trust-bit regression — pinned to macOS for now (Linux + Windows
 // keep the JS-driven act path until their native event-injection
 // lands). The fixture's `submit` button records `event.isTrusted`

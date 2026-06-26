@@ -150,12 +150,46 @@ fn json_string(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into())
 }
 
+/// Full mouse-click event sequence for `Action::Click`, dispatched on
+/// the resolved element `el`. Coordinates are the element's center so
+/// pointer-position-aware handlers behave. The `button`/`buttons`
+/// fields follow real semantics (held during down, released by up).
+const CLICK_SEQUENCE_JS: &str = "\
+const rc = el.getBoundingClientRect(); \
+const x = rc.left + rc.width / 2, y = rc.top + rc.height / 2; \
+const mk = (b) => ({ bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y, screenX: x, screenY: y, button: 0, buttons: b }); \
+const mkp = (b) => Object.assign(mk(b), { pointerId: 1, pointerType: 'mouse', isPrimary: true, width: 1, height: 1 }); \
+try { \
+  el.dispatchEvent(new PointerEvent('pointerover', mkp(0))); \
+  el.dispatchEvent(new MouseEvent('mouseover', mk(0))); \
+  el.dispatchEvent(new PointerEvent('pointermove', mkp(0))); \
+  el.dispatchEvent(new PointerEvent('pointerdown', mkp(1))); \
+  el.dispatchEvent(new MouseEvent('mousedown', mk(1))); \
+  if (typeof el.focus === 'function') { try { el.focus(); } catch (e) {} } \
+  el.dispatchEvent(new PointerEvent('pointerup', mkp(0))); \
+  el.dispatchEvent(new MouseEvent('mouseup', mk(0))); \
+  el.dispatchEvent(new MouseEvent('click', mk(0))); \
+} catch (e) { el.click(); } \
+return 'ok';";
+
 /// Build the `act` JS for a single ref. Returns the literal `"ok"` on
 /// success, `"err:not_found"` if the selector misses, or panics on
 /// parser misuse (we trust the inputs).
 fn build_act_js(r: Ref, action: &Action) -> String {
     let body = match action {
-        Action::Click => "el.click(); return 'ok';".to_string(),
+        // Emit a full, realistic mouse-click event sequence rather than
+        // a bare `el.click()` (which fires *only* a synthetic `click`).
+        // Libraries that gate behavior on pointer events — Radix UI's
+        // Select/dismissable-layer most visibly — select on `pointerup`
+        // and dismiss on `pointerdown`; with click-only, the value
+        // updated but the popover never closed and its focus-trap
+        // overlay then swallowed every later click, wedging the page.
+        // This mirrors what a real cursor (and the macOS native path)
+        // delivers. Falls back to `el.click()` if `PointerEvent` can't
+        // be constructed. NB: macOS routes `Ref+click` through native
+        // NSEvents and never reaches here; this is the Linux/Windows
+        // (and any JS-dispatched) path.
+        Action::Click => CLICK_SEQUENCE_JS.to_string(),
         Action::Fill { value } => format!(
             "el.focus(); var p = (el instanceof HTMLTextAreaElement) ? HTMLTextAreaElement.prototype : (el instanceof HTMLInputElement ? HTMLInputElement.prototype : null); if (p) {{ Object.getOwnPropertyDescriptor(p, 'value').set.call(el, {v}); }} else {{ el.value = {v}; }} el.dispatchEvent(new Event('input', {{bubbles: true}})); el.dispatchEvent(new Event('change', {{bubbles: true}})); return 'ok';",
             v = json_string(value)

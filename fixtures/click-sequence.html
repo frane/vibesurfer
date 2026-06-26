@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Click sequence check</title></head>
+<body>
+  <button id="b" type="button">Click me</button>
+  <pre id="log">no click</pre>
+  <script>
+    // Records the ordered event sequence a `vs_act click` produces, so
+    // the regression test can assert pointerdown/pointerup/click all
+    // fire (not just a bare `click`). Guards the Radix Select wedge fix.
+    window.__seq = [];
+    var b = document.getElementById('b');
+    ['pointerover','pointerenter','pointermove','pointerdown','mousedown',
+     'pointerup','mouseup','click'].forEach(function (t) {
+      b.addEventListener(t, function (e) {
+        window.__seq.push(e.type);
+        document.getElementById('log').textContent = window.__seq.join(',');
+      });
+    });
+  </script>
+</body>
+</html>
