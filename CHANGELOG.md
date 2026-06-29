@@ -8,7 +8,10 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 
 
-## [v0.1.18] - 2026-06-26
+## [v0.1.19] - 2026-06-29
+
+### Fixed
+- macOS: `vs act` no longer leaves Radix UI / Floating-UI dropdowns wedged. A headless WKWebView reports its page hidden, so the web-content process pauses `requestAnimationFrame` — and rAF-deferred teardown (Floating-UI popper unmount, the rAF-based scroll-lock that sets `body{pointer-events:none}`) never runs, so after a `Select`/menu commit the page stayed locked to all further input. A document-start shim now queues `requestAnimationFrame` callbacks (still forwarding to the real rAF, so platforms where it fires are unchanged) and exposes `window.__vsFlushRAF()`, which the macOS backend calls after each `act` to drain pending callbacks. The host window also now reports itself visible (`VsHeadlessWindow` overrides `isVisible`/`occlusionState`) so `document.visibilityState`/`visibilitychange` read as foreground for headless pages — still never ordered on screen. Guarded by `cell_act_flushes_raf_teardown`. (Linux/Windows were unaffected and are untouched.)
 
 ### Fixed
 - `vs act <ref> click` on the JS dispatch path (Linux/Windows — macOS already used native NSEvents) now emits a full pointer/mouse event sequence (`pointerover → mouseover → pointermove → pointerdown → mousedown → focus → pointerup → mouseup → click`, center coords, real button/buttons semantics) instead of a bare `el.click()`. Libraries that gate behavior on pointer events — Radix UI's Select/DropdownMenu/Combobox/Popover most visibly — select on `pointerup` and dismiss on `pointerdown`; with a click-only synthetic event the value committed but the popover never closed and its focus-trap overlay then swallowed every subsequent click, wedging the page. Falls back to `el.click()` if `PointerEvent` can't be constructed. Reported via the `#vibesurfer` channel; guarded by a new `cell_act_click_fires_pointer_sequence` cell across all backends.

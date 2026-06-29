@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>rAF teardown</title></head>
+<body>
+  <button id="b" type="button">go</button>
+  <pre id="s">idle</pre>
+  <script>
+    // Mimics a Radix/Floating-UI dismiss: a click sets a body
+    // pointer-events lock and releases it on the NEXT animation frame.
+    // On a headless macOS page the frame clock is paused, so without
+    // vs's rAF flush the release never runs and the page wedges.
+    document.getElementById('b').addEventListener('click', function () {
+      document.body.style.pointerEvents = 'none';
+      document.getElementById('s').textContent = 'locked';
+      requestAnimationFrame(function () {
+        document.body.style.pointerEvents = '';
+        document.getElementById('s').textContent = 'released';
+      });
+    });
+  </script>
+</body>
+</html>

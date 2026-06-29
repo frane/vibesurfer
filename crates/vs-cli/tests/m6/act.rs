@@ -1,6 +1,6 @@
 //! Act cells: vs_act click / fill / scroll / key / submit / hover / focus.
 
-use crate::helpers::{eval_js, open_fixture, ref_for};
+use crate::helpers::{eval_js, open_fixture, ref_for, settle};
 use crate::support::{assert_ok, body_rest, each_available_backend, token_of, TestContext};
 
 // 7. vs_act click — click submit, navigate to dashboard.
@@ -264,6 +264,40 @@ fn cell_act_click_fires_pointer_sequence() {
                 "act click must fire `{ev}` (so Radix-style pointer handlers work); got {seq:?}"
             );
         }
+    }
+}
+
+// vs_act drains rAF-deferred teardown after the action. A click that
+// sets a body pointer-events lock and releases it in a requestAnimationFrame
+// (the Radix/Floating-UI dismiss pattern) must not wedge the page —
+// critical on headless macOS where the frame clock is paused, so the
+// release rAF would otherwise never run. Runs on all backends (macOS via
+// the rAF-flush shim; Linux/Windows via native rAF).
+#[test]
+fn cell_act_flushes_raf_teardown() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/raf-teardown.html");
+        let r = ctx.vs(&["view", &page, "--full"]);
+        let body = body_rest(&r);
+        let token = token_of(&r);
+        let n = ref_for(&body, "btn", "go");
+        assert_ok(
+            "click",
+            &ctx.vs(&[
+                "act",
+                &page,
+                &n.to_string(),
+                "click",
+                &format!("--token={token}"),
+            ]),
+        );
+        settle(150);
+        let pe = eval_js(&ctx, &page, "document.body.style.pointerEvents");
+        assert!(
+            pe.trim().is_empty(),
+            "rAF-deferred teardown must have run (body pointer-events cleared); got {pe:?}"
+        );
     }
 }
 

@@ -18,6 +18,7 @@
 mod capture;
 mod cookie_store;
 mod eval;
+mod headless_window;
 mod input;
 mod inspector_handler;
 mod nav_delegate;
@@ -31,7 +32,10 @@ use objc2::runtime::ProtocolObject;
 use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{NSBackingStoreType, NSWindow, NSWindowStyleMask};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSURLRequest, NSURL};
-use objc2_web_kit::{WKNavigationDelegate, WKWebView, WKWebViewConfiguration};
+use objc2_web_kit::{
+    WKNavigationDelegate, WKUserScript, WKUserScriptInjectionTime, WKWebView,
+    WKWebViewConfiguration,
+};
 use vs_protocol::{Ref, Tree};
 
 use crate::engine::{
@@ -159,6 +163,53 @@ fn vs_humanize_seed_for_xy(op: CursorOp) -> u64 {
     xi.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ yi
 }
 
+/// Document-start shim that lets `vs` drive `requestAnimationFrame`
+/// callbacks on demand. A headless macOS WKWebView reports the page
+/// hidden, so the web-content process pauses rAF — and rAF-deferred
+/// teardown in libraries (Floating UI popper unmount, rAF-based
+/// scroll-lock release) never runs, wedging the page after a Select/menu
+/// commits. The shim queues every rAF callback (still forwarding to the
+/// real rAF, so on platforms where it fires nothing changes) and exposes
+/// `window.__vsFlushRAF()`, which `act` calls afterward to run any
+/// callbacks the suspended frame clock left pending. Same-callback double
+/// runs are guarded by per-record `done`/`cancelled` flags.
+const RAF_SHIM_JS: &str = r"
+(function () {
+  if (window.__vsRAFShimmed) return;
+  window.__vsRAFShimmed = true;
+  var realRAF = window.requestAnimationFrame ? window.requestAnimationFrame.bind(window) : null;
+  var pending = new Map();
+  var nextId = 1;
+  function run(id, ts) {
+    var rec = pending.get(id);
+    if (!rec || rec.done || rec.cancelled) return;
+    rec.done = true;
+    pending.delete(id);
+    try { rec.cb(ts); } catch (e) {}
+  }
+  window.requestAnimationFrame = function (cb) {
+    var id = nextId++;
+    pending.set(id, { cb: cb, done: false, cancelled: false });
+    if (realRAF) realRAF(function (ts) { run(id, ts); });
+    return id;
+  };
+  window.cancelAnimationFrame = function (id) {
+    var rec = pending.get(id);
+    if (rec) { rec.cancelled = true; pending.delete(id); }
+  };
+  window.__vsFlushRAF = function (maxRounds) {
+    maxRounds = maxRounds || 5;
+    var total = 0;
+    for (var r = 0; r < maxRounds && pending.size > 0; r++) {
+      var ts = (window.performance && performance.now) ? performance.now() : Date.now();
+      var ids = Array.from(pending.keys());
+      for (var i = 0; i < ids.length; i++) { total++; run(ids[i], ts); }
+    }
+    return total;
+  };
+})();
+";
+
 impl Engine for WkBackend {
     fn open(&mut self, url: &str) -> EngineResult<PageHandle> {
         let mtm = self.mtm;
@@ -175,6 +226,19 @@ impl Engine for WkBackend {
         let data_store = unsafe { objc2_web_kit::WKWebsiteDataStore::defaultDataStore(mtm) };
         unsafe { config.setWebsiteDataStore(&data_store) };
         let ucc = unsafe { config.userContentController() };
+        // Inject the rAF-flush shim at document-start so `act` can drive
+        // pending requestAnimationFrame callbacks even though a headless
+        // macOS page has its frame clock paused (see RAF_SHIM_JS).
+        unsafe {
+            let src = NSString::from_str(RAF_SHIM_JS);
+            let shim = WKUserScript::initWithSource_injectionTime_forMainFrameOnly(
+                WKUserScript::alloc(mtm),
+                &src,
+                WKUserScriptInjectionTime::AtDocumentStart,
+                false,
+            );
+            ucc.addUserScript(&shim);
+        }
         let inspector_installed = inspector_handler::install(mtm, &ucc, &inspector);
         let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1280.0, 800.0));
         let web_view: Retained<WKWebView> = unsafe {
@@ -187,12 +251,15 @@ impl Engine for WkBackend {
         // avoids any visible decoration; `setReleasedWhenClosed`
         // false because we manage the Retained handle ourselves.
         let window: Retained<NSWindow> = unsafe {
-            let w = NSWindow::initWithContentRect_styleMask_backing_defer(
-                NSWindow::alloc(mtm),
+            // VsHeadlessWindow reports itself visible/unoccluded so the
+            // headless page's timers + requestAnimationFrame keep running
+            // (see headless_window.rs); it is still never ordered on
+            // screen, so nothing is shown.
+            let w = headless_window::HeadlessWindow::host(
+                mtm,
                 frame,
                 NSWindowStyleMask::Borderless,
                 NSBackingStoreType::Buffered,
-                false,
             );
             w.setReleasedWhenClosed(false);
             w.setContentView(Some(&web_view));
@@ -288,7 +355,24 @@ impl Engine for WkBackend {
     fn act(&mut self, page: PageHandle, target: ActTarget, action: Action) -> EngineResult<()> {
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
+        let web_view_flush = p.web_view.clone();
         let window = p.window.clone();
+
+        // After the action settles, drain any rAF callbacks the page
+        // queued (e.g. Radix/Floating-UI teardown) — on a headless macOS
+        // page the frame clock is paused, so without this the teardown
+        // never runs and the page can wedge. No-op where rAF already
+        // fired or the shim isn't present.
+        // NB: eval_js_string treats the JS result as an NSString, so the
+        // flush expression must evaluate to a string (a bare number
+        // result would be mis-cast and abort).
+        let flush = move |wv: &Retained<WKWebView>| {
+            let _ = eval_js_string(
+                wv,
+                "String(window.__vsFlushRAF ? window.__vsFlushRAF() : 0)",
+                Duration::from_secs(2),
+            );
+        };
 
         // Route plain `click` on a `Ref` target through native NSEvent
         // dispatch — produces JS events with `event.isTrusted = true`,
@@ -318,14 +402,17 @@ impl Engine for WkBackend {
                 seed,
             )?;
             p.last_mouse.set(landed);
+            flush(&web_view_flush);
             return Ok(());
         }
 
-        super::common::run_act(
+        let result = super::common::run_act(
             move |js, budget| eval_js_string(&web_view, js, budget),
             &target,
             &action,
-        )
+        );
+        flush(&web_view_flush);
+        result
     }
 
     fn wait(

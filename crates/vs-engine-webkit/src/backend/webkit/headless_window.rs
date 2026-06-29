@@ -1,0 +1,66 @@
+//! `VsHeadlessWindow` — an `NSWindow` subclass that reports itself
+//! visible and unoccluded.
+//!
+//! A headless `WKWebView` lives in a window we never order on screen, so
+//! WebKit computes the page's activity state as "not visible" and the
+//! web-content process *suspends* DOM timers and `requestAnimationFrame`
+//! (not just throttles them). Libraries that defer teardown to those —
+//! Radix UI / Floating UI: the RemoveScroll `body{pointer-events:none}`
+//! release and popper unmount — then never run, wedging the page to
+//! input after a Select/menu commits.
+//!
+//! WebKit derives that visibility from the host window's `isVisible` /
+//! `occlusionState`. This subclass overrides exactly those two queries
+//! to report visible, so the page stays "visible" and its timers/rAF
+//! keep running — **without ever ordering the window on screen**. Nothing
+//! is shown to the user; we only change the answers WebKit reads.
+
+use objc2::rc::Retained;
+use objc2::{define_class, msg_send, MainThreadMarker, MainThreadOnly};
+use objc2_app_kit::{NSBackingStoreType, NSWindow, NSWindowOcclusionState, NSWindowStyleMask};
+use objc2_foundation::NSRect;
+
+define_class!(
+    #[unsafe(super = NSWindow)]
+    #[thread_kind = MainThreadOnly]
+    #[name = "VsHeadlessWindow"]
+    pub(super) struct HeadlessWindow;
+
+    impl HeadlessWindow {
+        /// Always report visible. The window is never ordered on screen;
+        /// this only changes what WebKit reads when deciding whether to
+        /// suspend the page.
+        #[unsafe(method(isVisible))]
+        fn is_visible(&self) -> bool {
+            true
+        }
+
+        /// Always report unoccluded/visible for the same reason.
+        #[unsafe(method(occlusionState))]
+        fn occlusion_state(&self) -> NSWindowOcclusionState {
+            NSWindowOcclusionState::Visible
+        }
+    }
+);
+
+impl HeadlessWindow {
+    /// Construct the offscreen host window (upcast to `NSWindow`). Same
+    /// args as `NSWindow::initWithContentRect_styleMask_backing_defer`.
+    pub(super) fn host(
+        mtm: MainThreadMarker,
+        frame: NSRect,
+        style: NSWindowStyleMask,
+        backing: NSBackingStoreType,
+    ) -> Retained<NSWindow> {
+        let this: Retained<Self> = unsafe {
+            msg_send![
+                Self::alloc(mtm),
+                initWithContentRect: frame,
+                styleMask: style,
+                backing: backing,
+                defer: false,
+            ]
+        };
+        this.into_super()
+    }
+}
