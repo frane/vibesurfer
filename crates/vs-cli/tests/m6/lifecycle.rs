@@ -50,6 +50,38 @@ fn cell_open() {
     }
 }
 
+// 3b. A page-addressed op on a page that lives in a *different* session
+// returns WRONG_SESSION (naming the page's real session), not a
+// misleading NOT_FOUND. Regression for the #vibesurfer report.
+#[test]
+fn cell_view_wrong_session() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let a = body_first(&ctx.vs(&["session-open"]));
+        let b = body_first(&ctx.vs(&["session-open"]));
+        let open = ctx.vs(&["open", &ctx.url("/static.html"), &format!("--session={a}")]);
+        assert_ok("open in A", &open);
+        let page = body_first(&open);
+        // Address the page from the wrong session B.
+        let r = ctx.vs(&["view", &page, &format!("--session={b}")]);
+        assert!(
+            r.stdout.contains("WRONG_SESSION"),
+            "page from A viewed in B must be WRONG_SESSION; got {:?}",
+            r.stdout
+        );
+        assert!(
+            r.stdout.contains(&a),
+            "WRONG_SESSION should name the page's real session A; got {:?}",
+            r.stdout
+        );
+        // Sanity: it works in its own session A.
+        assert_ok(
+            "view in A",
+            &ctx.vs(&["view", &page, &format!("--session={a}")]),
+        );
+    }
+}
+
 // 4. vs_close
 #[test]
 fn cell_close() {

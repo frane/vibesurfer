@@ -124,6 +124,7 @@ code_enum! {
         PolicyDeny => "POLICY_DENY",
         Timeout => "TIMEOUT",
         NotFound => "NOT_FOUND",
+        WrongSession => "WRONG_SESSION",
         ConfirmRequired => "CONFIRM_REQUIRED",
         DaemonStartFailed => "DAEMON_START_FAILED",
         EngineCrash => "ENGINE_CRASH",

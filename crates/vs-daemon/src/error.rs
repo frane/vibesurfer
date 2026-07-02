@@ -47,6 +47,17 @@ pub enum DaemonError {
     #[error("unknown page: {0}")]
     UnknownPage(String),
 
+    /// The page exists, but in a different session than the one the
+    /// caller addressed (page ids are globally unique). Distinguishes
+    /// "wrong session" from "no such page" so the caller can switch
+    /// instead of assuming the page was lost.
+    #[error("page {page} is in session {page_session}, not addressed session {addressed}")]
+    WrongSession {
+        page: String,
+        addressed: String,
+        page_session: String,
+    },
+
     /// Ref does not exist in the page's current tree.
     #[error("unknown ref: {0}")]
     UnknownRef(u32),
@@ -75,6 +86,18 @@ impl DaemonError {
             Self::NoSession => (ErrorCode::BadRequest, vec!["no_session".into()]),
             Self::UnknownSession(id) => (ErrorCode::NotFound, vec![format!("session={id}")]),
             Self::UnknownPage(id) => (ErrorCode::NotFound, vec![format!("page={id}")]),
+            Self::WrongSession {
+                page,
+                addressed,
+                page_session,
+            } => (
+                ErrorCode::WrongSession,
+                vec![
+                    format!("page={page}"),
+                    format!("addressed={addressed}"),
+                    format!("page_session={page_session}"),
+                ],
+            ),
             Self::UnknownRef(r) => (ErrorCode::NotFound, vec![format!("ref={r}")]),
             Self::BadRequest(msg) => (ErrorCode::BadRequest, vec![msg.clone()]),
             Self::Unsupported { engine, primitive }

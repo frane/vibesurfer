@@ -163,18 +163,16 @@ pub fn run(cli: &Cli) -> Result<Response> {
             token,
             group,
         } => {
-            let value = read_user_input(message, *secret)?;
-            let mut req = vs_protocol::Request::new("vs_act")
-                .arg(page.clone())
-                .arg(r.to_string())
-                .arg("fill".to_string())
-                .arg(value)
-                .flag_value("session", session_id.clone().unwrap_or_default())
-                .flag_value("token", token.clone());
-            if let Some(g) = group {
-                req = req.flag_value("group", g.clone());
-            }
-            return client.call(&req).context("daemon call");
+            return run_prompt_input(
+                &mut client,
+                session_id.as_deref(),
+                page,
+                *r,
+                message,
+                *secret,
+                token,
+                group.as_deref(),
+            );
         }
         Command::PromptConfirm { page: _, message } => {
             read_user_confirm(message)?;
@@ -224,6 +222,78 @@ pub fn run(cli: &Cli) -> Result<Response> {
         _ => {}
     }
     Ok(resp)
+}
+
+/// Dispatch `vs prompt-input`. With a controlling tty, read the value
+/// locally and fill it. Without one (the common agent case), enqueue a
+/// pending entry and park until a local human runs `vs pending fulfill`
+/// — mirroring the MCP `vs_prompt_input` path — instead of hard-erroring
+/// on the missing tty.
+#[allow(clippy::too_many_arguments)]
+fn run_prompt_input(
+    client: &mut Client,
+    session_id: Option<&str>,
+    page: &str,
+    r: u32,
+    message: &str,
+    secret: bool,
+    token: &str,
+    group: Option<&str>,
+) -> Result<Response> {
+    let session = session_id.unwrap_or_default();
+    if has_local_tty() {
+        let value = read_user_input(message, secret)?;
+        let mut req = vs_protocol::Request::new("vs_act")
+            .arg(page)
+            .arg(r.to_string())
+            .arg("fill")
+            .arg(value)
+            .flag_value("session", session)
+            .flag_value("token", token);
+        if let Some(g) = group {
+            req = req.flag_value("group", g);
+        }
+        return client.call(&req).context("daemon call");
+    }
+    eprintln!(
+        "vs prompt-input: no local tty — enqueued a pending entry; \
+         run `vs pending fulfill` at a terminal to provide the value \
+         (parks up to 5 min)"
+    );
+    let mut req = vs_protocol::Request::new("vs_prompt_input_queue")
+        .arg(page)
+        .arg(r.to_string())
+        .arg(message)
+        .flag_value("session", session)
+        .flag_value("token", token);
+    if secret {
+        req = req.flag("secret");
+    }
+    if let Some(g) = group {
+        req = req.flag_value("group", g);
+    }
+    client.call(&req).context("daemon call (pending queue)")
+}
+
+/// Whether this process has a controlling terminal to read a prompt
+/// from. On Unix `rpassword`/the confirm path read `/dev/tty`, so the
+/// real question is whether that opens — a non-interactive agent shell
+/// has none (open fails with `ENXIO`/"Device not configured"). Used to
+/// fall back to the pending-queue path instead of hard-erroring.
+fn has_local_tty() -> bool {
+    #[cfg(unix)]
+    {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/tty")
+            .is_ok()
+    }
+    #[cfg(not(unix))]
+    {
+        use std::io::IsTerminal as _;
+        std::io::stdin().is_terminal()
+    }
 }
 
 /// Prompt the user (via tty) and return the value. When `secret` is

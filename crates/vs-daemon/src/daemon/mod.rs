@@ -195,6 +195,27 @@ impl Daemon {
             ))
     }
 
+    /// Error for a page missing from the addressed session: `WrongSession`
+    /// if the (globally-unique) page id lives in a different session, else
+    /// `UnknownPage`. Turns the misleading `NOT_FOUND page=P` into a
+    /// signal the caller can act on (switch sessions).
+    fn missing_page(
+        sessions: &HashMap<String, SessionState>,
+        addressed: &str,
+        page_id: &str,
+    ) -> DaemonError {
+        for (sid, s) in sessions {
+            if s.pages.contains_key(page_id) {
+                return DaemonError::WrongSession {
+                    page: page_id.to_string(),
+                    addressed: addressed.to_string(),
+                    page_session: sid.clone(),
+                };
+            }
+        }
+        DaemonError::UnknownPage(page_id.to_string())
+    }
+
     pub(crate) fn engine_handle_for(
         &self,
         session_id: &str,
@@ -207,7 +228,7 @@ impl Daemon {
         let page = session
             .pages
             .get(page_id)
-            .ok_or_else(|| DaemonError::UnknownPage(page_id.to_string()))?;
+            .ok_or_else(|| Self::missing_page(&sessions, session_id, page_id))?;
         Ok(page.engine_handle)
     }
 
@@ -224,7 +245,7 @@ impl Daemon {
             .ok_or_else(|| DaemonError::UnknownSession(session_id.to_string()))?
             .pages
             .get(page_id)
-            .ok_or_else(|| DaemonError::UnknownPage(page_id.to_string()))?;
+            .ok_or_else(|| Self::missing_page(&sessions, session_id, page_id))?;
         Ok(page.mutate_lock.clone())
     }
 
@@ -235,7 +256,7 @@ impl Daemon {
             .ok_or_else(|| DaemonError::UnknownSession(session_id.to_string()))?
             .pages
             .get(page_id)
-            .ok_or_else(|| DaemonError::UnknownPage(page_id.to_string()))?;
+            .ok_or_else(|| Self::missing_page(&sessions, session_id, page_id))?;
         Ok(page.last_token.unwrap_or(StateToken::ZERO))
     }
 

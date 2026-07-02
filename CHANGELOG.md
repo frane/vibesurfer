@@ -8,6 +8,12 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 
 
+## [v0.1.20] - 2026-07-02
+
+### Fixed
+- CLI `vs prompt-input` (incl. `--secret`) no longer hard-errors with a raw `read secret: Device not configured` when there's no controlling terminal. Without a tty (the common agent case — a non-interactive shell has no `/dev/tty`), it now enqueues a pending entry and parks until a local human runs `vs pending fulfill`, mirroring the MCP `vs_prompt_input` path — so the CLI secure-input flow works headlessly instead of being unusable. It prints a one-line note pointing at the pending queue. Reported via `#vibesurfer`.
+- Page-addressed ops on a page that exists in a **different** session now return `! WRONG_SESSION page=<p> addressed=<sid> page_session=<sid>` instead of a misleading `! NOT_FOUND page=<p>`. Page ids are globally unique, so a miss in the addressed session that hits another session tells the caller to switch rather than implying the page was lost (which sent an agent down the wrong debugging path). New wire code `WRONG_SESSION`; regression cell `cell_view_wrong_session`.
+
 ## [v0.1.19] - 2026-06-29
 
 ### Fixed
