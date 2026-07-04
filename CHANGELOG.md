@@ -8,6 +8,12 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 
 
+## [v0.1.21] - 2026-07-04
+
+### Fixed
+- Linux `cargo install vibesurfer` no longer fails to compile `webkit6 0.6.1` (`cannot find type Accessible in crate gtk`). webkit6's bindings reference `gtk::Accessible` (gated behind gtk4 `v4_10`) but nothing enabled it; the pinned workspace lock masked it in CI while a fresh install resolved to the latest webkit6 and hit it. Fixed by enabling `gtk4/v4_10` directly on `vs-engine-webkit` — the *minimum* that provides `Accessible`, so it still builds on GTK 4.10+. (webkit6 only forwards `gtk_v4_18`, which would demand GTK ≥ 4.18 and break Ubuntu 24.04 / GTK 4.14 — verified in a container.) A new `install-check` CI job builds the crate with fresh dependency resolution to guard this class of bug. GitHub #5.
+- `vs act fill` on a `<select>` now works. It matches an `<option>` by its visible label (or value), sets the select via the native `HTMLSelectElement` value setter, and dispatches a bubbling `change` so React `onChange` fires. Previously it assigned `el.value` to the raw string — which never matches an option's value when you pass the label — so the dropdown silently stayed put. Regression cell `cell_act_fill_select`; reported via `#vibesurfer`.
+
 ## [v0.1.20] - 2026-07-02
 
 ### Fixed

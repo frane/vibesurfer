@@ -76,6 +76,41 @@ fn cell_act_fill() {
     }
 }
 
+// 8b. vs_act fill on a <select> matches an option by its visible label
+// (or value), sets it via the native setter, and dispatches a bubbling
+// change so React onChange fires. Regression for the #vibesurfer report.
+#[test]
+fn cell_act_fill_select() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/select.html");
+        let r = ctx.vs(&["view", &page, "--full"]);
+        let body = body_rest(&r);
+        let token = token_of(&r);
+        let n = ref_for(&body, "sel", "");
+        // Fill by the visible option LABEL, not its `value`.
+        let r = ctx.vs(&[
+            "act",
+            &page,
+            &n.to_string(),
+            "fill",
+            "SDK / npm Package",
+            &format!("--token={token}"),
+        ]);
+        assert_ok("fill select by label", &r);
+        let value = eval_js(&ctx, &page, "document.getElementById('s').value");
+        assert!(
+            value.contains("sdk"),
+            "select value should be the matched option's `value`; got {value:?}"
+        );
+        let log = eval_js(&ctx, &page, "document.getElementById('log').textContent");
+        assert!(
+            log.contains("changed:sdk"),
+            "a native change event must fire (React onChange path); got {log:?}"
+        );
+    }
+}
+
 // 9. vs_act scroll
 #[test]
 fn cell_act_scroll() {

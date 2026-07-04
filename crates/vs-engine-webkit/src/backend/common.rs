@@ -191,7 +191,19 @@ fn build_act_js(r: Ref, action: &Action) -> String {
         // (and any JS-dispatched) path.
         Action::Click => CLICK_SEQUENCE_JS.to_string(),
         Action::Fill { value } => format!(
-            "el.focus(); var p = (el instanceof HTMLTextAreaElement) ? HTMLTextAreaElement.prototype : (el instanceof HTMLInputElement ? HTMLInputElement.prototype : null); if (p) {{ Object.getOwnPropertyDescriptor(p, 'value').set.call(el, {v}); }} else {{ el.value = {v}; }} el.dispatchEvent(new Event('input', {{bubbles: true}})); el.dispatchEvent(new Event('change', {{bubbles: true}})); return 'ok';",
+            "el.focus(); \
+             if (el instanceof HTMLSelectElement) {{ \
+               var want = {v}; \
+               var opt = Array.prototype.find.call(el.options, function(o){{ return o.value === want || o.text === want || o.label === want; }}) \
+                      || Array.prototype.find.call(el.options, function(o){{ return (o.text || '').trim() === (want || '').trim(); }}); \
+               if (!opt) return 'err:no_matching_option'; \
+               var ss = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set; \
+               ss.call(el, opt.value); \
+               el.dispatchEvent(new Event('input', {{bubbles: true}})); \
+               el.dispatchEvent(new Event('change', {{bubbles: true}})); \
+               return 'ok'; \
+             }} \
+             var p = (el instanceof HTMLTextAreaElement) ? HTMLTextAreaElement.prototype : (el instanceof HTMLInputElement ? HTMLInputElement.prototype : null); if (p) {{ Object.getOwnPropertyDescriptor(p, 'value').set.call(el, {v}); }} else {{ el.value = {v}; }} el.dispatchEvent(new Event('input', {{bubbles: true}})); el.dispatchEvent(new Event('change', {{bubbles: true}})); return 'ok';",
             v = json_string(value)
         ),
         Action::Scroll => {

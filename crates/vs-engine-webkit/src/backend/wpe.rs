@@ -27,7 +27,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use glib::prelude::*;
-use webkit6::gtk;
+// `gtk4` is a direct dep so we can enable its `v4_10` feature (webkit6
+// needs `gtk::Accessible`); alias it to `gtk` to keep the existing refs.
+use gtk4 as gtk;
 use webkit6::prelude::*;
 use webkit6::{LoadEvent, UserContentInjectedFrames, UserScript, UserScriptInjectionTime, WebView};
 

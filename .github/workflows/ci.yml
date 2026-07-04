@@ -104,6 +104,31 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace --all-targets --locked
 
+  install-check:
+    # Reproduces `cargo install vibesurfer` from crates.io: fresh
+    # dependency resolution (no workspace lock), which the pinned
+    # Cargo.lock otherwise masks — catches missing feature gates like
+    # webkit6 needing gtk4/v4_18. Regression guard for GitHub #5.
+    name: cargo install (Linux, fresh resolution)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkitgtk-6.0-dev \
+            libgtk-4-dev \
+            libsoup-3.0-dev \
+            pkg-config
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo install --path (no lock → latest deps)
+        run: |
+          rm -f Cargo.lock
+          cargo install --path crates/vs-cli --bin vs --debug --root "$RUNNER_TEMP/vsinstall"
+          "$RUNNER_TEMP/vsinstall/bin/vs" --version
+
   wk-smoke:
     name: macOS WkBackend smoke (real WKWebView)
     runs-on: macos-latest

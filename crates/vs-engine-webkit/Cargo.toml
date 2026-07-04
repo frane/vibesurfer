@@ -21,8 +21,8 @@ workspace = true
 test-support = []
 
 [dependencies]
-vs-protocol = { path = "../vs-protocol", version = "0.1.20" }
-vs-humanize = { path = "../vs-humanize", version = "0.1.20" }
+vs-protocol = { path = "../vs-protocol", version = "0.1.21" }
+vs-humanize = { path = "../vs-humanize", version = "0.1.21" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -32,6 +32,11 @@ serde_json = "1"
 # targeting Linux. Compilation requires the matching -dev packages on
 # the build host.
 webkit6 = { version = "0.6", features = ["v2_42"] }
+# webkit6 0.6.1 bindings reference `gtk::Accessible`, gated behind gtk4
+# `v4_10`. webkit6 only forwards `gtk_v4_18` (would demand GTK >= 4.18),
+# so enable the minimum `v4_10` on gtk4 directly — unifies across the
+# shared crate. https://github.com/frane/vibesurfer/issues/5
+gtk4 = { version = "0.11", features = ["v4_10"] }
 glib = "0.22"
 x11rb = { version = "0.13.2", features = ["xtest"] }
 ashpd = { version = "0.12.3", default-features = false, features = ["tokio"] }
