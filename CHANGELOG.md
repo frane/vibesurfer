@@ -8,6 +8,19 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 
 
+## [v0.1.22] - 2026-07-14
+
+### Fixed
+- The `~/.vibesurfer/key` master-key fallback is now honored for the formats people actually produce. `MasterKey::from_file` accepted only 32 raw bytes — a file made with `openssl rand -base64 32 > ~/.vibesurfer/key` (44 bytes of text) was rejected, and the startup log then claimed the file was "not present" even though it existed, because every resolve error collapsed into one message. The key file now accepts 32 raw bytes, 64 hex chars, or base64 of 32 bytes (surrounding whitespace ignored), and a present-but-unusable file is logged with the real parse error instead of "not present". Reported via `#vibesurfer`.
+
+### Fixed
+- `vs inspect <page> storage indexeddb` no longer returns a permanently empty list when first queried before the page finished creating its databases. The async `indexedDB.databases()` snapshot was armed once and cached forever — an empty first resolution was sticky. Every call now re-arms the refresh, so the established call → settle → call pattern converges on fresh data. All backends (shared probe JS). Surfaced by `cell_inspect_storage_indexeddb` flaking under full-suite load; the cell now polls with a deadline instead of fixed sleeps.
+
+### Added
+- The daemon self-provisions a master key on first start: if neither the OS-keyring entry nor `~/.vibesurfer/key` exists, `vs serve` generates a fresh AES-256 key and persists it to the fallback file (mode 0600). Previously nothing ever created a key — there was no keygen command and no auto-generation — so `vs auth save|load` was unusable on any machine without a hand-provisioned key. Cross-agent auth handoff (agent A saves an authed page, agent B loads it) now works out of the box.
+
+
+
 ## [v0.1.21] - 2026-07-04
 
 ### Fixed

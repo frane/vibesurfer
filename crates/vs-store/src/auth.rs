@@ -6,7 +6,10 @@
 //!
 //! 1. OS keyring (`keyring` crate) under service `"vibesurfer"`,
 //!    account `"default"`.
-//! 2. Fallback: a 32-byte file at `~/.vibesurfer/key`.
+//! 2. Fallback: a key file at `~/.vibesurfer/key` — 32 raw bytes,
+//!    64 hex chars, or base64 of 32 bytes (trailing newline ok).
+//!    The daemon generates and writes this file on first start when
+//!    neither the keyring entry nor the file exists.
 //!
 //! Tests skip the keyring (it would prompt the user) and pass keys
 //! explicitly via [`MasterKey::from_bytes`].
@@ -96,15 +99,27 @@ impl MasterKey {
         Self(bytes)
     }
 
-    /// Read a 32-byte master key from `path`.
+    /// Read a master key from `path`. Accepts 32 raw bytes, or a text
+    /// encoding of a 32-byte key — 64 hex chars or base64 (standard
+    /// alphabet, padded or unpadded) — with surrounding ASCII
+    /// whitespace (e.g. a trailing newline) ignored.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
         let bytes = fs::read(path.as_ref())?;
-        if bytes.len() != KEY_LEN {
-            return Err(StoreError::KeyFileSize(bytes.len()));
+        if bytes.len() == KEY_LEN {
+            let mut buf = [0u8; KEY_LEN];
+            buf.copy_from_slice(&bytes);
+            return Ok(Self(buf));
         }
-        let mut buf = [0u8; KEY_LEN];
-        buf.copy_from_slice(&bytes);
-        Ok(Self(buf))
+        if let Ok(text) = std::str::from_utf8(&bytes) {
+            let text = text.trim();
+            if let Ok(k) = decode_hex_key(text) {
+                return Ok(k);
+            }
+            if let Some(k) = decode_base64_key(text) {
+                return Ok(k);
+            }
+        }
+        Err(StoreError::KeyFileFormat(bytes.len()))
     }
 
     /// Look up the master key in the OS keyring under
@@ -183,6 +198,43 @@ impl MasterKey {
     fn raw(&self) -> &[u8; KEY_LEN] {
         &self.0
     }
+}
+
+/// Decode a base64-encoded (standard alphabet) 32-byte key. Padding is
+/// optional. Returns `None` on any shape or alphabet mismatch — the
+/// caller falls through to its own error. Hand-rolled because this is
+/// the crate's only base64 use; not worth a dependency.
+fn decode_base64_key(s: &str) -> Option<MasterKey> {
+    fn sextet(b: u8) -> Option<u32> {
+        match b {
+            b'A'..=b'Z' => Some(u32::from(b - b'A')),
+            b'a'..=b'z' => Some(u32::from(b - b'a') + 26),
+            b'0'..=b'9' => Some(u32::from(b - b'0') + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let s = s.trim_end_matches('=');
+    // 32 bytes is 43 base64 chars unpadded.
+    if s.len() != 43 {
+        return None;
+    }
+    let mut buf = [0u8; KEY_LEN];
+    let mut n = 0;
+    let mut acc: u32 = 0;
+    let mut bits: u32 = 0;
+    for &b in s.as_bytes() {
+        acc = (acc << 6) | sextet(b)?;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            buf[n] = u8::try_from((acc >> bits) & 0xff).expect("masked to one byte");
+            n += 1;
+        }
+    }
+    debug_assert_eq!(n, KEY_LEN);
+    Some(MasterKey::from_bytes(buf))
 }
 
 fn decode_hex_key(s: &str) -> Result<MasterKey> {
@@ -343,6 +395,50 @@ mod tests {
         let path = dir.path().join("key");
         std::fs::write(&path, b"too short").unwrap();
         let err = MasterKey::from_file(&path).unwrap_err();
-        matches!(err, StoreError::KeyFileSize(_));
+        assert!(matches!(err, StoreError::KeyFileFormat(9)), "{err}");
+    }
+
+    /// The formats a human plausibly puts in the key file by hand.
+    /// The base64-with-newline case is the exact shape from the field
+    /// report: `openssl rand -base64 32 > ~/.vibesurfer/key`.
+    #[test]
+    fn key_file_text_encodings_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = MasterKey::generate().unwrap();
+
+        let mut hex = String::new();
+        for b in &key.0 {
+            use std::fmt::Write as _;
+            write!(hex, "{b:02x}").unwrap();
+        }
+        let b64 = {
+            // Encode via the decoder's inverse: 3-byte groups.
+            const ALPHABET: &[u8] =
+                b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            let mut out = String::new();
+            for chunk in key.0.chunks(3) {
+                let mut acc = 0u32;
+                for (i, &b) in chunk.iter().enumerate() {
+                    acc |= u32::from(b) << (16 - 8 * i);
+                }
+                for i in 0..=chunk.len() {
+                    let idx = usize::try_from((acc >> (18 - 6 * i)) & 0x3f).unwrap();
+                    out.push(char::from(ALPHABET[idx]));
+                }
+            }
+            out // 43 chars, unpadded
+        };
+
+        for contents in [
+            hex.clone(),
+            format!("{hex}\n"),
+            b64.clone(),
+            format!("{b64}=\n"),
+        ] {
+            let path = dir.path().join("key");
+            std::fs::write(&path, &contents).unwrap();
+            let loaded = MasterKey::from_file(&path).unwrap();
+            assert_eq!(key.0, loaded.0, "contents {contents:?}");
+        }
     }
 }

@@ -90,6 +90,51 @@ pub fn run_stop(paths: &DaemonPaths) -> Result<()> {
     ))
 }
 
+/// Resolve the daemon master key: OS keyring first, then the fallback
+/// file at `~/.vibesurfer/key` (32 raw bytes, 64 hex chars, or base64
+/// of 32 bytes). If neither exists, generate a fresh key and persist
+/// it to the fallback file (mode 0600) so `vs auth save|load` works
+/// out of the box. Returns `None` — with the cause logged — only when
+/// the file is present but unusable, or generation/persist fails.
+fn resolve_master_key(paths: &DaemonPaths) -> Option<vs_store::MasterKey> {
+    use vs_store::MasterKey;
+    if let Ok(k) = MasterKey::from_keyring() {
+        return Some(k);
+    }
+    let key_path = paths.key_file();
+    if key_path.exists() {
+        match MasterKey::from_file(&key_path) {
+            Ok(k) => Some(k),
+            Err(e) => {
+                tracing::warn!(
+                    "master key file {} exists but is unusable ({e}); \
+                     vs_auth save|load will fail",
+                    key_path.display()
+                );
+                None
+            }
+        }
+    } else {
+        match MasterKey::generate().and_then(|k| k.write_to_file(&key_path).map(|()| k)) {
+            Ok(k) => {
+                tracing::info!(
+                    "no master key found; generated one at {} (keyring entry absent)",
+                    key_path.display()
+                );
+                Some(k)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "no master key, and generating one at {} failed ({e}); \
+                     vs_auth save|load will fail",
+                    key_path.display()
+                );
+                None
+            }
+        }
+    }
+}
+
 /// Future that resolves on SIGTERM (Unix) or never (other platforms).
 /// Lets the server loop treat SIGTERM equivalently to ctrl-c.
 #[cfg(unix)]
@@ -150,13 +195,8 @@ pub fn run(args: &ServeArgs) -> Result<()> {
         .with_captures_dir(captures_dir)
         .with_skills_dir(skills_dir);
 
-    if let Ok(k) = vs_store::MasterKey::resolve(args.paths.key_file()) {
+    if let Some(k) = resolve_master_key(&args.paths) {
         daemon = daemon.with_master_key(k);
-    } else {
-        tracing::warn!(
-            "no master key (keyring entry missing and {} not present); vs_auth save|load will fail",
-            args.paths.key_file().display()
-        );
     }
 
     let socket = args.paths.socket();
@@ -279,13 +319,8 @@ pub fn run(args: &ServeArgs) -> Result<()> {
         .with_captures_dir(captures_dir)
         .with_skills_dir(skills_dir);
 
-    if let Ok(k) = vs_store::MasterKey::resolve(args.paths.key_file()) {
+    if let Some(k) = resolve_master_key(&args.paths) {
         daemon = daemon.with_master_key(k);
-    } else {
-        tracing::warn!(
-            "no master key (keyring entry missing and {} not present); vs_auth save|load will fail",
-            args.paths.key_file().display()
-        );
     }
 
     let socket = args.paths.socket();
@@ -405,13 +440,8 @@ pub fn run(args: &ServeArgs) -> Result<()> {
         .with_captures_dir(captures_dir)
         .with_skills_dir(skills_dir);
 
-    if let Ok(k) = vs_store::MasterKey::resolve(args.paths.key_file()) {
+    if let Some(k) = resolve_master_key(&args.paths) {
         daemon = daemon.with_master_key(k);
-    } else {
-        tracing::warn!(
-            "no master key (keyring entry missing and {} not present); vs_auth save|load will fail",
-            args.paths.key_file().display()
-        );
     }
 
     let socket = args.paths.socket();

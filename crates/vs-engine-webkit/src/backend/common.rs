@@ -841,23 +841,24 @@ where
                     entries.push({{ key: k, value: v, sensitive: isSensitive(k) }});
                 }}
             }} else if (scope === 'indexeddb') {{
-                // indexedDB.databases() is async (returns a Promise) and
-                // WKWebView's evaluateJavaScript can't await it. We
-                // install a one-shot watcher on the first call which
-                // populates `window.__vsIdbList`; subsequent calls
-                // return the cached list. Tests that need the value
-                // settle for ~200ms after page load before asking.
+                // indexedDB.databases() is async (returns a Promise)
+                // and WKWebView's evaluateJavaScript can't await it.
+                // Each call returns the last snapshot and re-arms a
+                // refresh, so call → settle → call converges on fresh
+                // data. (A one-shot watcher used to cache the first
+                // resolution forever — an empty list if queried before
+                // the page created its db.)
                 if (!window.__vsIdbList) {{
                     window.__vsIdbList = [];
-                    if (indexedDB && indexedDB.databases) {{
-                        try {{
-                            indexedDB.databases().then(function(dbs) {{
-                                window.__vsIdbList = dbs.map(function(d) {{
-                                    return {{ name: d.name || '', version: d.version || 0 }};
-                                }});
+                }}
+                if (indexedDB && indexedDB.databases) {{
+                    try {{
+                        indexedDB.databases().then(function(dbs) {{
+                            window.__vsIdbList = dbs.map(function(d) {{
+                                return {{ name: d.name || '', version: d.version || 0 }};
                             }});
-                        }} catch (e) {{}}
-                    }}
+                        }});
+                    }} catch (e) {{}}
                 }}
                 for (var i = 0; i < window.__vsIdbList.length; i++) {{
                     var d = window.__vsIdbList[i];

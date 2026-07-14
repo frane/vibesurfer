@@ -217,18 +217,25 @@ fn cell_inspect_storage_session() {
     }
 }
 
-// 43. vs_inspect storage indexeddb — two-call to settle the Promise.
+// 43. vs_inspect storage indexeddb — the fixture creates the db
+// asynchronously and the listing itself settles a Promise across
+// calls, so poll with a deadline; fixed sleeps flaked under
+// full-suite parallel load.
 #[test]
 fn cell_inspect_storage_indexeddb() {
     for _ in each_available_backend() {
         let ctx = TestContext::start();
         let (_s, page, _t) = open_fixture(&ctx, "/storage.html");
-        settle(400);
-        let _ = ctx.vs(&["inspect", &page, "storage", "indexeddb"]);
-        settle(300);
-        let r = ctx.vs(&["inspect", &page, "storage", "indexeddb"]);
-        assert_ok("inspect storage indexeddb", &r);
-        let body = body_rest(&r);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let body = loop {
+            settle(300);
+            let r = ctx.vs(&["inspect", &page, "storage", "indexeddb"]);
+            assert_ok("inspect storage indexeddb", &r);
+            let body = body_rest(&r);
+            if body.contains("vibesurfer_demo_db") || std::time::Instant::now() > deadline {
+                break body;
+            }
+        };
         assert!(
             body.contains("vibesurfer_demo_db"),
             "storage indexeddb must include the demo db:\n{body}"

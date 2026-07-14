@@ -250,6 +250,45 @@ fn e2e_all_primitives_via_binary() {
     assert_store_state(&home, &session_id, &page_id);
 }
 
+/// Master-key provisioning through the real binary. A fresh home gets
+/// a key auto-generated and persisted (mode 0600); a hand-provisioned
+/// text-encoded key file is honored and never overwritten. Guards the
+/// `#vibesurfer` report where a base64 key file was rejected and the
+/// startup log claimed it was "not present". Assumes no OS-keyring
+/// entry for service `vibesurfer` — nothing in the product writes one.
+#[test]
+fn master_key_provisioning() {
+    // Fresh home: the daemon generates and persists a key on startup.
+    let home = tempfile::tempdir().unwrap();
+    {
+        let _daemon = spawn_daemon(home.path());
+        let key_path = home.path().join("key");
+        let bytes = std::fs::read(&key_path).expect("auto-generated key file");
+        assert_eq!(bytes.len(), 32, "raw 32-byte key");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(&key_path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "key must be owner-only, got {mode:o}");
+        }
+    }
+
+    // Hand-provisioned text key with a trailing newline (the field
+    // report's shape): the daemon must accept it and must not rewrite
+    // the file with a generated one.
+    let home = tempfile::tempdir().unwrap();
+    let contents = format!("{}\n", "ab".repeat(32));
+    std::fs::write(home.path().join("key"), &contents).unwrap();
+    let _daemon = spawn_daemon(home.path());
+    let r = vs(home.path(), &["auth", "list"]);
+    assert_ok("auth list with text key", &r);
+    assert_eq!(
+        std::fs::read(home.path().join("key")).unwrap(),
+        contents.as_bytes(),
+        "existing key file must not be rewritten"
+    );
+}
+
 fn assert_store_state(home: &Path, session_id: &str, page_id: &str) {
     let store = Store::open_read_only(home.join("state.db")).expect("open store ro");
 

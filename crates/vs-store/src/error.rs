@@ -24,8 +24,11 @@ pub enum StoreError {
     #[error("invalid input: {0}")]
     Invalid(&'static str),
 
-    #[error("master key file is the wrong size: expected 32 bytes, got {0}")]
-    KeyFileSize(usize),
+    #[error(
+        "master key file is not a 32-byte key: got {0} bytes; accepted formats are \
+         32 raw bytes, 64 hex chars, or base64 of 32 bytes (trailing newline ok)"
+    )]
+    KeyFileFormat(usize),
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;
