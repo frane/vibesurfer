@@ -85,7 +85,7 @@ For credentials, TANs, and any other value the agent must not see. The CLI reads
 
 When you need credentials, never call `vs act fill` with the value. Always call `vs prompt-input <PAGE> <REF> --message="<label-from-snapshot>" --secret --token=<TOK>` and let the user type. Include enough context in the message that they know which field they're filling (the field label from the snapshot is usually enough).
 
-**MCP / Claude Desktop / Codex (v0.1.12+):** `vs mcp` has no tty, so the MCP version of `vs_prompt_input` enqueues a pending entry on the daemon and parks waiting for the value. The local user runs `vs pending list` (alias `pe ls`) to see what's queued and `vs pending fulfill [<id>]` (`pe f`) to type the value at their local tty — `vs pending fulfill` with no id auto-picks the single pending entry. `vs pending cancel <id>` (`pe c`) aborts. Once fulfilled, the agent's MCP tool call returns the new state token exactly as it would have for the local-CLI path.
+**No tty — MCP or non-interactive CLI (v0.1.12+ MCP, v0.1.20+ CLI):** without a controlling tty (`vs mcp`, or `vs prompt-input` from an agent's shell), the call enqueues a pending entry on the daemon and parks waiting for the value. The local user runs `vs pending list` (alias `pe ls`) to see what's queued and `vs pending fulfill [<id>]` (`pe f`) to type the value at their local tty — `vs pending fulfill` with no id auto-picks the single pending entry. `vs pending cancel <id>` (`pe c`) aborts. Once fulfilled, the agent's MCP tool call returns the new state token exactly as it would have for the local-CLI path.
 ### Search / extract (8, 10, 18)
 
 | # | CLI | What |

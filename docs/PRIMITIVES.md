@@ -171,7 +171,10 @@ Persistent, encrypted auth state.
 - `save <name>`: dump cookies (via the host-side cookie store, so
   HttpOnly cookies are included), localStorage, and sessionStorage —
   IndexedDB is **not** captured; encrypt with AES-256-GCM via `ring`
-  (key from the OS keyring, falling back to `~/.vibesurfer/key`);
+  (key from the OS keyring, falling back to `~/.vibesurfer/key`;
+  if neither exists the daemon generates a key on startup and writes
+  it to the fallback file, mode 0600. A hand-written key file may be
+  32 raw bytes, 64 hex chars, or base64 of 32 bytes);
   insert into `auth_blobs`.
 - `load <name>`: reverse. Emits `? auth_loaded <name>` and forces a
   fresh `vs_view` baseline on next call.

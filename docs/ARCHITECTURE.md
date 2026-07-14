@@ -125,7 +125,7 @@ or vice versa.
   state.db-shm
   log/
     daemon.log          # rotating tracing output
-  key                   # AES-256 key fallback if OS keyring unavailable
+  key                   # AES-256 key; auto-generated if no OS keyring entry
 ```
 
 `state.db` is the source of truth. Anything held in memory in the daemon
