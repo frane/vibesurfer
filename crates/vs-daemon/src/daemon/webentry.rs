@@ -296,8 +296,7 @@ fn fresh_nonce() -> String {
 }
 
 fn base64url(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let mut acc = 0u32;
@@ -470,10 +469,7 @@ mod tests {
 
     #[test]
     fn html_escaping() {
-        assert_eq!(
-            escape_html("<b>&\"'x"),
-            "&lt;b&gt;&amp;&quot;&#39;x"
-        );
+        assert_eq!(escape_html("<b>&\"'x"), "&lt;b&gt;&amp;&quot;&#39;x");
     }
 
     #[test]
@@ -481,6 +477,8 @@ mod tests {
         // 32 bytes -> 43 chars, no padding, url-safe alphabet.
         let s = base64url(&[0xffu8; 32]);
         assert_eq!(s.len(), 43);
-        assert!(s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
+        assert!(s
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
     }
 }

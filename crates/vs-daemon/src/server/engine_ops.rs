@@ -1024,7 +1024,10 @@ pub(super) fn handle_watch(daemon: &Daemon, req: &Request) -> String {
         Err(msg) => return format_error(ErrorCode::BadRequest, vec![msg]),
     };
     let Some(page_id) = req.args.first().cloned() else {
-        return format_error(ErrorCode::BadRequest, vec!["vs_watch: missing page id".into()]);
+        return format_error(
+            ErrorCode::BadRequest,
+            vec!["vs_watch: missing page id".into()],
+        );
     };
     match daemon.watch_url(&session_id, &page_id) {
         Ok(url) => format!(

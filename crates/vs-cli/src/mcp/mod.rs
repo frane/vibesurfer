@@ -179,9 +179,7 @@ async fn call_tool(params: &Value) -> Result<Value, McpError> {
     // Optional action thumbnail. Failures degrade to text-only — a
     // missing screenshot must never fail the action that succeeded.
     let thumb = if opts.thumb {
-        let page = opts
-            .thumb_page
-            .or_else(|| first_page_id(&resp));
+        let page = opts.thumb_page.or_else(|| first_page_id(&resp));
         match page {
             Some(p) => tokio::task::spawn_blocking(move || thumb_for_page(&p))
                 .await

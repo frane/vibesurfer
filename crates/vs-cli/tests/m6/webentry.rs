@@ -168,7 +168,9 @@ fn http_get_bytes(url: &str) -> (String, Vec<u8>) {
     let (host, path) = rest.split_once('/').expect("url path");
     let mut stream = TcpStream::connect(host).expect("connect entry surface");
     stream
-        .write_all(format!("GET /{path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n").as_bytes())
+        .write_all(
+            format!("GET /{path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n").as_bytes(),
+        )
         .unwrap();
     let mut out = Vec::new();
     stream.read_to_end(&mut out).unwrap();
@@ -207,8 +209,7 @@ fn cell_watch_live_view() {
 
         // Frames are transient: the captures dir must not accumulate.
         let captures = ctx.home_path().join("captures");
-        let count = std::fs::read_dir(&captures)
-            .map_or(0, std::iter::Iterator::count);
+        let count = std::fs::read_dir(&captures).map_or(0, std::iter::Iterator::count);
         assert_eq!(count, 0, "live frames must not persist in {captures:?}");
 
         // Closing the page ends the view.

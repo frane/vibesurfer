@@ -18,8 +18,8 @@ mod engine_ops;
 mod lifecycle;
 mod page_ops;
 pub mod pending;
-pub mod webentry;
 mod store_ops;
+pub mod webentry;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -623,10 +623,12 @@ impl Daemon {
     /// audited. The URL's nonce is a capability — it is returned to
     /// the caller and never logged.
     pub fn watch_url(&self, session_id: &str, page_id: &str) -> Result<String> {
-        let ctx = AuditCtx::new("vs_watch", session_id).with_page(page_id).with_args(
-            String::new(),
-            crate::tokens::args_hash("vs_watch", &[page_id.to_string()]),
-        );
+        let ctx = AuditCtx::new("vs_watch", session_id)
+            .with_page(page_id)
+            .with_args(
+                String::new(),
+                crate::tokens::args_hash("vs_watch", &[page_id.to_string()]),
+            );
         self.audit_call(ctx, |ctx| {
             // Validates session + page (incl. WrongSession routing).
             let _ = self.engine_handle_for(session_id, page_id)?;

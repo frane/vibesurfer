@@ -62,8 +62,7 @@ pub fn thumbnail_jpeg(png: &[u8]) -> Result<Vec<u8>> {
     let img = image::load_from_memory_with_format(png, image::ImageFormat::Png)
         .context("decode capture png")?;
     let img = if img.width() > THUMB_WIDTH {
-        let h = (u64::from(img.height()) * u64::from(THUMB_WIDTH) / u64::from(img.width()))
-            .max(1);
+        let h = (u64::from(img.height()) * u64::from(THUMB_WIDTH) / u64::from(img.width())).max(1);
         img.resize(
             THUMB_WIDTH,
             u32::try_from(h).unwrap_or(u32::MAX),
@@ -107,11 +106,8 @@ mod tests {
         // 800x200 solid PNG -> 400x100 JPEG.
         let img = image::DynamicImage::new_rgb8(800, 200);
         let mut png = Vec::new();
-        img.write_to(
-            &mut std::io::Cursor::new(&mut png),
-            image::ImageFormat::Png,
-        )
-        .unwrap();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
         let jpeg = thumbnail_jpeg(&png).unwrap();
         let back = image::load_from_memory(&jpeg).unwrap();
         assert_eq!((back.width(), back.height()), (400, 100));
