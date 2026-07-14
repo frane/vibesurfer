@@ -19,7 +19,7 @@ fn cell_capture() {
         assert!(
             bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]),
             "capture file must be a PNG; first bytes={:?}",
-            &bytes.iter().take(8).collect::<Vec<_>>()
+            bytes.iter().take(8).collect::<Vec<_>>()
         );
         assert!(
             bytes.len() > 100,
