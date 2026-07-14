@@ -161,3 +161,60 @@ fn cell_pending_url_empty_queue() {
         );
     }
 }
+
+/// Raw HTTP GET that returns the body as bytes (frames are PNG).
+fn http_get_bytes(url: &str) -> (String, Vec<u8>) {
+    let rest = url.strip_prefix("http://").expect("http url");
+    let (host, path) = rest.split_once('/').expect("url path");
+    let mut stream = TcpStream::connect(host).expect("connect entry surface");
+    stream
+        .write_all(format!("GET /{path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n").as_bytes())
+        .unwrap();
+    let mut out = Vec::new();
+    stream.read_to_end(&mut out).unwrap();
+    let split = out
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .expect("header/body split");
+    let status = String::from_utf8_lossy(&out[..out.iter().position(|&b| b == b'\r').unwrap_or(0)])
+        .to_string();
+    (status, out[split + 4..].to_vec())
+}
+
+/// `vs watch`: the viewer page polls `/frame`, frames are real PNGs
+/// of the page, no capture files accumulate, and a closed page ends
+/// the view with 410.
+#[test]
+fn cell_watch_live_view() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/form.html");
+
+        let r = ctx.vs(&["watch", &page]);
+        assert_ok("watch", &r);
+        let url = body_kv(&body_rest(&r), "url");
+        assert!(url.contains("/live/"), "live url, got {url}");
+
+        let (status, html) = http_get_bytes(&url);
+        assert!(status.contains("200"), "viewer page: {status}");
+        let html = String::from_utf8_lossy(&html);
+        assert!(html.contains("/frame"), "viewer polls frames:\n{html}");
+
+        let frame_url = format!("{url}/frame");
+        let (status, png) = http_get_bytes(&frame_url);
+        assert!(status.contains("200"), "frame: {status}");
+        assert_eq!(&png[..4], b"\x89PNG", "frame must be a PNG");
+
+        // Frames are transient: the captures dir must not accumulate.
+        let captures = ctx.home_path().join("captures");
+        let count = std::fs::read_dir(&captures)
+            .map_or(0, std::iter::Iterator::count);
+        assert_eq!(count, 0, "live frames must not persist in {captures:?}");
+
+        // Closing the page ends the view.
+        let r = ctx.vs(&["close", &page]);
+        assert_ok("close page", &r);
+        let (status, _) = http_get_bytes(&frame_url);
+        assert!(status.contains("410"), "closed page frame: {status}");
+    }
+}

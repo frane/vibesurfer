@@ -595,15 +595,67 @@ impl Daemon {
     /// loopback web surface on first use. The page at the URL renders
     /// every pending entry as a form; submitting fulfills them.
     pub fn web_entry_url(&self) -> Result<String> {
+        Ok(self.web_surface()?.mint())
+    }
+
+    /// The lazily-started loopback surface shared by entry forms and
+    /// live views.
+    fn web_surface(&self) -> Result<Arc<webentry::WebEntry>> {
         let mut guard = self.inner.webentry.lock().unwrap();
-        let surface = if let Some(s) = guard.as_ref() {
-            s.clone()
-        } else {
-            let s = webentry::WebEntry::start(self.inner.pending.clone())?;
-            *guard = Some(s.clone());
-            s
+        if let Some(s) = guard.as_ref() {
+            return Ok(s.clone());
+        }
+        // Weak, or the surface's closure would keep `Inner` alive in a
+        // cycle (Inner -> WebEntry -> closure -> Inner).
+        let weak = Arc::downgrade(&self.inner);
+        let frame: webentry::FrameFn = Arc::new(move |page: &str| {
+            let inner = weak.upgrade().ok_or_else(|| "daemon gone".to_string())?;
+            Daemon { inner }.live_frame(page).map_err(|e| e.to_string())
+        });
+        let s = webentry::WebEntry::start(self.inner.pending.clone(), frame)?;
+        *guard = Some(s.clone());
+        Ok(s)
+    }
+
+    /// Mint a live-view URL for `page`, addressed like every other
+    /// page op (so a page in another session errors `WrongSession`).
+    /// One audit row per mint; frames are presentation and are not
+    /// audited. The URL's nonce is a capability — it is returned to
+    /// the caller and never logged.
+    pub fn watch_url(&self, session_id: &str, page_id: &str) -> Result<String> {
+        let ctx = AuditCtx::new("vs_watch", session_id).with_page(page_id).with_args(
+            String::new(),
+            crate::tokens::args_hash("vs_watch", &[page_id.to_string()]),
+        );
+        self.audit_call(ctx, |ctx| {
+            // Validates session + page (incl. WrongSession routing).
+            let _ = self.engine_handle_for(session_id, page_id)?;
+            let url = self.web_surface()?.mint_live(page_id);
+            ctx.result_summary = Some("live-url minted".into());
+            Ok(url)
+        })
+    }
+
+    /// One viewport PNG of `page_id`, session resolved by page id.
+    /// Bypasses audit and captures-dir retention: the transient file
+    /// is read and deleted. Serves the `/live/<nonce>/frame` route.
+    pub(crate) fn live_frame(&self, page_id: &str) -> Result<Vec<u8>> {
+        let session_id = {
+            let sessions = self.inner.sessions.lock().expect("poisoned");
+            sessions
+                .iter()
+                .find_map(|(sid, s)| s.pages.contains_key(page_id).then(|| sid.clone()))
+                .ok_or_else(|| DaemonError::UnknownPage(page_id.to_string()))?
         };
-        Ok(surface.mint())
+        let handle = self.engine_handle_for(&session_id, page_id)?;
+        std::fs::create_dir_all(&self.inner.captures_dir).map_err(DaemonError::Io)?;
+        let path = self
+            .inner
+            .engine
+            .capture(handle, vs_engine_webkit::CaptureScope::Viewport)?;
+        let bytes = std::fs::read(&path).map_err(DaemonError::Io)?;
+        let _ = std::fs::remove_file(&path);
+        Ok(bytes)
     }
 
     /// Enqueue a multi-field prompt form without parking. Returns the

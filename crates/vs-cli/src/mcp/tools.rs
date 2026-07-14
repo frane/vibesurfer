@@ -76,6 +76,9 @@ pub fn list() -> Vec<Value> {
             ("form", str_prop("Form id from vs_prompt_form.", true)),
             ("timeout_ms", uint_prop("How long to wait, in milliseconds. Default 300000 (5 min).", false)),
         ])),
+        tool("vs_watch", "Mint a read-only live-view URL for a page (~1 fps screenshots while open, 30 min). Relay it so the human can watch the browser work. Returns `url\\t<URL>`.", obj(&[
+            ("page", str_prop("Page id.", true)),
+        ])),
         tool("vs_pending_url", "Mint a single-use localhost URL where the human can fulfill every pending prompt entry as one browser form. Returns `url\\t<URL>`.", obj(&[])),
         tool("vs_prompt_confirm", "Block until the human at the local terminal presses Enter. Returns `ok` on confirm or aborts on EOF / Ctrl-C. Use as a human-in-loop gate before a sensitive vs_act click (e.g. \"about to transfer $5000 — Enter to confirm\"). No state change; the next call after this still uses whatever state token the agent already had.", obj(&[
             ("page", str_prop("Page id (passed for audit context; the primitive itself does not touch the page).", true)),
@@ -382,6 +385,10 @@ pub fn build_cli(name: &str, args: &Value) -> Result<(Cli, CallOpts)> {
         "vs_prompt_form_wait" => Command::PromptFormWait {
             form: req_str(args, "form")?,
             timeout_ms: opt_u32(args, "timeout_ms").map_or(300_000, u64::from),
+        },
+        "vs_watch" => Command::Watch {
+            page: req_str(args, "page")?,
+            open: false,
         },
         "vs_pending_url" => Command::Pending {
             sub: crate::commands::PendingSub::Url,

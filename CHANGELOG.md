@@ -7,6 +7,9 @@ All notable changes to vibesurfer are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Live view: `vs watch <PAGE>` (MCP `vs_watch`) prints a read-only loopback URL where a human can watch the agent's browser work — an HTML page polling ~1 fps viewport screenshots. Same capability-URL model as the entry form (256-bit nonce, here 30 min and not consumed by use; the page is bound to the nonce at mint). Frames bypass the audit log and the captures-dir retention — each is captured, streamed, and deleted, so watching leaves no rows and no files. A closed page ends the view with 410. `--open` launches the default browser. Cell `cell_watch_live_view`.
+
+### Added
 - MCP screenshots are now real image content blocks. `vs_capture` used to ship its `base64=<png>` body line as *text* content — hundreds of KB of base64 fed to the model as text tokens; the PNG now arrives as an MCP image block (hosts like Claude Desktop render it inline, and the model pays vision-token rates instead). New: `capture: true` on `vs_act`/`vs_open` attaches a ~400px JPEG thumbnail (~100 vision tokens) to the action result for visual confirmation without a separate round-trip; `VS_THUMBS=1` on `vs mcp` forces it for every act/open. Off by default — thumbnails are opt-in, per the token-economy rule. Thumbnail failures degrade to text-only; they never fail an action that succeeded.
 
 ### Added

@@ -1017,6 +1017,24 @@ pub(super) fn handle_pending_url(daemon: &Daemon, _req: &Request) -> String {
     }
 }
 
+/// `vs_watch` — mint a live-view URL for a page. Body: `url\t<url>`.
+pub(super) fn handle_watch(daemon: &Daemon, req: &Request) -> String {
+    let session_id = match require_session(req) {
+        Ok(s) => s,
+        Err(msg) => return format_error(ErrorCode::BadRequest, vec![msg]),
+    };
+    let Some(page_id) = req.args.first().cloned() else {
+        return format_error(ErrorCode::BadRequest, vec!["vs_watch: missing page id".into()]);
+    };
+    match daemon.watch_url(&session_id, &page_id) {
+        Ok(url) => format!(
+            "{}url\t{url}\n",
+            ResponseHead::ok(StateToken([0u8; 8])).encode()
+        ),
+        Err(e) => format_daemon_error(&e),
+    }
+}
+
 pub(super) fn handle_pending_list(daemon: &Daemon, _req: &Request) -> String {
     use std::fmt::Write as _;
     let entries = daemon.pending_list();

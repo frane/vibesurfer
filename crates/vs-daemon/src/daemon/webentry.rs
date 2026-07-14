@@ -18,9 +18,18 @@
 //! boundary as the daemon's Unix socket — the local user — with the
 //! nonce guarding against other local processes probing the port.
 //!
+//! The same surface also serves the read-only live view behind
+//! `/live/<nonce>`: an HTML page polling `/live/<nonce>/frame`
+//! (~1 fps PNG of the page) so a human can watch what the agent's
+//! browser is doing. Live nonces are page-bound, longer-lived
+//! ([`LIVE_TTL`]), and not consumed by use; frames come from a
+//! callback into the daemon that captures and deletes the transient
+//! file — no audit rows, no captures-dir churn.
+//!
 //! The server is deliberately minimal: HTTP/1.1, `Connection: close`,
-//! one thread per connection, GET and POST on `/entry/<nonce>` only.
-//! Loopback + human-scale traffic; nothing here needs an HTTP stack.
+//! one thread per connection, GET/POST on `/entry/<nonce>` and GET on
+//! `/live/<nonce>[/frame]` only. Loopback + human-scale traffic;
+//! nothing here needs an HTTP stack.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -34,6 +43,8 @@ use super::pending::PendingQueue;
 
 /// How long a minted entry URL stays valid.
 const NONCE_TTL: Duration = Duration::from_secs(10 * 60);
+/// How long a live-view URL stays valid.
+const LIVE_TTL: Duration = Duration::from_secs(30 * 60);
 /// Cap on request head + body. A submitted form is a handful of
 /// values; anything bigger is not our client.
 const MAX_HEAD: usize = 16 * 1024;
@@ -42,21 +53,29 @@ const MAX_BODY: usize = 256 * 1024;
 /// The web-entry surface. One per daemon, started lazily on the
 /// first URL mint (see [`WebEntry::start`]'s caller in
 /// `daemon::mod`); the accept thread lives for the daemon process.
+/// Produce a PNG of the page's viewport, or a human-readable reason
+/// why not (page closed, engine gone).
+pub type FrameFn = Arc<dyn Fn(&str) -> std::result::Result<Vec<u8>, String> + Send + Sync>;
+
 pub struct WebEntry {
     queue: Arc<PendingQueue>,
+    frame: FrameFn,
     port: u16,
     nonces: Mutex<HashMap<String, Instant>>,
+    live: Mutex<HashMap<String, (String, Instant)>>,
 }
 
 impl WebEntry {
     /// Bind the loopback listener and spawn the accept thread.
-    pub fn start(queue: Arc<PendingQueue>) -> std::io::Result<Arc<Self>> {
+    pub fn start(queue: Arc<PendingQueue>, frame: FrameFn) -> std::io::Result<Arc<Self>> {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
         let port = listener.local_addr()?.port();
         let surface = Arc::new(Self {
             queue,
+            frame,
             port,
             nonces: Mutex::new(HashMap::new()),
+            live: Mutex::new(HashMap::new()),
         });
         let accept = surface.clone();
         std::thread::Builder::new()
@@ -74,6 +93,27 @@ impl WebEntry {
             guard.insert(nonce.clone(), Instant::now() + NONCE_TTL);
         }
         format!("http://127.0.0.1:{}/entry/{nonce}", self.port)
+    }
+
+    /// Mint a live-view URL bound to `page`. Not consumed by use;
+    /// expires after [`LIVE_TTL`].
+    pub fn mint_live(&self, page: &str) -> String {
+        let nonce = fresh_nonce();
+        {
+            let mut guard = self.live.lock().unwrap();
+            guard.retain(|_, (_, exp)| *exp > Instant::now());
+            guard.insert(nonce.clone(), (page.to_string(), Instant::now() + LIVE_TTL));
+        }
+        format!("http://127.0.0.1:{}/live/{nonce}", self.port)
+    }
+
+    /// Page bound to a live nonce, if the nonce is current.
+    fn live_page(&self, nonce: &str) -> Option<String> {
+        let guard = self.live.lock().unwrap();
+        guard
+            .get(nonce)
+            .filter(|(_, exp)| *exp > Instant::now())
+            .map(|(p, _)| p.clone())
     }
 
     fn accept_loop(self: &Arc<Self>, listener: &TcpListener) {
@@ -136,26 +176,49 @@ impl WebEntry {
             }
         }
 
-        let response = match (method.as_str(), path.strip_prefix("/entry/")) {
-            ("GET", Some(nonce)) if self.nonce_ok(nonce, false) => self.render_form(nonce),
+        let response: Vec<u8> = match (method.as_str(), path.strip_prefix("/entry/")) {
+            ("GET", Some(nonce)) if self.nonce_ok(nonce, false) => {
+                self.render_form(nonce).into_bytes()
+            }
             ("POST", Some(nonce)) => {
                 if content_length > MAX_BODY {
-                    http_page(413, "Too large", "<p>Form body too large.</p>")
+                    http_page(413, "Too large", "<p>Form body too large.</p>").into_bytes()
                 } else {
                     let mut body = vec![0u8; content_length];
                     reader.read_exact(&mut body)?;
                     if self.nonce_ok(nonce, true) {
-                        self.submit(&body)
+                        self.submit(&body).into_bytes()
                     } else {
-                        expired_page()
+                        expired_page().into_bytes()
                     }
                 }
             }
-            ("GET", Some(_)) => expired_page(),
-            _ => http_page(404, "Not found", "<p>Nothing here.</p>"),
+            ("GET", Some(_)) => expired_page().into_bytes(),
+            ("GET", None) if path.starts_with("/live/") => self.handle_live(&path),
+            _ => http_page(404, "Not found", "<p>Nothing here.</p>").into_bytes(),
         };
-        stream.write_all(response.as_bytes())?;
+        stream.write_all(&response)?;
         stream.flush()
+    }
+
+    /// `/live/<nonce>` → viewer page; `/live/<nonce>/frame` → one PNG.
+    fn handle_live(&self, path: &str) -> Vec<u8> {
+        let rest = path.trim_start_matches("/live/");
+        let (nonce, is_frame) = match rest.strip_suffix("/frame") {
+            Some(n) => (n, true),
+            None => (rest, false),
+        };
+        let Some(page) = self.live_page(nonce) else {
+            return expired_page().into_bytes();
+        };
+        if !is_frame {
+            return viewer_page(nonce).into_bytes();
+        }
+        match (self.frame)(&page) {
+            Ok(png) => http_bytes(200, "image/png", &png),
+            // Page closed / engine gone: tell the viewer to stop.
+            Err(_) => http_bytes(410, "text/plain; charset=utf-8", b"view ended"),
+        }
     }
 
     /// GET: every pending entry, one form. Non-secret fields get
@@ -301,6 +364,53 @@ fn expired_page() -> String {
         "<p>This entry link is no longer valid (used or expired). Ask the agent for a \
          fresh one — or run <code>vs pending url</code>.</p>",
     )
+}
+
+/// The live viewer: an image polled at ~1 fps via fetch, so a failed
+/// frame (page closed, nonce expired) ends the loop cleanly.
+fn viewer_page(nonce: &str) -> String {
+    let body = format!(
+        "<p id=\"s\" style=\"font:13px system-ui;color:#888\">live — updates ~1/s; \
+         closing this tab stops the polling</p>\n\
+         <img id=\"f\" style=\"max-width:100%;border:1px solid #ccc\" alt=\"live view\">\n\
+         <script>\n\
+         const f=document.getElementById('f'),s=document.getElementById('s');\n\
+         async function tick(){{\n\
+           try{{\n\
+             const r=await fetch('/live/{nonce}/frame',{{cache:'no-store'}});\n\
+             if(!r.ok){{s.textContent='view ended';return}}\n\
+             const u=URL.createObjectURL(await r.blob());\n\
+             f.onload=()=>URL.revokeObjectURL(u);f.src=u;\n\
+           }}catch(e){{s.textContent='view ended';return}}\n\
+           setTimeout(tick,1000);\n\
+         }}\n\
+         tick();\n\
+         </script>"
+    );
+    // The viewer page itself is styled by http_page's shell; the body
+    // width cap is lifted so the frame can use the window.
+    http_page(200, "vibesurfer — live view", &body).replace("max-width:28rem", "max-width:72rem")
+}
+
+fn http_bytes(status: u16, content_type: &str, body: &[u8]) -> Vec<u8> {
+    let reason = match status {
+        200 => "OK",
+        410 => "Gone",
+        _ => "Error",
+    };
+    let head = format!(
+        "HTTP/1.1 {status} {reason}\r\n\
+         Content-Type: {content_type}\r\n\
+         Content-Length: {}\r\n\
+         Cache-Control: no-store\r\n\
+         Referrer-Policy: no-referrer\r\n\
+         X-Content-Type-Options: nosniff\r\n\
+         Connection: close\r\n\r\n",
+        body.len(),
+    );
+    let mut out = head.into_bytes();
+    out.extend_from_slice(body);
+    out
 }
 
 fn http_page(status: u16, title: &str, body_html: &str) -> String {

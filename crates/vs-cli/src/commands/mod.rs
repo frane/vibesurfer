@@ -292,6 +292,15 @@ pub enum Command {
         #[arg(long)]
         group: Option<String>,
     },
+    /// Print a read-only live-view URL for a page: an HTML page on
+    /// 127.0.0.1 streaming ~1 fps screenshots while open. Watch what
+    /// the agent's browser is doing from any real browser. The link
+    /// is a capability (256-bit nonce, 30 min); `--open` launches it.
+    Watch {
+        page: String,
+        #[arg(long)]
+        open: bool,
+    },
     /// Ask the human for several values at once via a browser form.
     /// Enqueues one pending form, prints a single-use localhost URL
     /// (open it in any browser; password managers can autofill), then
@@ -776,6 +785,12 @@ impl Command {
                     req = req.flag_value("group", g.clone());
                 }
                 req
+            }
+            Self::Watch { page, .. } => {
+                let s = require_session(session_id)?;
+                Request::new("vs_watch")
+                    .arg(page.clone())
+                    .flag_value("session", s)
             }
             Self::PromptFormWait { form, timeout_ms } => {
                 let s = require_session(session_id)?;

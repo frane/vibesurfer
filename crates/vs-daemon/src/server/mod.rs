@@ -167,6 +167,7 @@ pub fn dispatch(daemon: &Daemon, req: &Request) -> String {
         "vs_prompt_form" => engine_ops::handle_prompt_form(daemon, req),
         "vs_prompt_form_wait" => engine_ops::handle_prompt_form_wait(daemon, req),
         "vs_pending_url" => engine_ops::handle_pending_url(daemon, req),
+        "vs_watch" => engine_ops::handle_watch(daemon, req),
         "vs_pending_list" => engine_ops::handle_pending_list(daemon, req),
         "vs_pending_fulfill" => engine_ops::handle_pending_fulfill(daemon, req),
         "vs_pending_cancel" => engine_ops::handle_pending_cancel(daemon, req),

@@ -104,6 +104,8 @@ When you need credentials, never call `vs act fill` with the value. Always call 
 | 15 | `vs skill list \| show <NAME>` | List or show installed skill bundles. |
 | 16 | `vs capture <PAGE> [<REF>] [--full-page] [--base64]` | PNG to `~/.vibesurfer/captures/`. With `--base64` (`--b64`) the response body carries `base64=<bytes>` + `path=…` (default ON over MCP, where the pixels arrive as a proper image content block, not text). The dir is auto-capped (newest 200 / 30 days) after each shot; `vs capture clean [--all] [--older-than 7d] [--keep 50]` prunes it on demand. |
 
+`vs watch <PAGE> [--open]` prints a read-only live-view URL (`http://127.0.0.1:…/live/<nonce>`, 30 min): an HTML page showing ~1 fps screenshots of the page while open. Relay it so the human can watch the browser work; MCP tool `vs_watch` returns the same `url` line. Frames are transient — no capture files, no audit rows.
+
 Over MCP, `vs_act` and `vs_open` take `capture: true` to attach a ~400px JPEG thumbnail image block to the result (~100 vision tokens) — visual confirmation without a separate capture round-trip. `VS_THUMBS=1` on the `vs mcp` process forces it on for every act/open (set it in the MCP server config for a visual transcript; costs tokens per action). CLI equivalent: chain `vs capture` when needed.
 | 19 | `vs auth save\|load\|list\|clear <PAGE> <NAME>` | Per-origin cookie+storage blob, AES-256-GCM at rest. |
 

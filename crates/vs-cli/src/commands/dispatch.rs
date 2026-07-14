@@ -226,6 +226,11 @@ pub fn run(cli: &Cli) -> Result<Response> {
                 let _ = mark_caller_closed(&paths, key);
             }
         }
+        (Command::Watch { open: true, .. }, vs_protocol::Envelope::Success(_)) => {
+            if let Some(u) = body_value(&resp, "url") {
+                open_in_browser(&u);
+            }
+        }
         (Command::Capture { base64: true, .. }, vs_protocol::Envelope::Success(_)) => {
             // The body's first line is the on-disk PNG path. Read it
             // and replace the body with `base64=<bytes>` plus the
