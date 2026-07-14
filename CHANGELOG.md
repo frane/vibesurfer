@@ -6,6 +6,10 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
+
+
+## [v0.1.23] - 2026-07-14
+
 ### Added
 - Live view: `vs watch <PAGE>` (MCP `vs_watch`) prints a read-only loopback URL where a human can watch the agent's browser work — an HTML page polling ~1 fps viewport screenshots. Same capability-URL model as the entry form (256-bit nonce, here 30 min and not consumed by use; the page is bound to the nonce at mint). Frames bypass the audit log and the captures-dir retention — each is captured, streamed, and deleted, so watching leaves no rows and no files. A closed page ends the view with 410. `--open` launches the default browser. Cell `cell_watch_live_view`.
 
