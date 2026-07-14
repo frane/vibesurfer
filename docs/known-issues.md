@@ -30,3 +30,7 @@ Honest list of behaviors that aren't yet what they should be. Each entry has a s
 ## Daemon shutdown ordering
 
 - On macOS, `vs serve` ctrl-c is handled on the tokio worker thread; the main thread's `NSRunLoop` loop only exits when the engine channel closes (i.e., when the daemon and runtime are dropped). In practice this is one extra runloop slice (~50ms). Acceptable; flagged here so it isn't surprising in a profiling trace.
+
+## Caller-key sessions vs command substitution
+
+- Session auto-binding keys on the parent process (`<ppid>-<start_time>`). Shell command substitution `P=$(vs open …)` runs `vs` under a *subshell* pid, so it binds a different caller key than a bare `vs session-open` in the same script — pages land in separate auto-created sessions and follow-up calls hit `WRONG_SESSION`. Workaround: pin `VS_SESSION` (`export VS_SESSION=$(vs session-open | grep -o 's_[a-z0-9]*')`) or pass `--session`. A fix (walking up past short-lived subshells, or a session-affinity file per script) is under consideration.
