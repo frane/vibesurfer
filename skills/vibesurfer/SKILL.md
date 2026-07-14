@@ -82,10 +82,13 @@ For credentials, TANs, and any other value the agent must not see. The CLI reads
 |---|-----|-------|------|
 | 24 | `vs prompt-input <PAGE> <REF> --message="..." [--secret] --token=<TOK>` | `pi` | Print the message to the user, read a line (echo off when `--secret`), then fill it into the ref via the daemon's trusted-fill path. The agent that issued this call sees only `ok` + new token. |
 | 25 | `vs prompt-confirm <PAGE> --message="..."` | `pc` | Block until the user presses Enter, or abort on Ctrl-C. Use as a gate before a mutating click ("about to transfer X — Enter to confirm"). |
+| 26 | `vs prompt-form <PAGE> --field <REF>=<LABEL>[,secret] ... --token=<TOK> [--open] [--no-wait]` | `pf` | Ask for several values at once via a browser form. Prints a single-use `http://127.0.0.1:…/entry/<nonce>` URL, parks until the human submits, then fills each ref in order. `--open` launches the default browser; `--no-wait` returns `form`+`url` immediately (park later via the MCP wait tool). |
 
 When you need credentials, never call `vs act fill` with the value. Always call `vs prompt-input <PAGE> <REF> --message="<label-from-snapshot>" --secret --token=<TOK>` and let the user type. Include enough context in the message that they know which field they're filling (the field label from the snapshot is usually enough).
 
 **No tty — MCP or non-interactive CLI (v0.1.12+ MCP, v0.1.20+ CLI):** without a controlling tty (`vs mcp`, or `vs prompt-input` from an agent's shell), the call enqueues a pending entry on the daemon and parks waiting for the value. The local user runs `vs pending list` (alias `pe ls`) to see what's queued and `vs pending fulfill [<id>]` (`pe f`) to type the value at their local tty — `vs pending fulfill` with no id auto-picks the single pending entry. `vs pending cancel <id>` (`pe c`) aborts. Once fulfilled, the agent's MCP tool call returns the new state token exactly as it would have for the local-CLI path.
+
+**Browser entry (v0.1.23+):** the human alternative to the tty. `vs pending url` (`pe u`) mints a single-use loopback URL; the page lists every pending entry as one form (secret fields masked, password managers can autofill), and one submit fulfills them all. `vs prompt-form` prints such a URL automatically. Whole-login flow over MCP: call `vs_prompt_form` with all fields (`[{ref, label, secret}]`) — it returns `form` + `url` immediately; relay the URL to the user verbatim; then call `vs_prompt_form_wait` with the form id, which parks until submit and fills every ref in order. Values go browser → daemon → page; the agent never sees them. URLs are 127.0.0.1-only, 256-bit-nonce capability links, valid 10 minutes, consumed on submit.
 ### Search / extract (8, 10, 18)
 
 | # | CLI | What |

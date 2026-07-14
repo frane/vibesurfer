@@ -32,3 +32,4 @@ mod lifecycle;
 mod memory;
 mod visual;
 mod wait;
+mod webentry;

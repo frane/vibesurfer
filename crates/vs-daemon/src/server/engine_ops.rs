@@ -931,6 +931,92 @@ pub(super) fn handle_prompt_input_queue(daemon: &Daemon, req: &Request) -> Strin
     }
 }
 
+/// `vs_prompt_form` — enqueue a multi-field form, no parking.
+/// Args: `<page> <field>...` where a field is `<ref>:<secret 0|1>:<label>`
+/// (label last so it may contain colons). Returns body lines
+/// `form\t<id>` and `url\t<entry url>`.
+pub(super) fn handle_prompt_form(daemon: &Daemon, req: &Request) -> String {
+    if let Err(msg) = require_session(req) {
+        return format_error(ErrorCode::BadRequest, vec![msg]);
+    }
+    let Some(page_id) = req.args.first().cloned() else {
+        return format_error(
+            ErrorCode::BadRequest,
+            vec!["vs_prompt_form: missing page id".into()],
+        );
+    };
+    let Some(token) = flag_value(req, "token") else {
+        return format_error(
+            ErrorCode::BadRequest,
+            vec!["vs_prompt_form: missing --token".into()],
+        );
+    };
+    let mut fields = Vec::new();
+    for spec in &req.args[1..] {
+        let mut parts = spec.splitn(3, ':');
+        let (Some(r_str), Some(secret_str), Some(label)) =
+            (parts.next(), parts.next(), parts.next())
+        else {
+            return format_error(
+                ErrorCode::BadRequest,
+                vec![format!(
+                    "vs_prompt_form: bad field {spec:?} (want <ref>:<0|1>:<label>)"
+                )],
+            );
+        };
+        let Ok(r) = r_str.parse::<Ref>() else {
+            return format_error(
+                ErrorCode::BadRequest,
+                vec![format!("vs_prompt_form: bad ref in field {spec:?}")],
+            );
+        };
+        fields.push((r, label.to_string(), secret_str == "1"));
+    }
+    let group = flag_value(req, "group");
+    match daemon.prompt_form_enqueue(&page_id, fields, &token, group) {
+        Ok((form_id, url)) => format!(
+            "{}form\t{form_id}\nurl\t{url}\n",
+            ResponseHead::ok(StateToken([0u8; 8])).encode()
+        ),
+        Err(e) => format_daemon_error(&e),
+    }
+}
+
+/// `vs_prompt_form_wait` — park until the form is fulfilled, then
+/// fill the refs and return the new state token.
+pub(super) fn handle_prompt_form_wait(daemon: &Daemon, req: &Request) -> String {
+    let session_id = match require_session(req) {
+        Ok(s) => s,
+        Err(msg) => return format_error(ErrorCode::BadRequest, vec![msg]),
+    };
+    let Some(form_id) = req.args.first().cloned() else {
+        return format_error(
+            ErrorCode::BadRequest,
+            vec!["vs_prompt_form_wait: missing form id".into()],
+        );
+    };
+    let timeout = match flag_value(req, "timeout-ms").and_then(|s| s.parse::<u64>().ok()) {
+        Some(ms) => std::time::Duration::from_millis(ms),
+        None => std::time::Duration::from_secs(300),
+    };
+    match daemon.prompt_form_wait(&session_id, &form_id, timeout) {
+        Ok(after) => ResponseHead::ok(after).encode(),
+        Err(e) => format_daemon_error(&e),
+    }
+}
+
+/// `vs_pending_url` — mint a browser entry URL for whatever is (or
+/// becomes) pending. Body line: `url\t<entry url>`.
+pub(super) fn handle_pending_url(daemon: &Daemon, _req: &Request) -> String {
+    match daemon.web_entry_url() {
+        Ok(url) => format!(
+            "{}url\t{url}\n",
+            ResponseHead::ok(StateToken([0u8; 8])).encode()
+        ),
+        Err(e) => format_daemon_error(&e),
+    }
+}
+
 pub(super) fn handle_pending_list(daemon: &Daemon, _req: &Request) -> String {
     use std::fmt::Write as _;
     let entries = daemon.pending_list();

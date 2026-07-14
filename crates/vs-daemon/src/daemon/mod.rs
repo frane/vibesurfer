@@ -18,6 +18,7 @@ mod engine_ops;
 mod lifecycle;
 mod page_ops;
 pub mod pending;
+pub mod webentry;
 mod store_ops;
 
 use std::collections::HashMap;
@@ -69,6 +70,7 @@ pub(crate) struct Inner {
     pub(crate) skills_dir: std::path::PathBuf,
     pub(crate) master_key: Option<vs_store::MasterKey>,
     pub(crate) pending: Arc<pending::PendingQueue>,
+    pub(crate) webentry: Mutex<Option<Arc<webentry::WebEntry>>>,
 }
 
 impl Daemon {
@@ -85,6 +87,7 @@ impl Daemon {
                 skills_dir: std::path::PathBuf::from("./skills"),
                 master_key: None,
                 pending: pending::PendingQueue::new(),
+                webentry: Mutex::new(None),
             }),
         }
     }
@@ -558,6 +561,8 @@ impl Daemon {
             secret,
             token: token.clone(),
             group: group.clone(),
+            form: None,
+            form_index: 0,
             created_at: std::time::Instant::now(),
         };
         let value = self
@@ -584,6 +589,97 @@ impl Daemon {
         };
         let resp = self.act(call)?;
         Ok(resp.token)
+    }
+
+    /// Mint a browser entry URL for the pending queue, starting the
+    /// loopback web surface on first use. The page at the URL renders
+    /// every pending entry as a form; submitting fulfills them.
+    pub fn web_entry_url(&self) -> Result<String> {
+        let mut guard = self.inner.webentry.lock().unwrap();
+        let surface = if let Some(s) = guard.as_ref() {
+            s.clone()
+        } else {
+            let s = webentry::WebEntry::start(self.inner.pending.clone())?;
+            *guard = Some(s.clone());
+            s
+        };
+        Ok(surface.mint())
+    }
+
+    /// Enqueue a multi-field prompt form without parking. Returns the
+    /// form id (for `vs_prompt_form_wait`) and a browser entry URL.
+    /// Fields are `(ref, label, secret)` in fill order.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn prompt_form_enqueue(
+        &self,
+        page_id: &str,
+        fields: Vec<(vs_protocol::Ref, String, bool)>,
+        token: &str,
+        group: Option<String>,
+    ) -> Result<(String, String)> {
+        if fields.is_empty() {
+            return Err(DaemonError::BadRequest("vs_prompt_form: no fields".into()));
+        }
+        let form_id = pending::new_form_id();
+        for (i, (r, label, secret)) in fields.into_iter().enumerate() {
+            self.inner.pending.enqueue(pending::PendingEntry {
+                id: pending::new_id(),
+                page: page_id.to_string(),
+                r: r.0,
+                message: label,
+                secret,
+                token: token.to_string(),
+                group: group.clone(),
+                form: Some(form_id.clone()),
+                form_index: u32::try_from(i).unwrap_or(u32::MAX),
+                created_at: std::time::Instant::now(),
+            });
+        }
+        let url = self.web_entry_url()?;
+        Ok((form_id, url))
+    }
+
+    /// Park until every field of `form_id` is fulfilled (browser
+    /// submit, or `vs pending fulfill` per entry), then fill each ref
+    /// in declaration order and return the final state token. The
+    /// first fill validates against the token captured at enqueue;
+    /// later fills chain the token forward.
+    pub fn prompt_form_wait(
+        &self,
+        session_id: &str,
+        form_id: &str,
+        timeout: std::time::Duration,
+    ) -> Result<StateToken> {
+        let values = self
+            .inner
+            .pending
+            .wait_form(form_id, timeout)
+            .ok_or_else(|| {
+                DaemonError::BadRequest(format!(
+                    "vs_prompt_form: form {form_id} cancelled, timed out, or unknown"
+                ))
+            })?;
+        let mut token: Option<StateToken> = None;
+        for (entry, value) in values {
+            let before_token: StateToken = match token {
+                Some(t) => t,
+                None => entry.token.parse().map_err(|_| {
+                    DaemonError::BadRequest("vs_prompt_form: bad token (not hex 16)".into())
+                })?,
+            };
+            let resp = self.act(ActCall {
+                session_id: session_id.to_string(),
+                page_id: entry.page.clone(),
+                target: EngineActTarget::Ref(vs_protocol::Ref(entry.r)),
+                action: EngineAction::Fill { value },
+                before_token,
+                args_hash: crate::tokens::args_hash("vs_act", &["fill".into(), "***".into()]),
+                args_redacted: "fill ***".into(),
+                group_label: entry.group.clone(),
+            })?;
+            token = Some(resp.token);
+        }
+        token.ok_or_else(|| DaemonError::BadRequest("vs_prompt_form: empty form".into()))
     }
 
     /// Snapshot of currently-pending prompt entries.

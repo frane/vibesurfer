@@ -102,6 +102,7 @@ fn mark_caller_closed(paths: &Paths, key: &str) -> Result<()> {
 /// End-to-end dispatch. Auto-opens a session for the caller if needed
 /// and binds session-open / session-close side effects to the caller
 /// key so concurrent agents in different shells stay isolated.
+#[allow(clippy::too_many_lines)]
 pub fn run(cli: &Cli) -> Result<Response> {
     let paths = resolve_paths(cli.home.as_ref());
 
@@ -182,6 +183,27 @@ pub fn run(cli: &Cli) -> Result<Response> {
                 warnings: Vec::new(),
             });
         }
+        Command::PromptForm {
+            page,
+            fields,
+            token,
+            group,
+            open,
+            no_wait,
+            timeout_ms,
+        } => {
+            return run_prompt_form(
+                &mut client,
+                session_id.as_deref(),
+                page,
+                fields,
+                token,
+                group.as_deref(),
+                *open,
+                *no_wait,
+                *timeout_ms,
+            );
+        }
         Command::Pending {
             sub: super::PendingSub::Fulfill { id },
         } => {
@@ -255,9 +277,14 @@ fn run_prompt_input(
         }
         return client.call(&req).context("daemon call");
     }
+    let url_note = client
+        .call(&vs_protocol::Request::new("vs_pending_url"))
+        .ok()
+        .and_then(|r| body_value(&r, "url"))
+        .map_or_else(String::new, |u| format!(", or open {u} in a browser"));
     eprintln!(
         "vs prompt-input: no local tty — enqueued a pending entry; \
-         run `vs pending fulfill` at a terminal to provide the value \
+         run `vs pending fulfill` at a terminal{url_note} \
          (parks up to 5 min)"
     );
     let mut req = vs_protocol::Request::new("vs_prompt_input_queue")
@@ -273,6 +300,106 @@ fn run_prompt_input(
         req = req.flag_value("group", g);
     }
     client.call(&req).context("daemon call (pending queue)")
+}
+
+/// Extract `key\t<value>` from a wire response body.
+fn body_value(resp: &Response, key: &str) -> Option<String> {
+    resp.body.iter().find_map(|line| {
+        line.strip_prefix(key)
+            .and_then(|rest| rest.strip_prefix('\t'))
+            .map(|v| v.trim().to_string())
+    })
+}
+
+/// Dispatch `vs prompt-form`: enqueue all fields, surface the browser
+/// entry URL (stderr note; `--open` also launches the browser), then
+/// park in `vs_prompt_form_wait` until the human submits — unless
+/// `--no-wait`, which returns the enqueue response (form id + URL) so
+/// the caller can park later.
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
+fn run_prompt_form(
+    client: &mut Client,
+    session_id: Option<&str>,
+    page: &str,
+    fields: &[String],
+    token: &str,
+    group: Option<&str>,
+    open: bool,
+    no_wait: bool,
+    timeout_ms: u64,
+) -> Result<Response> {
+    let session = session_id.unwrap_or_default();
+    let mut req = vs_protocol::Request::new("vs_prompt_form")
+        .arg(page)
+        .flag_value("session", session)
+        .flag_value("token", token);
+    for spec in fields {
+        let (r, rest) = spec
+            .split_once('=')
+            .with_context(|| format!("bad --field {spec:?}: want REF=LABEL[,secret]"))?;
+        r.parse::<u32>()
+            .with_context(|| format!("bad --field {spec:?}: ref is not a number"))?;
+        let (label, secret) = match rest.strip_suffix(",secret") {
+            Some(l) => (l, true),
+            None => (rest, false),
+        };
+        if label.is_empty() {
+            anyhow::bail!("bad --field {spec:?}: empty label");
+        }
+        req = req.arg(format!("{r}:{}:{label}", u8::from(secret)));
+    }
+    if let Some(g) = group {
+        req = req.flag_value("group", g);
+    }
+    let enqueue = client.call(&req).context("daemon call (prompt-form)")?;
+    if let vs_protocol::Envelope::Error { .. } = &enqueue.envelope {
+        return Ok(enqueue);
+    }
+    let form_id = body_value(&enqueue, "form").context("prompt-form: no form id in response")?;
+    let url = body_value(&enqueue, "url").context("prompt-form: no url in response")?;
+    eprintln!(
+        "vs prompt-form: {} field(s) — open {url} (single-use, 10 min)",
+        fields.len(),
+    );
+    if open {
+        open_in_browser(&url);
+    }
+    if no_wait {
+        return Ok(enqueue);
+    }
+    let wait = vs_protocol::Request::new("vs_prompt_form_wait")
+        .arg(form_id)
+        .flag_value("session", session)
+        .flag_value("timeout-ms", timeout_ms.to_string());
+    client.call(&wait).context("daemon call (prompt-form wait)")
+}
+
+/// Best-effort `open <url>` in the platform default browser. Failure
+/// is fine — the URL is already printed.
+fn open_in_browser(url: &str) {
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("open");
+        c.arg(url);
+        c
+    };
+    #[cfg(target_os = "linux")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/C", "start", "", url]);
+        c
+    };
+    let _ = cmd
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
 }
 
 /// Whether this process has a controlling terminal to read a prompt

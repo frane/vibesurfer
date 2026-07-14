@@ -292,6 +292,34 @@ pub enum Command {
         #[arg(long)]
         group: Option<String>,
     },
+    /// Ask the human for several values at once via a browser form.
+    /// Enqueues one pending form, prints a single-use localhost URL
+    /// (open it in any browser; password managers can autofill), then
+    /// parks until the form is submitted and fills each ref in order.
+    /// The agent that invoked vs prompt-form never sees the values.
+    #[command(visible_alias = "pf")]
+    PromptForm {
+        page: String,
+        /// One field per flag: `<ref>=<label>` for a plain field,
+        /// `<ref>=<label>,secret` for a masked one. Repeatable; fill
+        /// order follows flag order.
+        #[arg(long = "field", value_name = "REF=LABEL[,secret]", required = true)]
+        fields: Vec<String>,
+        #[arg(long)]
+        token: String,
+        #[arg(long)]
+        group: Option<String>,
+        /// Open the entry URL in the default browser.
+        #[arg(long)]
+        open: bool,
+        /// Print the URL and form id, then exit instead of waiting.
+        /// Park later with the wire op `vs_prompt_form_wait`.
+        #[arg(long)]
+        no_wait: bool,
+        /// How long to wait for the submit, in milliseconds.
+        #[arg(long = "timeout-ms", default_value_t = 300_000)]
+        timeout_ms: u64,
+    },
     /// Block until the user presses Enter in the terminal. Returns
     /// `ok` on confirm or `! ABORTED` if the user sends EOF / Ctrl-C.
     /// Use as a human-in-loop gate before a sensitive `vs act click`.
@@ -319,6 +347,17 @@ pub enum Command {
         group: Option<String>,
         /// Timeout in milliseconds before the daemon gives up waiting
         /// for `vs pending fulfill <id>` (default 5 min).
+        #[arg(long = "timeout-ms", default_value_t = 300_000)]
+        timeout_ms: u64,
+    },
+    /// Wire-only park step of `vs prompt-form` — waits for the form
+    /// to be submitted, then fills the refs. Used by `vs mcp` so the
+    /// agent can enqueue (getting the URL back immediately), relay
+    /// the URL to the human, and park in a second call. Hidden from
+    /// `--help`: only the MCP server wires it.
+    #[command(hide = true)]
+    PromptFormWait {
+        form: String,
         #[arg(long = "timeout-ms", default_value_t = 300_000)]
         timeout_ms: u64,
     },
@@ -390,6 +429,11 @@ pub enum PendingSub {
     /// returns `BadRequest "cancelled"`.
     #[command(visible_alias = "c")]
     Cancel { id: String },
+    /// Mint a fresh single-use browser URL for the pending queue.
+    /// The page lists every pending entry as a form; submitting
+    /// fulfills them all — the browser alternative to `fulfill`.
+    #[command(visible_alias = "u")]
+    Url,
 }
 
 impl Command {
@@ -705,7 +749,7 @@ impl Command {
                     .flag_value("token", token.clone())
                     .flag_value("mode", mode.clone())
             }
-            Self::PromptInput { .. } | Self::PromptConfirm { .. } => {
+            Self::PromptInput { .. } | Self::PromptConfirm { .. } | Self::PromptForm { .. } => {
                 anyhow::bail!("vs_prompt_* is local; route via main, not the wire dispatcher");
             }
             Self::PromptInputQueue {
@@ -733,6 +777,13 @@ impl Command {
                 }
                 req
             }
+            Self::PromptFormWait { form, timeout_ms } => {
+                let s = require_session(session_id)?;
+                Request::new("vs_prompt_form_wait")
+                    .arg(form.clone())
+                    .flag_value("session", s)
+                    .flag_value("timeout-ms", timeout_ms.to_string())
+            }
             Self::Pending { sub } => match sub {
                 PendingSub::List => Request::new("vs_pending_list"),
                 PendingSub::Fulfill { id } => {
@@ -746,6 +797,7 @@ impl Command {
                         .arg(String::new())
                 }
                 PendingSub::Cancel { id } => Request::new("vs_pending_cancel").arg(id.clone()),
+                PendingSub::Url => Request::new("vs_pending_url"),
             },
             Self::Serve { .. } => {
                 anyhow::bail!("vs_serve is local; route via main, not the wire dispatcher");

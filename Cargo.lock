@@ -2375,6 +2375,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "interprocess",
+ "ring",
  "serde_json",
  "tempfile",
  "thiserror",

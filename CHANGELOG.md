@@ -6,6 +6,9 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Browser-based sensitive-data entry. The tty was the only way for a human to hand values to a parked prompt — no password manager, one field at a time. The daemon now serves a loopback web form instead: `vs prompt-form <PAGE> --field <REF>=<LABEL>[,secret] ...` (alias `pf`) enqueues all fields at once, prints a single-use `http://127.0.0.1:<port>/entry/<nonce>` URL (`--open` launches the browser), parks until the human submits, and fills each ref in order. `vs pending url` (`pe u`) mints the same kind of URL for anything already pending, and the no-tty `vs prompt-input` note now includes one. Over MCP it's a two-step dance so the agent can relay the URL: `vs_prompt_form` returns `form` + `url` immediately, `vs_prompt_form_wait` parks. Security: the listener binds 127.0.0.1 only and starts lazily; the URL is the auth — 256-bit nonce, 10-minute TTL, consumed on submit; secret fields render as password inputs (autocomplete-tagged, so password managers autofill); values go browser → daemon → page and never transit the agent channel, responses, or logs. New wire ops `vs_prompt_form`, `vs_prompt_form_wait`, `vs_pending_url`; cells `cell_prompt_form_browser_flow`, `cell_pending_url_empty_queue`.
+
 
 
 ## [v0.1.22] - 2026-07-14

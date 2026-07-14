@@ -51,6 +51,30 @@ pub fn list() -> Vec<Value> {
             ("token", str_prop("State token from the most recent read.", true)),
             ("group", str_prop("Optional audit-group label.", false)),
         ])),
+        tool("vs_prompt_form", "Ask the human for several values at once (e.g. a full login) via a browser form. Returns `form\\t<id>` and `url\\t<single-use localhost URL>` immediately. Relay the URL to the user verbatim, then call vs_prompt_form_wait with the form id. The daemon fills each ref on submit; you never see the values.", obj(&[
+            ("page", str_prop("Page id.", true)),
+            ("fields", json!({
+                "type": "array",
+                "description": "Fields in fill order.",
+                "required": true,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "ref": {"type": "integer", "description": "Ref number of the input to fill."},
+                        "label": {"type": "string", "description": "Human-facing label shown on the form (e.g. \"Flatex Kundennummer\")."},
+                        "secret": {"type": "boolean", "description": "Render as a masked password input. Default false."}
+                    },
+                    "required": ["ref", "label"]
+                }
+            })),
+            ("token", str_prop("State token from the most recent read.", true)),
+            ("group", str_prop("Optional audit-group label.", false)),
+        ])),
+        tool("vs_prompt_form_wait", "Park until the vs_prompt_form form is submitted, then fill the refs in order. Returns the new state token. Call right after relaying the URL.", obj(&[
+            ("form", str_prop("Form id from vs_prompt_form.", true)),
+            ("timeout_ms", uint_prop("How long to wait, in milliseconds. Default 300000 (5 min).", false)),
+        ])),
+        tool("vs_pending_url", "Mint a single-use localhost URL where the human can fulfill every pending prompt entry as one browser form. Returns `url\\t<URL>`.", obj(&[])),
         tool("vs_prompt_confirm", "Block until the human at the local terminal presses Enter. Returns `ok` on confirm or aborts on EOF / Ctrl-C. Use as a human-in-loop gate before a sensitive vs_act click (e.g. \"about to transfer $5000 — Enter to confirm\"). No state change; the next call after this still uses whatever state token the agent already had.", obj(&[
             ("page", str_prop("Page id (passed for audit context; the primitive itself does not touch the page).", true)),
             ("message", str_prop("Prompt text shown to the human. State what they are confirming.", true)),
@@ -301,6 +325,47 @@ pub fn build_cli(name: &str, args: &Value) -> Result<Cli> {
             token: req_str(args, "token")?,
             group: opt_str(args, "group"),
             timeout_ms: opt_u32(args, "timeout_ms").map_or(300_000, u64::from),
+        },
+        "vs_prompt_form" => {
+            let fields = args
+                .get("fields")
+                .and_then(Value::as_array)
+                .ok_or_else(|| anyhow!("vs_prompt_form: missing fields array"))?
+                .iter()
+                .map(|f| {
+                    let r = f
+                        .get("ref")
+                        .and_then(Value::as_u64)
+                        .ok_or_else(|| anyhow!("vs_prompt_form: field without ref"))?;
+                    let label = f
+                        .get("label")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| anyhow!("vs_prompt_form: field without label"))?;
+                    let secret = f.get("secret").and_then(Value::as_bool).unwrap_or(false);
+                    Ok(format!(
+                        "{r}={label}{}",
+                        if secret { ",secret" } else { "" }
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Command::PromptForm {
+                page: req_str(args, "page")?,
+                fields,
+                token: req_str(args, "token")?,
+                group: opt_str(args, "group"),
+                open: false,
+                // MCP is a two-step dance: return the URL now, park in
+                // vs_prompt_form_wait after the agent relays it.
+                no_wait: true,
+                timeout_ms: 300_000,
+            }
+        }
+        "vs_prompt_form_wait" => Command::PromptFormWait {
+            form: req_str(args, "form")?,
+            timeout_ms: opt_u32(args, "timeout_ms").map_or(300_000, u64::from),
+        },
+        "vs_pending_url" => Command::Pending {
+            sub: crate::commands::PendingSub::Url,
         },
         "vs_prompt_confirm" => Command::PromptConfirm {
             page: req_str(args, "page")?,
