@@ -34,6 +34,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 interprocess = "2.4.2"
 rpassword = "7"
 base64 = "0.22.1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

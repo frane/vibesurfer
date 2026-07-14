@@ -23,6 +23,7 @@ pub fn list() -> Vec<Value> {
         tool("vs_session_close", "Close the active session.", obj(&[])),
         tool("vs_open", "Open a page in the active session.", obj(&[
             ("url", str_prop("URL to navigate to.", true)),
+            ("capture", bool_prop("Attach a screenshot image block to the result. Default false; VS_THUMBS=1 forces on.", false)),
         ])),
         tool("vs_close", "Close a page.", obj(&[
             ("page", str_prop("Page id (e.g. p_xxxxxx).", true)),
@@ -42,6 +43,7 @@ pub fn list() -> Vec<Value> {
             ("value", str_prop("Optional value (text for fill, key chord for key, etc.).", false)),
             ("token", str_prop("State token from the most recent read.", true)),
             ("group", str_prop("Optional audit-group label (e.g. \"login-flow\").", false)),
+            ("capture", bool_prop("Attach a screenshot image block to the result. Default false; VS_THUMBS=1 forces on.", false)),
         ])),
         tool("vs_prompt_input", "Prompt the human at the local terminal for a value, then fill it into a ref. The agent that invokes this never sees the value the user types — vs reads from /dev/tty itself and ships the bytes to the daemon, which writes them into the field via the trusted prototype-setter fill path. Use --secret for passwords, TANs, credit-card numbers, and anything else the agent should not see.", obj(&[
             ("page", str_prop("Page id.", true)),
@@ -176,7 +178,24 @@ pub fn list() -> Vec<Value> {
 
 /// Build a `crate::commands::Cli` from an MCP tool call. Returns an
 /// error if the arguments don't match what the primitive needs.
-pub fn build_cli(name: &str, args: &Value) -> Result<Cli> {
+/// Per-call presentation options that ride alongside the `Cli`.
+#[derive(Debug, Default)]
+pub struct CallOpts {
+    /// Attach a screenshot image block after the call. Set by the
+    /// `capture` arg on vs_act / vs_open, or forced by `VS_THUMBS=1`.
+    pub thumb: bool,
+    /// Page to screenshot. `None` for vs_open — the page id is only
+    /// known from the response body.
+    pub thumb_page: Option<String>,
+}
+
+pub fn build_cli(name: &str, args: &Value) -> Result<(Cli, CallOpts)> {
+    let thumbs_env = std::env::var("VS_THUMBS").is_ok_and(|v| v == "1");
+    let mut opts = CallOpts::default();
+    if matches!(name, "vs_act" | "vs_open") {
+        opts.thumb = opt_bool(args, "capture").unwrap_or(thumbs_env);
+        opts.thumb_page = opt_str(args, "page");
+    }
     let cmd = match name {
         "vs_session_open" => Command::SessionOpen {
             policy: opt_str(args, "policy"),
@@ -373,14 +392,17 @@ pub fn build_cli(name: &str, args: &Value) -> Result<Cli> {
         },
         other => return Err(anyhow!("unknown tool: {other}")),
     };
-    Ok(Cli {
-        session: None,
-        socket: None,
-        home: None,
-        no_spawn: false,
-        json: false,
-        command: cmd,
-    })
+    Ok((
+        Cli {
+            session: None,
+            socket: None,
+            home: None,
+            no_spawn: false,
+            json: false,
+            command: cmd,
+        },
+        opts,
+    ))
 }
 
 // =============================================================================

@@ -9,6 +9,7 @@
 //! Run as a subcommand: `vs mcp` (Claude Desktop / Claude Code spawn
 //! it via their MCP server config).
 
+mod content;
 mod tools;
 
 use std::sync::Arc;
@@ -159,7 +160,7 @@ async fn call_tool(params: &Value) -> Result<Value, McpError> {
         .cloned()
         .unwrap_or_else(|| json!({}));
 
-    let cli = tools::build_cli(name, &arguments).map_err(|e| McpError {
+    let (cli, opts) = tools::build_cli(name, &arguments).map_err(|e| McpError {
         code: -32602,
         message: e.to_string(),
     })?;
@@ -175,13 +176,55 @@ async fn call_tool(params: &Value) -> Result<Value, McpError> {
             message: format!("vs dispatch: {e:#}"),
         })?;
 
+    // Optional action thumbnail. Failures degrade to text-only — a
+    // missing screenshot must never fail the action that succeeded.
+    let thumb = if opts.thumb {
+        let page = opts
+            .thumb_page
+            .or_else(|| first_page_id(&resp));
+        match page {
+            Some(p) => tokio::task::spawn_blocking(move || thumb_for_page(&p))
+                .await
+                .ok()
+                .and_then(std::result::Result::ok),
+            None => None,
+        }
+    } else {
+        None
+    };
+
     Ok(json!({
-        "content": [{
-            "type": "text",
-            "text": resp,
-        }],
+        "content": content::shape(&resp, thumb.as_deref()),
         "isError": false,
     }))
+}
+
+/// First `p_…` token in a response body — how vs_open's fresh page id
+/// is recovered for the thumbnail call.
+fn first_page_id(resp: &str) -> Option<String> {
+    resp.split_whitespace()
+        .find(|w| w.starts_with("p_"))
+        .map(ToString::to_string)
+}
+
+/// Capture `page` and downscale to a JPEG thumbnail.
+fn thumb_for_page(page: &str) -> Result<Vec<u8>> {
+    let (cli, _) = tools::build_cli("vs_capture", &json!({ "page": page, "base64": false }))?;
+    let resp = run_cli(&cli)?;
+    let path = resp
+        .lines()
+        .find_map(|l| {
+            l.strip_prefix("path=").or_else(|| {
+                let t = l.trim();
+                std::path::Path::new(t)
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("png"))
+                    .then_some(t)
+            })
+        })
+        .context("capture: no png path in response")?;
+    let png = std::fs::read(path.trim()).context("read capture png")?;
+    content::thumbnail_jpeg(&png)
 }
 
 fn run_cli(cli: &Cli) -> Result<String> {
