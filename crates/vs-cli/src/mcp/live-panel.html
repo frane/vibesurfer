@@ -1,0 +1,80 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html,body{margin:0;padding:0;background:var(--color-background-primary,transparent);font:12px system-ui,sans-serif}
+  #s{color:#888;padding:4px 6px}
+  img{display:block;max-width:100%;border-radius:6px}
+</style>
+</head>
+<body>
+<div id="s">connecting…</div>
+<img id="f" alt="">
+<script>
+// vibesurfer live panel — MCP Apps (SEP-1865, protocol 2026-01-26).
+// Self-contained: no external origins; frames arrive as image content
+// blocks from the app-only vs_live_frame tool over the ui/* bridge.
+(() => {
+  let nextId = 1;
+  const pending = new Map();
+  const post = (msg) => window.parent.postMessage(msg, '*');
+  const request = (method, params) => new Promise((resolve, reject) => {
+    const id = nextId++;
+    pending.set(id, {resolve, reject});
+    post({jsonrpc: '2.0', id, method, params});
+  });
+  const notify = (method, params) => post({jsonrpc: '2.0', method, params: params || {}});
+
+  const s = document.getElementById('s');
+  const f = document.getElementById('f');
+  let page = null;
+  let timer = null;
+  let failures = 0;
+
+  window.addEventListener('message', (ev) => {
+    const m = ev.data;
+    if (!m || m.jsonrpc !== '2.0') return;
+    if (m.id !== undefined && (m.result !== undefined || m.error !== undefined)) {
+      const p = pending.get(m.id);
+      if (p) { pending.delete(m.id); m.error ? p.reject(m.error) : p.resolve(m.result); }
+      return;
+    }
+    if (m.method === 'ui/notifications/tool-input') {
+      const a = (m.params && m.params.arguments) || {};
+      if (a.page && a.page !== page) { page = a.page; start(); }
+    }
+  });
+
+  async function tick() {
+    if (!page) return;
+    try {
+      const r = await request('tools/call', {name: 'vs_live_frame', arguments: {page}});
+      const img = (r.content || []).find((c) => c.type === 'image');
+      if (!img) throw new Error('no frame');
+      f.src = 'data:' + (img.mimeType || 'image/jpeg') + ';base64,' + img.data;
+      s.textContent = 'live — ' + page;
+      failures = 0;
+    } catch (e) {
+      // One retry cushions a transient miss; a second failure means
+      // the page closed or the view expired.
+      failures += 1;
+      if (failures > 1) { s.textContent = 'view ended'; return; }
+    }
+    timer = setTimeout(tick, 1200);
+  }
+  function start() { if (timer) clearTimeout(timer); failures = 0; tick(); }
+
+  request('ui/initialize', {
+    protocolVersion: '2026-01-26',
+    capabilities: {},
+    clientInfo: {name: 'vibesurfer live view', version: '1'},
+    appCapabilities: {availableDisplayModes: ['inline']},
+  }).then(() => {
+    notify('ui/notifications/initialized');
+    if (!page) s.textContent = 'waiting for page…';
+  }).catch(() => { s.textContent = 'host does not support MCP Apps'; });
+})();
+</script>
+</body>
+</html>

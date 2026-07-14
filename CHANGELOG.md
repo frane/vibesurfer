@@ -6,6 +6,12 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- MCP Apps live panel (SEP-1865). In hosts that support MCP Apps — Claude Desktop, ChatGPT, VS Code Copilot — calling `vs_watch` now renders an inline live view of the page next to the conversation, like Claude-in-Chrome's browser card. The panel is a self-contained `ui://vibesurfer/live-panel` resource (`text/html;profile=mcp-app`, no external origins, no CSP grants) that polls ~0.8 fps frames over the postMessage bridge via a new app-only tool `vs_live_frame` (`_meta.ui.visibility: ["app"]`, so the model never sees or pays for frames). The Apps wiring is gated on the client declaring the `io.modelcontextprotocol/ui` extension at initialize — other hosts see the exact same tool list as before and still get the `vs watch` URL line. `vs mcp` also gained `resources/list`/`resources/read`.
+
+### Fixed
+- `vs mcp` now honors its global flags (`--home`, `--socket`, `--session`) when dispatching tool calls. They were parsed but dropped — every MCP tool call connected to the default `~/.vibesurfer` daemon regardless, which made isolated/test setups silently talk to the wrong daemon.
+
 
 
 ## [v0.1.23] - 2026-07-14

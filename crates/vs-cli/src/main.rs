@@ -36,7 +36,7 @@ fn main() -> std::process::ExitCode {
     }
 
     if matches!(cli.command, Command::Mcp) {
-        if let Err(e) = vs_cli::mcp::run() {
+        if let Err(e) = vs_cli::mcp::run(&cli) {
             eprintln!("error: {e:#}");
             return std::process::ExitCode::from(1);
         }

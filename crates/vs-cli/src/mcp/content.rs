@@ -59,12 +59,22 @@ pub fn shape(resp_text: &str, thumb_jpeg: Option<&[u8]>) -> Value {
 
 /// Downscale a PNG to a [`THUMB_WIDTH`]-wide JPEG thumbnail.
 pub fn thumbnail_jpeg(png: &[u8]) -> Result<Vec<u8>> {
+    scaled_jpeg(png, THUMB_WIDTH, THUMB_QUALITY)
+}
+
+/// Live-panel frame: wider and cleaner than an action thumbnail —
+/// it is looked at by a human, not billed to a model.
+pub fn frame_jpeg(png: &[u8]) -> Result<Vec<u8>> {
+    scaled_jpeg(png, 800, 70)
+}
+
+fn scaled_jpeg(png: &[u8], width: u32, quality: u8) -> Result<Vec<u8>> {
     let img = image::load_from_memory_with_format(png, image::ImageFormat::Png)
         .context("decode capture png")?;
-    let img = if img.width() > THUMB_WIDTH {
-        let h = (u64::from(img.height()) * u64::from(THUMB_WIDTH) / u64::from(img.width())).max(1);
+    let img = if img.width() > width {
+        let h = (u64::from(img.height()) * u64::from(width) / u64::from(img.width())).max(1);
         img.resize(
-            THUMB_WIDTH,
+            width,
             u32::try_from(h).unwrap_or(u32::MAX),
             image::imageops::FilterType::Triangle,
         )
@@ -72,7 +82,7 @@ pub fn thumbnail_jpeg(png: &[u8]) -> Result<Vec<u8>> {
         img
     };
     let mut out = Vec::new();
-    let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, THUMB_QUALITY);
+    let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality);
     enc.encode_image(&img.into_rgb8()).context("encode jpeg")?;
     Ok(out)
 }

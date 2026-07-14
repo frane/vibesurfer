@@ -15,7 +15,31 @@ use crate::commands::{Cli, Command};
 /// JSON Schema list for `tools/list`. Each tool's name matches the
 /// vibesurfer wire primitive (`vs_open`, `vs_view`, …), so an MCP
 /// client can recognize them by their wire name.
-pub fn list() -> Vec<Value> {
+/// `ui` adds the MCP Apps wiring (SEP-1865): `_meta.ui` on vs_watch
+/// pointing at the live panel, plus the app-only vs_live_frame tool
+/// the panel polls. Off unless the client declared the
+/// `io.modelcontextprotocol/ui` extension — no schema tax otherwise.
+pub fn list(ui: bool) -> Vec<Value> {
+    let mut tools = base_tools();
+    if ui {
+        for t in &mut tools {
+            if t["name"] == "vs_watch" {
+                t["_meta"] = json!({ "ui": { "resourceUri": LIVE_PANEL_URI } });
+            }
+        }
+        let mut frame = tool("vs_live_frame", "One live frame of a page as an image block. Polled by the live panel; not for the model.", obj(&[
+            ("page", str_prop("Page id.", true)),
+        ]));
+        frame["_meta"] = json!({ "ui": { "visibility": ["app"] } });
+        tools.push(frame);
+    }
+    tools
+}
+
+/// URI of the live-view panel resource.
+pub const LIVE_PANEL_URI: &str = "ui://vibesurfer/live-panel";
+
+fn base_tools() -> Vec<Value> {
     vec![
         tool("vs_session_open", "Create a vibesurfer session. Writes the active-session pointer.", obj(&[
             ("policy", str_prop("Optional policy id (e.g. \"strict\", \"default\").", false)),
@@ -552,7 +576,7 @@ mod tests {
     /// property — this test pins that contract.
     #[test]
     fn no_property_carries_required_sentinel() {
-        for tool in list() {
+        for tool in list(true) {
             let name = tool["name"].as_str().unwrap_or("?");
             let schema = &tool["inputSchema"];
             let props = schema["properties"]
