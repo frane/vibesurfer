@@ -6,7 +6,8 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
-
+### Changed
+- One-line description unified across GitHub, crates.io, and the brew formula/cask: "A browser for LLMs, not humans. Headless WebKit with a line protocol built for agents in loops — no Chrome, no CDP." (Was three different phrasings, one of them marketing filler.) Cask copy lands with the next cask bump.
 
 ## [v0.1.24] - 2026-07-15
 

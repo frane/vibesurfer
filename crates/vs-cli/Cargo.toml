@@ -1,6 +1,6 @@
 [package]
 name = "vibesurfer"
-description = "A real browser for your local AI agent."
+description = "A browser for LLMs, not humans. Headless WebKit with a line protocol built for agents in loops — no Chrome, no CDP."
 readme = "README.md"
 version.workspace = true
 edition.workspace = true
