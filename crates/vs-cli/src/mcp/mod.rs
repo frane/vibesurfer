@@ -356,24 +356,32 @@ fn thumb_for_page(page: &str) -> Result<Vec<u8>> {
     content::thumbnail_jpeg(&capture_png(page)?)
 }
 
-/// Capture `page` through the normal dispatch path; PNG bytes.
+/// One transient frame of `page` via the sessionless `vs_frame` op —
+/// resolves the session by page id daemon-side, so it works no matter
+/// which session (or caller-key state) the MCP process has. The
+/// transient file is deleted after reading.
 fn capture_png(page: &str) -> Result<Vec<u8>> {
-    let (mut cli, _) = tools::build_cli("vs_capture", &json!({ "page": page, "base64": false }))?;
+    let mut cli = Cli {
+        session: None,
+        socket: None,
+        home: None,
+        no_spawn: false,
+        json: false,
+        command: crate::commands::Command::Frame {
+            page: page.to_string(),
+        },
+    };
     apply_globals(&mut cli);
-    let resp = run_cli(&cli)?;
+    let resp = crate::commands::run(&cli).context("vs_frame dispatch")?;
     let path = resp
-        .lines()
-        .find_map(|l| {
-            l.strip_prefix("path=").or_else(|| {
-                let t = l.trim();
-                std::path::Path::new(t)
-                    .extension()
-                    .is_some_and(|e| e.eq_ignore_ascii_case("png"))
-                    .then_some(t)
-            })
-        })
-        .context("capture: no png path in response")?;
-    std::fs::read(path.trim()).context("read capture png")
+        .body
+        .first()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .context("vs_frame: no path in response")?;
+    let bytes = std::fs::read(&path).context("read frame png")?;
+    let _ = std::fs::remove_file(&path);
+    Ok(bytes)
 }
 
 fn run_cli(cli: &Cli) -> Result<String> {

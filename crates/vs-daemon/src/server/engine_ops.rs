@@ -1038,6 +1038,26 @@ pub(super) fn handle_watch(daemon: &Daemon, req: &Request) -> String {
     }
 }
 
+/// `vs_frame` — one transient viewport PNG by page id (no session).
+/// Body: the on-disk path; the CALLER deletes the file after reading.
+/// Plumbing for the MCP live panel and action thumbnails.
+pub(super) fn handle_frame(daemon: &Daemon, req: &Request) -> String {
+    let Some(page_id) = req.args.first().cloned() else {
+        return format_error(
+            ErrorCode::BadRequest,
+            vec!["vs_frame: missing page id".into()],
+        );
+    };
+    match daemon.live_frame_path(&page_id) {
+        Ok(path) => format!(
+            "{}{}\n",
+            ResponseHead::ok(StateToken([0u8; 8])).encode(),
+            path.display()
+        ),
+        Err(e) => format_daemon_error(&e),
+    }
+}
+
 pub(super) fn handle_pending_list(daemon: &Daemon, _req: &Request) -> String {
     use std::fmt::Write as _;
     let entries = daemon.pending_list();

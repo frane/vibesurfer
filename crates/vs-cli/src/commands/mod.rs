@@ -359,6 +359,11 @@ pub enum Command {
         #[arg(long = "timeout-ms", default_value_t = 300_000)]
         timeout_ms: u64,
     },
+    /// Wire-only: one transient viewport PNG by page id, no session.
+    /// Body is the on-disk path; the caller deletes it after reading.
+    /// Plumbing for MCP panel frames / thumbnails. Hidden.
+    #[command(hide = true)]
+    Frame { page: String },
     /// Wire-only park step of `vs prompt-form` — waits for the form
     /// to be submitted, then fills the refs. Used by `vs mcp` so the
     /// agent can enqueue (getting the URL back immediately), relay
@@ -792,6 +797,7 @@ impl Command {
                     .arg(page.clone())
                     .flag_value("session", s)
             }
+            Self::Frame { page } => Request::new("vs_frame").arg(page.clone()),
             Self::PromptFormWait { form, timeout_ms } => {
                 let s = require_session(session_id)?;
                 Request::new("vs_prompt_form_wait")
@@ -833,6 +839,7 @@ impl Command {
                 | Self::Serve { .. }
                 | Self::Mcp
                 | Self::Pending { .. }
+                | Self::Frame { .. }
         )
     }
 }

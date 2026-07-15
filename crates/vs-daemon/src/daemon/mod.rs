@@ -638,10 +638,12 @@ impl Daemon {
         })
     }
 
-    /// One viewport PNG of `page_id`, session resolved by page id.
-    /// Bypasses audit and captures-dir retention: the transient file
-    /// is read and deleted. Serves the `/live/<nonce>/frame` route.
-    pub(crate) fn live_frame(&self, page_id: &str) -> Result<Vec<u8>> {
+    /// One transient viewport PNG of `page_id`, session resolved by
+    /// page id — no session addressing, no audit row, and the file is
+    /// NOT retained by the captures-dir policy: the caller must
+    /// delete it after reading. Serves `/live/<nonce>/frame` and the
+    /// wire op `vs_frame` (MCP panel frames and action thumbnails).
+    pub fn live_frame_path(&self, page_id: &str) -> Result<std::path::PathBuf> {
         let session_id = {
             let sessions = self.inner.sessions.lock().expect("poisoned");
             sessions
@@ -651,10 +653,15 @@ impl Daemon {
         };
         let handle = self.engine_handle_for(&session_id, page_id)?;
         std::fs::create_dir_all(&self.inner.captures_dir).map_err(DaemonError::Io)?;
-        let path = self
+        Ok(self
             .inner
             .engine
-            .capture(handle, vs_engine_webkit::CaptureScope::Viewport)?;
+            .capture(handle, vs_engine_webkit::CaptureScope::Viewport)?)
+    }
+
+    /// [`Self::live_frame_path`], read and deleted: PNG bytes.
+    pub(crate) fn live_frame(&self, page_id: &str) -> Result<Vec<u8>> {
+        let path = self.live_frame_path(page_id)?;
         let bytes = std::fs::read(&path).map_err(DaemonError::Io)?;
         let _ = std::fs::remove_file(&path);
         Ok(bytes)
