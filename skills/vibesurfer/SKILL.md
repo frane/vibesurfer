@@ -113,6 +113,8 @@ Over MCP, `vs_act` and `vs_open` take `capture: true` to attach a ~400px JPEG th
 
 ## Optimistic concurrency
 
+Interactive refs the walker cannot see or hit (invisible / zero-size — sites keep hidden duplicates of buttons) carry `hid=1` in the tree; acting on one warns `? hidden_target ref=N`. Prefer the visible duplicate. Sessions and pages survive daemon restarts (rebuilt from SQLite at startup; re-`view` for a fresh baseline).
+
 Every read returns a state token. Mutations require the token in `--token=<TOK>`. Stale token → `! STALE_TOKEN <new> <reason>`; you re-read and retry. There is no manual locking primitive. Don't bash-batch mutations against the same page without re-reading between them.
 
 ## Idempotency

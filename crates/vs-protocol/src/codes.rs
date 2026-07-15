@@ -144,6 +144,7 @@ code_enum! {
         ViewportChanged => "viewport_changed",
         IdempotentHit => "idempotent_hit",
         ConsoleError => "console_error",
+        HiddenTarget => "hidden_target",
     }
 }
 

@@ -133,6 +133,27 @@ impl Daemon {
                 });
             }
 
+            // Acting on a ref the last snapshot marked hidden (0x0 or
+            // invisible) usually means the agent picked a dead
+            // duplicate — the click still dispatches (JS path), but
+            // warn so the agent knows to re-aim if nothing happens.
+            let mut warnings = Vec::new();
+            if let vs_engine_webkit::ActTarget::Ref(r) = &target {
+                let hidden = {
+                    let sessions = self.inner.sessions.lock().expect("poisoned");
+                    sessions
+                        .get(&session_id)
+                        .and_then(|s| s.pages.get(&page_id))
+                        .and_then(|p| p.find_node(*r))
+                        .is_some_and(|n| n.attrs.get("hid").is_some_and(|v| v == "1"))
+                };
+                if hidden {
+                    warnings.push(Warning::with_args(
+                        WarningCode::HiddenTarget,
+                        vec![format!("ref={}", r.0)],
+                    ));
+                }
+            }
             self.inner.engine.act(engine_handle, target, action)?;
             let tree = self.inner.engine.snapshot(engine_handle)?;
             let (token, _form) = {
@@ -151,10 +172,7 @@ impl Daemon {
             store.update_page_token(&page_id, &token.to_string(), "engine", None)?;
             drop(store);
 
-            Ok(ActResponse {
-                token,
-                warnings: Vec::new(),
-            })
+            Ok(ActResponse { token, warnings })
         })
     }
 

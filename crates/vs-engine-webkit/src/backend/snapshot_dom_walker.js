@@ -16,6 +16,22 @@
         'lnk', 'btn', 'hd', 'p', 'li', 'cell', 'lbl', 'tf', 'ta', 'sel',
         'chk', 'rad', 'img', 'itm',
     ]);
+    // Interactive roles get a hid=1 attr when the element cannot be
+    // seen or hit: display:none / visibility:hidden (checkVisibility)
+    // or a zero-size box. Sites keep hidden duplicates of buttons in
+    // the DOM (x.com login); without the marker an agent cannot tell
+    // the dead ref from the live one.
+    const INTERACTIVE_ROLES = new Set([
+        'btn', 'lnk', 'tf', 'ta', 'sel', 'chk', 'rad', 'itm',
+    ]);
+    function hiddenFor(el, role) {
+        if (!INTERACTIVE_ROLES.has(role)) return false;
+        try {
+            if (el.checkVisibility && !el.checkVisibility()) return true;
+            const b = el.getBoundingClientRect();
+            return b.width < 0.5 || b.height < 0.5;
+        } catch (e) { return false; }
+    }
     // ARIA role → vs short-form mapping. Modern React UIs (Radix,
     // Headless UI, Reach UI, custom) render most actionable elements
     // as `<div role="...">` rather than semantic HTML, so the HTML-tag
@@ -130,12 +146,14 @@
         }
         if (!role && children.length === 0) return null;
         if (!role && children.length === 1) return children[0];
-        return {
+        const node = {
             r: role ? refFor(el) : 0,
             role: role || 'el',
             label: labelFor(el, role || 'el'),
             children,
         };
+        if (role && hiddenFor(el, role)) node.hid = 1;
+        return node;
     }
     const docRef = refFor(document.documentElement);
     const root = {

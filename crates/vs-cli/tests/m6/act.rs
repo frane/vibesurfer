@@ -442,6 +442,17 @@ fn cell_act_click_zero_size_target() {
         let body = body_rest(&r);
         let token = token_of(&r);
         let ghost = ref_for(&body, "btn", "Continue");
+        // The walker marks the 0x0 button so agents can tell dead
+        // duplicates from live ones.
+        let ghost_line = body
+            .lines()
+            .find(|l| l.trim_start().starts_with(&format!("{ghost} ")))
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            ghost_line.contains("hid=1"),
+            "zero-size interactive ref must carry hid=1: {ghost_line:?}"
+        );
         let r = ctx.vs(&[
             "act",
             &page,
@@ -450,6 +461,11 @@ fn cell_act_click_zero_size_target() {
             &format!("--token={token}"),
         ]);
         assert_ok("click zero-size button", &r);
+        assert!(
+            r.stdout.contains("hidden_target"),
+            "act on a hidden ref must warn: {:?}",
+            r.stdout
+        );
         let status = eval_js(&ctx, &page, "document.getElementById('status').textContent");
         assert!(
             status.contains("ghost clicked"),

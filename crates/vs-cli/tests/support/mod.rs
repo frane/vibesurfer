@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use fixture_server::FixtureServer;
+pub use fixture_server::FixtureServer;
 
 const VS_BIN: &str = env!("CARGO_BIN_EXE_vs");
 

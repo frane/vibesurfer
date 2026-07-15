@@ -92,12 +92,16 @@ fn build_node(v: &serde_json::Value) -> Option<Node> {
             }
         }
     }
+    let mut attrs = BTreeMap::new();
+    if v.get("hid").and_then(serde_json::Value::as_u64) == Some(1) {
+        attrs.insert("hid".to_string(), "1".to_string());
+    }
     Some(Node {
         r: Ref(r),
         role,
         label: label.to_string(),
         ops: ops_for_role(role),
-        attrs: BTreeMap::new(),
+        attrs,
         children,
     })
 }

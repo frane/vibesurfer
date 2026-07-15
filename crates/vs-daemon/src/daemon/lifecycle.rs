@@ -140,4 +140,70 @@ impl Daemon {
             Ok(CloseResponse)
         })
     }
+
+    /// Rebuild in-memory sessions from the store after a daemon
+    /// restart. ARCHITECTURE.md's contract is that anything held in
+    /// memory is reconstructible from state.db — before this, a
+    /// restart silently dropped every open session (an agent parked
+    /// mid-flow saw WRONG_SESSION and lost its login). Session and
+    /// page ids are preserved; each page reopens at its last URL with
+    /// a fresh engine page (cookies come from the engine's persistent
+    /// data store, or `vs auth load`). Open sessions with no page
+    /// activity within `max_age` are closed in the store instead —
+    /// nothing else prunes rows for daemons that died before closing.
+    /// Returns (sessions, pages) resurrected.
+    pub fn resurrect_sessions(&self, max_age: std::time::Duration) -> (usize, usize) {
+        let now = vs_store::epoch_secs();
+        let cutoff = now.saturating_sub(i64::try_from(max_age.as_secs()).unwrap_or(i64::MAX));
+        let rows = {
+            let store = self.inner.store.lock().expect("poisoned");
+            store.list_sessions().unwrap_or_default()
+        };
+        let mut n_sessions = 0usize;
+        let mut n_pages = 0usize;
+        for s in rows {
+            if s.status != vs_store::SessionStatus::Open {
+                continue;
+            }
+            let pages = {
+                let store = self.inner.store.lock().expect("poisoned");
+                store.list_pages(&s.id).unwrap_or_default()
+            };
+            let live: Vec<_> = pages
+                .into_iter()
+                .filter(|p| p.closed_at.is_none() && p.last_seen_at >= cutoff)
+                .collect();
+            if live.is_empty() {
+                let mut store = self.inner.store.lock().expect("poisoned");
+                let _ = store.close_session(&s.id);
+                continue;
+            }
+            let mut state = SessionState::new();
+            for p in live {
+                match self.inner.engine.open(&p.url) {
+                    Ok(handle) => {
+                        state
+                            .pages
+                            .insert(p.id.clone(), PageState::new(p.id, p.url, handle));
+                        n_pages += 1;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            page = %p.id, url = %p.url, error = %e,
+                            "resurrect: reopen failed; closing page"
+                        );
+                        let mut store = self.inner.store.lock().expect("poisoned");
+                        let _ = store.close_page(&p.id);
+                    }
+                }
+            }
+            self.inner
+                .sessions
+                .lock()
+                .expect("poisoned")
+                .insert(s.id.clone(), state);
+            n_sessions += 1;
+        }
+        (n_sessions, n_pages)
+    }
 }

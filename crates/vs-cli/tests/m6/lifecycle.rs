@@ -147,3 +147,55 @@ fn cell_status() {
         );
     }
 }
+
+// Sessions survive a daemon restart. state.db is the source of truth
+// (ARCHITECTURE.md); a restart used to drop every open session and
+// strand parked agents in WRONG_SESSION — reported after an x.com
+// login was lost mid prompt_form_wait (#vibesurfer 01KXJV).
+#[test]
+fn cell_session_resurrection_across_daemon_restart() {
+    for _ in crate::support::each_available_backend() {
+        let server = crate::support::FixtureServer::start();
+        let home = tempfile::tempdir().unwrap();
+        let key = vs_store::MasterKey::generate().unwrap();
+        key.write_to_file(home.path().join("key")).unwrap();
+
+        let daemon = crate::support::spawn_daemon(home.path());
+        let open = crate::support::vs(home.path(), &["open", &server.url("/form.html")]);
+        crate::support::assert_ok("open before restart", &open);
+        let page = open
+            .stdout
+            .split_whitespace()
+            .find(|w| w.starts_with("p_"))
+            .expect("page id")
+            .to_string();
+        let session = crate::support::vs(home.path(), &["status"])
+            .stdout
+            .split_whitespace()
+            .find(|w| w.starts_with("s_"))
+            .expect("session id")
+            .to_string();
+
+        // Hard restart: kill without session-close, then respawn on
+        // the same home.
+        drop(daemon);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        // The kill leaves a stale socket file; spawn_daemon's
+        // is_listening is a bare exists() on Unix, so clear it or the
+        // helper returns before the new daemon actually binds.
+        let _ = std::fs::remove_file(home.path().join("daemon.sock"));
+        let _daemon2 = crate::support::spawn_daemon(home.path());
+
+        // Same session id, same page id, fully usable.
+        let r = crate::support::vs(
+            home.path(),
+            &["--session", &session, "view", &page, "--full"],
+        );
+        crate::support::assert_ok("view after restart", &r);
+        assert!(
+            r.stdout.contains("Sign in"),
+            "resurrected page must render its URL again:\n{}",
+            r.stdout
+        );
+    }
+}

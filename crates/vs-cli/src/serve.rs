@@ -209,6 +209,12 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     let server_thread = std::thread::Builder::new()
         .name("vs-daemon-tokio".into())
         .spawn(move || -> Result<()> {
+            // Restore open sessions from state.db before serving —
+            // a restart must not strand agents in WRONG_SESSION.
+            let (rs, rp) = daemon.resurrect_sessions(std::time::Duration::from_secs(24 * 3600));
+            if rs > 0 {
+                tracing::info!("resurrected {rs} session(s) / {rp} page(s) from state.db");
+            }
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(4)
                 .enable_all()
@@ -329,6 +335,12 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     let server_thread = std::thread::Builder::new()
         .name("vs-daemon-tokio".into())
         .spawn(move || -> Result<()> {
+            // Restore open sessions from state.db before serving —
+            // a restart must not strand agents in WRONG_SESSION.
+            let (rs, rp) = daemon.resurrect_sessions(std::time::Duration::from_secs(24 * 3600));
+            if rs > 0 {
+                tracing::info!("resurrected {rs} session(s) / {rp} page(s) from state.db");
+            }
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(4)
                 .enable_all()
@@ -450,6 +462,12 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     let server_thread = std::thread::Builder::new()
         .name("vs-daemon-tokio".into())
         .spawn(move || -> Result<()> {
+            // Restore open sessions from state.db before serving —
+            // a restart must not strand agents in WRONG_SESSION.
+            let (rs, rp) = daemon.resurrect_sessions(std::time::Duration::from_secs(24 * 3600));
+            if rs > 0 {
+                tracing::info!("resurrected {rs} session(s) / {rp} page(s) from state.db");
+            }
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(4)
                 .enable_all()

@@ -91,3 +91,4 @@ Used by `vs_viewport <preset>`. DPR defaults to 2; override per call.
 | `auth_loaded`      | `<name>`          | Auth blob applied; baseline reset. |
 | `viewport_changed` | `<W>x<H>`         | Viewport changed; baseline reset. |
 | `idempotent_hit`   | —                 | Repeat call on same `(page, token, args)` returned cached result. |
+| `hidden_target`    | `ref=<N>`         | Acted on a ref the last snapshot marked `hid=1` (invisible or zero-size); the event still dispatched, but re-aim if nothing happened. |

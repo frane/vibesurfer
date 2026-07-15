@@ -6,6 +6,10 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Sessions survive daemon restarts. On startup the daemon rebuilds open sessions and their pages from `state.db` — same session and page ids, each page reopened at its last URL (cookies from the engine's persistent store, or `vs auth load`; re-`view` for a fresh baseline). Open sessions with no page activity in 24h are closed in the store instead. Before this, a restart stranded parked agents in `WRONG_SESSION` and cost a re-login. Cell `cell_session_resurrection_across_daemon_restart`.
+- Hidden interactive refs are visible as such: the walker marks invisible or zero-size interactive elements with `hid=1` in the tree, and `vs act` on such a ref warns `? hidden_target ref=N` (the event still dispatches). Sites keep dead duplicates of buttons in the DOM; agents can now tell them from the live one before clicking into a void.
+
 ### Fixed
 - `vs wait token-change` now means what agents assume: "the state token differs from the last one this page handed out." It was a MutationObserver installed when the wait started — blind to changes landing between an action and the wait, and its state died with the document on real navigation (the biggest change of all), so post-login waits timed out while the page had long since moved on. The daemon now polls real snapshots and compares real tokens. Cell `cell_wait_token_change_pre_wait_and_navigation`; reported from an x.com login flow via `#vibesurfer`.
 - macOS: `vs act click` on a zero-size element no longer ACKs without effect. Sites keep visually-hidden 0x0 duplicates of buttons in the DOM (x.com login); the native NSEvent path aimed at the empty box and hit nothing. Zero-size targets now fall back to the JS event path, which dispatches on the element regardless of geometry. Cell `cell_act_click_zero_size_target`.
