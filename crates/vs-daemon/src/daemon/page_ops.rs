@@ -200,6 +200,44 @@ impl Daemon {
             .with_args(String::new(), tokens::args_hash("vs_wait", &[]));
         self.audit_call(ctx, |ctx| {
             let engine_handle = self.engine_handle_for(session_id, page_id)?;
+            // `token-change` is daemon-anchored: it means "the state
+            // token differs from the last one this page handed out",
+            // not "a mutation fired after this wait started". A JS
+            // MutationObserver cannot express that — it misses changes
+            // that land between the action and the wait, and its state
+            // dies with the document on navigation (the biggest change
+            // of all). So poll real snapshots and compare real tokens.
+            if matches!(cond, EngineWait::TokenChange) {
+                let (baseline, url) = {
+                    let sessions = self.inner.sessions.lock().expect("poisoned");
+                    let page = sessions
+                        .get(session_id)
+                        .ok_or_else(|| DaemonError::UnknownSession(session_id.to_string()))?
+                        .pages
+                        .get(page_id)
+                        .ok_or_else(|| DaemonError::UnknownPage(page_id.to_string()))?;
+                    (page.last_token, page.url.clone())
+                };
+                let deadline = std::time::Instant::now() + budget;
+                let poll = Duration::from_millis(250);
+                loop {
+                    let tree = self.inner.engine.snapshot(engine_handle)?;
+                    let token = tokens::compute(&tree, &url, page_id);
+                    if baseline != Some(token) {
+                        ctx.after_token = Some(token);
+                        return Ok(WaitResponse { token });
+                    }
+                    if std::time::Instant::now() + poll > deadline {
+                        return Err(DaemonError::Engine(
+                            vs_engine_webkit::EngineError::Timeout {
+                                budget,
+                                primitive: "wait",
+                            },
+                        ));
+                    }
+                    std::thread::sleep(poll);
+                }
+            }
             self.inner.engine.wait(engine_handle, cond, budget)?;
             let token = self
                 .current_token(session_id, page_id)

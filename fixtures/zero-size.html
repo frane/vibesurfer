@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Zero-size fixture</title></head>
+<body>
+  <main>
+    <h1>Zero-size targets</h1>
+    <!-- X-style: the interactive element is in the DOM but has a 0x0
+         box (visually-hidden pattern). Native coordinate clicks land
+         nowhere; the JS event path must still reach it. -->
+    <button id="ghost" style="position:absolute;width:0;height:0;padding:0;border:0;overflow:hidden">Continue</button>
+    <p id="status">waiting</p>
+  </main>
+  <script>
+    document.getElementById('ghost').addEventListener('click', () => {
+      document.getElementById('status').textContent = 'ghost clicked';
+    });
+  </script>
+</body>
+</html>

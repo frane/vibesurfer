@@ -427,3 +427,33 @@ fn cell_act_fill_react_controlled_input() {
         );
     }
 }
+
+// vs_act click on a zero-size element still reaches its handler. A
+// visually-hidden 0x0 button (x.com keeps such duplicates in the DOM)
+// can't be hit by native coordinate clicks — the macOS path used to
+// ACK without effect; it now falls back to the JS event path.
+// Reported via #vibesurfer (01KXJV).
+#[test]
+fn cell_act_click_zero_size_target() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/zero-size.html");
+        let r = ctx.vs(&["view", &page, "--full"]);
+        let body = body_rest(&r);
+        let token = token_of(&r);
+        let ghost = ref_for(&body, "btn", "Continue");
+        let r = ctx.vs(&[
+            "act",
+            &page,
+            &ghost.to_string(),
+            "click",
+            &format!("--token={token}"),
+        ]);
+        assert_ok("click zero-size button", &r);
+        let status = eval_js(&ctx, &page, "document.getElementById('status').textContent");
+        assert!(
+            status.contains("ghost clicked"),
+            "zero-size click must reach the handler, got {status:?}"
+        );
+    }
+}

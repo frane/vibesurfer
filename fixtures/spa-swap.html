@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Login — spa-swap fixture</title></head>
+<body>
+  <main>
+    <h1>Sign in</h1>
+    <!-- Case A: same-document SPA swap (X-style): replace the whole
+         body and push a new history entry. -->
+    <button id="spa-login">Continue</button>
+    <!-- Case B: real navigation to another fixture document, delayed
+         past the acting call's settle window like a real login
+         round-trip, so the after-act token predates the swap. -->
+    <button id="nav-login">Continue via navigation</button>
+  </main>
+  <script>
+    document.getElementById('spa-login').addEventListener('click', () => {
+      // Simulate the post-auth swap a SPA does after login.
+      setTimeout(() => {
+        document.body.innerHTML =
+          '<main><h1>Home timeline</h1><p id="feed">Welcome back, you are logged in.</p></main>';
+        history.pushState({}, '', '/home');
+      }, 50);
+    });
+    document.getElementById('nav-login').addEventListener('click', () => {
+      setTimeout(() => { location.href = '/static.html'; }, 600);
+    });
+  </script>
+</body>
+</html>

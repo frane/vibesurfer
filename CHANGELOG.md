@@ -6,6 +6,10 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- `vs wait token-change` now means what agents assume: "the state token differs from the last one this page handed out." It was a MutationObserver installed when the wait started — blind to changes landing between an action and the wait, and its state died with the document on real navigation (the biggest change of all), so post-login waits timed out while the page had long since moved on. The daemon now polls real snapshots and compares real tokens. Cell `cell_wait_token_change_pre_wait_and_navigation`; reported from an x.com login flow via `#vibesurfer`.
+- macOS: `vs act click` on a zero-size element no longer ACKs without effect. Sites keep visually-hidden 0x0 duplicates of buttons in the DOM (x.com login); the native NSEvent path aimed at the empty box and hit nothing. Zero-size targets now fall back to the JS event path, which dispatches on the element regardless of geometry. Cell `cell_act_click_zero_size_target`.
+
 ### Changed
 - One-line description unified across GitHub, crates.io, and the brew formula/cask: "A browser for LLMs, not humans. Headless WebKit with a line protocol built for agents in loops — no Chrome, no CDP." (Was three different phrasings, one of them marketing filler.) Cask copy lands with the next cask bump.
 

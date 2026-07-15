@@ -386,24 +386,33 @@ impl Engine for WkBackend {
                 kind: "ref",
                 id: r.0.to_string(),
             })?;
-            let frame = web_view.frame();
-            let start = p.last_mouse.get();
-            // Default to Human mode for now; v0.1.8 follow-up surfaces a
-            // `--mode={human,careful,robotic}` flag on the wire.
-            let mode = vs_humanize::InputMode::Human;
-            let seed = vs_humanize_seed_for_ref(r);
-            let landed = input::click_at_rect(
-                &web_view,
-                &window,
-                rect,
-                frame.size.height,
-                start,
-                mode,
-                seed,
-            )?;
-            p.last_mouse.set(landed);
-            flush(&web_view_flush);
-            return Ok(());
+            // Zero-size targets (hidden inputs, off-screen duplicates a
+            // site keeps in the DOM — x.com login does this) cannot be
+            // hit natively: the synthesized coordinates land at the
+            // box origin and hit-test something else, so the click
+            // ACKs and does nothing. The JS event path dispatches on
+            // the element regardless of geometry, so fall through to
+            // it instead of no-opping.
+            if rect.width > 0.5 && rect.height > 0.5 {
+                let frame = web_view.frame();
+                let start = p.last_mouse.get();
+                // Default to Human mode for now; v0.1.8 follow-up surfaces a
+                // `--mode={human,careful,robotic}` flag on the wire.
+                let mode = vs_humanize::InputMode::Human;
+                let seed = vs_humanize_seed_for_ref(r);
+                let landed = input::click_at_rect(
+                    &web_view,
+                    &window,
+                    rect,
+                    frame.size.height,
+                    start,
+                    mode,
+                    seed,
+                )?;
+                p.last_mouse.set(landed);
+                flush(&web_view_flush);
+                return Ok(());
+            }
         }
 
         let result = super::common::run_act(
