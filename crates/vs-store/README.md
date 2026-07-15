@@ -179,7 +179,9 @@ Every primitive call writes one row to a SQLite audit log before it returns. `vs
 
 The daemon auto-spawns on first call. State, captures, and downloads live under `~/.vibesurfer/`. The transport is an AF_UNIX socket on Unix (`~/.vibesurfer/daemon.sock`) and a Windows named pipe on Windows; either way, the CLI handles the difference.
 
-29 wire primitives total — the 19 core primitives are specified in [docs/PRIMITIVES.md](docs/PRIMITIVES.md); the later additions (`vs_inspect`, the four cursor primitives, prompt-input, and the pending queue) are documented in the bundled [SKILL.md](crates/vs-cli/SKILL.md) and the CHANGELOG. The full wire format with every sigil and edge case is in [docs/PROTOCOL.md](docs/PROTOCOL.md). The per-platform per-primitive verification matrix is in [docs/REALITY_CHECK.md](docs/REALITY_CHECK.md).
+33 wire primitives total — the 19 core primitives are specified in [docs/PRIMITIVES.md](docs/PRIMITIVES.md); the later additions (`vs_inspect`, the four cursor primitives, prompt-input and the pending queue, prompt-form, and watch) are documented in the bundled [SKILL.md](crates/vs-cli/SKILL.md) and the CHANGELOG.
+
+Two of those exist for the humans next to the agents. `vs prompt-form` asks for credentials through a browser form on a single-use `127.0.0.1` link — the human's password manager fills it, the daemon writes the values into the page, and the agent never sees them. `vs watch` prints the same kind of link for a read-only live view of a page (~1 fps) so you can watch what the agent's browser is doing; in MCP Apps hosts (Claude Desktop, ChatGPT) the view also renders as a panel inside the conversation. The full wire format with every sigil and edge case is in [docs/PROTOCOL.md](docs/PROTOCOL.md). The per-platform per-primitive verification matrix is in [docs/REALITY_CHECK.md](docs/REALITY_CHECK.md).
 
 ## Configuration
 
@@ -190,6 +192,8 @@ The daemon auto-spawns on first call. State, captures, and downloads live under 
 | Windows named pipe | Same role on Windows; resolved automatically |
 | `~/.vibesurfer/captures/` | Screenshots from `vs capture` |
 | `VS_CAPTURES_DIR` | Override the capture directory |
+| `VS_SESSION` | Pin the session id (recommended in scripts; see `docs/known-issues.md`) |
+| `VS_THUMBS=1` | On `vs mcp`: attach a screenshot thumbnail to every act/open result |
 | `VS_HOME` | Override the vibesurfer home directory |
 | `VS_DISABLE_INSPECTOR=1` | Skip inspector hooks (testing only) |
 | `VS_DAEMON_BIN` | Override the binary used for daemon auto-spawn (tests) |
