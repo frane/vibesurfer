@@ -136,7 +136,16 @@ async fn handle_request(req: &Value) -> Option<Value> {
                 .pointer("/capabilities/extensions/io.modelcontextprotocol~1ui")
                 .is_some();
             UI_CLIENT.store(ui, Ordering::Relaxed);
-            Ok(initialize_result())
+            // Echo the client's protocol version: hosts gate newer
+            // features (MCP Apps among them) on the negotiated
+            // session version, and the shapes we emit are stable
+            // across the revisions in the wild.
+            let version = params
+                .get("protocolVersion")
+                .and_then(Value::as_str)
+                .unwrap_or(MCP_VERSION)
+                .to_string();
+            Ok(initialize_result(&version, ui))
         }
         "initialized" | "notifications/initialized" => return None,
         "ping" => Ok(json!({})),
@@ -172,13 +181,23 @@ async fn handle_request(req: &Value) -> Option<Value> {
     })
 }
 
-fn initialize_result() -> Value {
+fn initialize_result(protocol_version: &str, ui: bool) -> Value {
+    let mut capabilities = json!({
+        "tools": { "listChanged": false },
+        "resources": { "listChanged": false },
+    });
+    if ui {
+        // Symmetric declaration of the MCP Apps extension
+        // (SEP-1865); some hosts require the server side too.
+        capabilities["extensions"] = json!({
+            "io.modelcontextprotocol/ui": {
+                "mimeTypes": ["text/html;profile=mcp-app"],
+            }
+        });
+    }
     json!({
-        "protocolVersion": MCP_VERSION,
-        "capabilities": {
-            "tools": { "listChanged": false },
-            "resources": { "listChanged": false },
-        },
+        "protocolVersion": protocol_version,
+        "capabilities": capabilities,
         "serverInfo": {
             "name": SERVER_NAME,
             "version": SERVER_VERSION,
@@ -190,7 +209,12 @@ fn initialize_result() -> Value {
 /// Self-contained HTML: no CSP domains, no permissions — frames come
 /// through the bridge as tool results, never from the network.
 fn panel_meta() -> Value {
-    json!({ "ui": { "prefersBorder": true } })
+    json!({
+        "ui": {
+            "prefersBorder": true,
+            "csp": { "connectDomains": [], "resourceDomains": [] },
+        }
+    })
 }
 
 fn resources_list() -> Value {
