@@ -6,6 +6,10 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
+
+
+## [v0.1.26] - 2026-07-16
+
 ### Added
 - `VS_CALLER=<name>`: a durable caller identity. Session affinity was keyed to the caller's process id, so a restarted agent or host app silently got a fresh session while its old one — fully alive in the daemon — was never looked at again. Same name, same session, across restarts. Pid behavior unchanged for unnamed callers.
 
