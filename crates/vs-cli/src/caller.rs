@@ -105,16 +105,51 @@ fn parent_start_time(ppid: u32) -> Option<u64> {
     }
 }
 
-/// Return the stable caller key, or `None` if either the parent PID
-/// could not be read (extremely rare; would mean the kernel refused
-/// to answer). The key is filename-safe: only digits and a single
-/// hyphen.
+/// Return the stable caller key. `VS_CALLER=<name>` takes priority:
+/// a durable identity that survives process restarts, so a relaunched
+/// agent or host app rebinds to the session it had before instead of
+/// silently getting a fresh one (pid-based keys die with the process
+/// — the daemon kept the session, but nothing ever reconnected to
+/// it). Set it once in an MCP server config or an agent's env. The
+/// name is sanitized to filename-safe chars and prefixed so it can
+/// never collide with a pid key.
+///
+/// Fallback is `<parent_pid>-<parent_start_time>`; `None` only if the
+/// kernel refused to answer (extremely rare).
 #[must_use]
 pub fn caller_key() -> Option<String> {
+    if let Ok(name) = std::env::var("VS_CALLER") {
+        let clean: String = name
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .take(64)
+            .collect();
+        if !clean.is_empty() {
+            return Some(format!("named-{clean}"));
+        }
+    }
     let ppid = parent_pid();
     if ppid == 0 {
         return None;
     }
     let start = parent_start_time(ppid).unwrap_or(0);
     Some(format!("{ppid}-{start}"))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn vs_caller_env_overrides_pid_key() {
+        // Serial-safe: no other test reads VS_CALLER.
+        std::env::set_var("VS_CALLER", "claude-desktop!!");
+        let k = super::caller_key().expect("key");
+        assert_eq!(k, "named-claude-desktop", "sanitized, prefixed: {k}");
+        std::env::set_var("VS_CALLER", "///");
+        let k = super::caller_key().expect("key");
+        assert!(
+            k.chars().next().is_some_and(char::is_numeric),
+            "empty after sanitize falls back to pid key: {k}"
+        );
+        std::env::remove_var("VS_CALLER");
+    }
 }

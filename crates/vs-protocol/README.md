@@ -193,6 +193,7 @@ Two of those exist for the humans next to the agents. `vs prompt-form` asks for 
 | `~/.vibesurfer/captures/` | Screenshots from `vs capture` |
 | `VS_CAPTURES_DIR` | Override the capture directory |
 | `VS_SESSION` | Pin the session id (recommended in scripts; see `docs/known-issues.md`) |
+| `VS_CALLER` | Durable caller name; same name rebinds to the same session across restarts |
 | `VS_THUMBS=1` | On `vs mcp`: attach a screenshot thumbnail to every act/open result |
 | `VS_HOME` | Override the vibesurfer home directory |
 | `VS_DISABLE_INSPECTOR=1` | Skip inspector hooks (testing only) |

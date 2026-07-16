@@ -224,15 +224,39 @@ impl Daemon {
         session_id: &str,
         page_id: &str,
     ) -> Result<vs_engine_webkit::PageHandle> {
-        let sessions = self.inner.sessions.lock().expect("poisoned");
-        let session = sessions
-            .get(session_id)
-            .ok_or_else(|| DaemonError::UnknownSession(session_id.to_string()))?;
-        let page = session
+        let url = {
+            let sessions = self.inner.sessions.lock().expect("poisoned");
+            let session = sessions
+                .get(session_id)
+                .ok_or_else(|| DaemonError::UnknownSession(session_id.to_string()))?;
+            let page = session
+                .pages
+                .get(page_id)
+                .ok_or_else(|| Self::missing_page(&sessions, session_id, page_id))?;
+            if let Some(h) = page.engine_handle {
+                return Ok(h);
+            }
+            page.url.clone()
+        };
+        // Dormant page (resurrected from the store): create the engine
+        // page now, outside the map lock — engine calls dispatch to
+        // the platform main thread and must not deadlock against it.
+        let handle = self.inner.engine.open(&url)?;
+        let mut sessions = self.inner.sessions.lock().expect("poisoned");
+        let page = sessions
+            .get_mut(session_id)
+            .ok_or_else(|| DaemonError::UnknownSession(session_id.to_string()))?
             .pages
-            .get(page_id)
-            .ok_or_else(|| Self::missing_page(&sessions, session_id, page_id))?;
-        Ok(page.engine_handle)
+            .get_mut(page_id)
+            .ok_or_else(|| DaemonError::UnknownPage(page_id.to_string()))?;
+        // Raced with another caller: keep theirs, close ours.
+        if let Some(existing) = page.engine_handle {
+            drop(sessions);
+            let _ = self.inner.engine.close(handle);
+            return Ok(existing);
+        }
+        page.engine_handle = Some(handle);
+        Ok(handle)
     }
 
     /// Clone the per-page mutation lock so callers can hold it across

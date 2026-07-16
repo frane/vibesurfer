@@ -34,14 +34,16 @@ fn path_to_pipe_key(path: &Path) -> String {
     format!("vibesurfer-{}", &h.to_hex().as_str()[..16])
 }
 
-/// True if a listener could plausibly be reached at `path` —
-/// existence check on Unix (the socket file is on disk),
-/// connect-probe on Windows (named pipes don't appear on the FS).
+/// True if a listener is actually reachable at `path` — a connect
+/// probe on both platforms. A bare existence check on Unix lies
+/// whenever a killed daemon leaves its socket file behind: clients
+/// then skip auto-spawn and every call fails with "connection
+/// refused", which reads like lost sessions.
 #[must_use]
 pub fn is_listening(path: &Path) -> bool {
     #[cfg(unix)]
     {
-        path.exists()
+        std::os::unix::net::UnixStream::connect(path).is_ok()
     }
     #[cfg(windows)]
     {
@@ -73,11 +75,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("not-a-socket");
         std::fs::write(&path, b"hello").unwrap();
-        // is_listening on Unix is currently a presence check; this
-        // pins the contract — if we ever tighten it, the test will
-        // remind us. For now, document the existing behavior:
-        // presence-only check on Unix.
-        assert!(is_listening(&path));
+        // Tightened in v0.1.26 to a real connect probe: a regular
+        // file (or a dead daemon's leftover socket file) must read
+        // as NOT listening.
+        assert!(!is_listening(&path));
     }
 
     #[test]

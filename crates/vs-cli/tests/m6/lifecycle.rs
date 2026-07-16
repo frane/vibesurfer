@@ -180,10 +180,8 @@ fn cell_session_resurrection_across_daemon_restart() {
         // the same home.
         drop(daemon);
         std::thread::sleep(std::time::Duration::from_millis(300));
-        // The kill leaves a stale socket file; spawn_daemon's
-        // is_listening is a bare exists() on Unix, so clear it or the
-        // helper returns before the new daemon actually binds.
-        let _ = std::fs::remove_file(home.path().join("daemon.sock"));
+        // No stale-socket cleanup: is_listening is a real connect
+        // probe now, so the helper must wait out the leftover file.
         let _daemon2 = crate::support::spawn_daemon(home.path());
 
         // Same session id, same page id, fully usable.

@@ -56,8 +56,8 @@ impl Daemon {
                     // the engine — so the engine's main-thread
                     // dispatcher is free to take whatever locks it
                     // needs without deadlocking.
-                    let engine_handle = page.engine_handle;
                     drop(sessions);
+                    let engine_handle = self.engine_handle_for(session_id, page_id)?;
                     extract_via_engine(&self.inner.engine, engine_handle, schema)?
                 }
                 other => {

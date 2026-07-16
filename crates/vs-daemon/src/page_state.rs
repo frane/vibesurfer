@@ -17,7 +17,10 @@ use crate::tokens;
 pub struct PageState {
     pub id: String,
     pub url: String,
-    pub engine_handle: PageHandle,
+    /// `None` for a dormant page resurrected from the store: the
+    /// engine page is created lazily on first use (fast daemon
+    /// startup; zombie sessions never cost a webview).
+    pub engine_handle: Option<PageHandle>,
     /// The last tree we emitted to the agent. `None` until the first
     /// `vs_view`.
     pub last_tree: Option<Tree>,
@@ -43,7 +46,23 @@ impl PageState {
         Self {
             id,
             url,
-            engine_handle,
+            engine_handle: Some(engine_handle),
+            last_tree: None,
+            last_token: None,
+            force_full: true,
+            seen_refs: HashSet::new(),
+            mutate_lock: Arc::new(Mutex::new(())),
+        }
+    }
+
+    /// A resurrected page: engine page not yet created (see
+    /// [`Self::engine_handle`]).
+    #[must_use]
+    pub fn dormant(id: String, url: String) -> Self {
+        Self {
+            id,
+            url,
+            engine_handle: None,
             last_tree: None,
             last_token: None,
             force_full: true,

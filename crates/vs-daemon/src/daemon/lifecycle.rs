@@ -52,7 +52,10 @@ impl Daemon {
                 let s = sessions
                     .remove(session_id)
                     .ok_or_else(|| DaemonError::UnknownSession(session_id.to_string()))?;
-                s.pages.into_values().map(|p| p.engine_handle).collect()
+                s.pages
+                    .into_values()
+                    .filter_map(|p| p.engine_handle)
+                    .collect()
             };
             for h in page_handles {
                 let _ = self.inner.engine.close(h);
@@ -134,7 +137,9 @@ impl Daemon {
                     .ok_or_else(|| DaemonError::UnknownPage(page_id.to_string()))?;
                 page.engine_handle
             };
-            let _ = self.inner.engine.close(engine_handle);
+            if let Some(h) = engine_handle {
+                let _ = self.inner.engine.close(h);
+            }
             let mut store = self.inner.store.lock().expect("poisoned");
             let _ = store.close_page(page_id);
             Ok(CloseResponse)
@@ -152,6 +157,7 @@ impl Daemon {
     /// activity within `max_age` are closed in the store instead —
     /// nothing else prunes rows for daemons that died before closing.
     /// Returns (sessions, pages) resurrected.
+    #[must_use]
     pub fn resurrect_sessions(&self, max_age: std::time::Duration) -> (usize, usize) {
         let now = vs_store::epoch_secs();
         let cutoff = now.saturating_sub(i64::try_from(max_age.as_secs()).unwrap_or(i64::MAX));
@@ -180,22 +186,13 @@ impl Daemon {
             }
             let mut state = SessionState::new();
             for p in live {
-                match self.inner.engine.open(&p.url) {
-                    Ok(handle) => {
-                        state
-                            .pages
-                            .insert(p.id.clone(), PageState::new(p.id, p.url, handle));
-                        n_pages += 1;
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            page = %p.id, url = %p.url, error = %e,
-                            "resurrect: reopen failed; closing page"
-                        );
-                        let mut store = self.inner.store.lock().expect("poisoned");
-                        let _ = store.close_page(&p.id);
-                    }
-                }
+                // Dormant: the engine page is created lazily on
+                // first use, so startup stays instant and zombie
+                // sessions never cost a webview.
+                state
+                    .pages
+                    .insert(p.id.clone(), PageState::dormant(p.id, p.url));
+                n_pages += 1;
             }
             self.inner
                 .sessions

@@ -74,7 +74,7 @@ pub fn connect(cli: &Cli, paths: &Paths) -> Result<Client> {
         }
         let extra_refs: Vec<&str> = extra.iter().map(String::as_str).collect();
         spawn::spawn_daemon(&extra_refs)?;
-        spawn::wait_for_socket(&socket, std::time::Duration::from_secs(2))?;
+        spawn::wait_for_socket(&socket, std::time::Duration::from_secs(10))?;
     }
     Client::connect(&socket)
 }
