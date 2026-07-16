@@ -258,6 +258,16 @@ impl EngineRuntime {
         self.dispatch(move |e| e.cookie_events(page))
     }
 
+    pub fn type_text(
+        &self,
+        page: PageHandle,
+        text: &str,
+        mode: crate::engine::InputMode,
+    ) -> EngineResult<()> {
+        let text = text.to_string();
+        self.dispatch(move |e| e.type_text(page, &text, mode))
+    }
+
     pub fn cursor_op(
         &self,
         page: PageHandle,

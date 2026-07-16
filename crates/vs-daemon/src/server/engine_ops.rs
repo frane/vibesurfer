@@ -140,6 +140,38 @@ pub(super) fn handle_viewport(daemon: &Daemon, req: &Request) -> String {
     }
 }
 
+/// `vs_type` — trusted keyboard typing into the focused element.
+/// Args: `<page> <text>`. Flags: `--secret` (redact in audit),
+/// `--mode`. The caller places the caret first (e.g. vs_click_at).
+pub(super) fn handle_type(daemon: &Daemon, req: &Request) -> String {
+    let session_id = match require_session(req) {
+        Ok(s) => s,
+        Err(msg) => return format_error(ErrorCode::BadRequest, vec![msg]),
+    };
+    let Some(page_id) = req.args.first().cloned() else {
+        return format_error(
+            ErrorCode::BadRequest,
+            vec!["vs_type: missing page id".into()],
+        );
+    };
+    let Some(text) = req.args.get(1).cloned() else {
+        return format_error(ErrorCode::BadRequest, vec!["vs_type: missing text".into()]);
+    };
+    let secret = req.flags.contains_key("secret");
+    let mode_str = flag_value(req, "mode").unwrap_or_else(|| "human".into());
+    let Some(mode) = vs_engine_webkit::engine::InputMode::parse(&mode_str) else {
+        return format_error(
+            ErrorCode::BadRequest,
+            vec![format!(
+                "vs_type: bad --mode={mode_str:?} (human|careful|robotic)"
+            )],
+        );
+    };
+    match daemon.type_text(&session_id, &page_id, &text, secret, mode) {
+        Ok(token) => ResponseHead::ok(token).encode(),
+        Err(e) => format_daemon_error(&e),
+    }
+}
 pub(super) fn handle_cursor(daemon: &Daemon, req: &Request, kind: &str) -> String {
     let session_id = match require_session(req) {
         Ok(s) => s,

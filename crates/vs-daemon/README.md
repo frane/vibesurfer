@@ -31,10 +31,16 @@ Homebrew (macOS, Linux):
 brew tap frane/tap && brew install vibesurfer
 ```
 
-curl:
+curl (macOS, Linux):
 
 ```
 curl -sSL https://raw.githubusercontent.com/frane/vibesurfer/main/install.sh | sh
+```
+
+PowerShell (Windows):
+
+```
+irm https://raw.githubusercontent.com/frane/vibesurfer/main/install.ps1 | iex
 ```
 
 Cargo:
@@ -113,6 +119,8 @@ On macOS, `vs act click` and the coordinate primitives (`vs click-at`, `vs hover
 
 Since v0.1.11 the coordinate primitives are native on Linux and Windows too: XTest over `x11rb` on WebKitGTK (X11 / Xwayland; pure Wayland falls back to `ENGINE_UNSUPPORTED`), `SendMouseInput` on a WebView2 composition controller on Windows. All three engines emit `isTrusted = true` for cursor-primitive clicks. Ref-based `vs act click` is trusted on macOS only — on Linux and Windows it still dispatches through injected JS (`isTrusted = false`); use the coordinate primitives there for fingerprint-sensitive sites.
 
+Keyboard input has the same trust story: `vs type <TEXT>` sends native `NSEvent` KeyDown/KeyUp into the focused element (`isTrusted = true`, full keydown → beforeinput → input pipeline), so rich-text editors like DraftJS and ProseMirror — which ignore the programmatic `act fill` path — accept it. macOS only for now; Linux and Windows keyboard dispatch is the next step (they return `ENGINE_UNSUPPORTED`, and `act fill` covers plain inputs there).
+
 The walker also honors ARIA `role="..."` (Radix UI, Headless UI, Reach UI, every custom-div-as-button pattern), plus a tabindex heuristic for focusable divs/spans without a role. Modern React UIs surface as actionable refs without coordinate workarounds.
 
 ## Short forms
@@ -179,7 +187,7 @@ Every primitive call writes one row to a SQLite audit log before it returns. `vs
 
 The daemon auto-spawns on first call. State, captures, and downloads live under `~/.vibesurfer/`. The transport is an AF_UNIX socket on Unix (`~/.vibesurfer/daemon.sock`) and a Windows named pipe on Windows; either way, the CLI handles the difference.
 
-33 wire primitives total — the 19 core primitives are specified in [docs/PRIMITIVES.md](docs/PRIMITIVES.md); the later additions (`vs_inspect`, the four cursor primitives, prompt-input and the pending queue, prompt-form, and watch) are documented in the bundled [SKILL.md](crates/vs-cli/SKILL.md) and the CHANGELOG.
+34 wire primitives total — the 19 core primitives are specified in [docs/PRIMITIVES.md](docs/PRIMITIVES.md); the later additions (`vs_inspect`, the four cursor primitives, trusted `vs_type`, prompt-input and the pending queue, prompt-form, and watch) are documented in the bundled [SKILL.md](crates/vs-cli/SKILL.md) and the CHANGELOG.
 
 Two of those exist for the humans next to the agents. `vs prompt-form` asks for credentials through a browser form on a single-use `127.0.0.1` link — the human's password manager fills it, the daemon writes the values into the page, and the agent never sees them. `vs watch` prints the same kind of link for a read-only live view of a page (~1 fps) so you can watch what the agent's browser is doing; in MCP Apps hosts (Claude Desktop, ChatGPT) the view also renders as a panel inside the conversation. The full wire format with every sigil and edge case is in [docs/PROTOCOL.md](docs/PROTOCOL.md). The per-platform per-primitive verification matrix is in [docs/REALITY_CHECK.md](docs/REALITY_CHECK.md).
 

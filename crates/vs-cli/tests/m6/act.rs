@@ -473,3 +473,32 @@ fn cell_act_click_zero_size_target() {
         );
     }
 }
+
+// vs_type sends trusted keystrokes into the focused element. The
+// fixture's mirror records ONLY isTrusted beforeinput data — the
+// same gate DraftJS/contenteditable editors use — so a pass proves
+// real key events, not a programmatic value write. Requested from an
+// x.com composer flow via #vibesurfer (01KXN5). macOS-only for now.
+#[cfg(target_os = "macos")]
+#[test]
+fn cell_type_trusted_into_contenteditable() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/contenteditable.html");
+        // Place the caret by focusing the editor (a real flow uses
+        // vs_click_at; focus() is enough to route keystrokes here).
+        let _ = eval_js(&ctx, &page, "document.getElementById('editor').focus(); 0");
+        let r = ctx.vs(&["type", &page, "hi there", "--mode=robotic"]);
+        assert_ok("vs type", &r);
+        let mirror = eval_js(&ctx, &page, "document.getElementById('mirror').textContent");
+        assert!(
+            mirror.contains("hi there"),
+            "trusted-only mirror must capture typed text, got {mirror:?}"
+        );
+        let kd = eval_js(&ctx, &page, "document.getElementById('kd').textContent");
+        assert!(
+            kd.trim().parse::<u32>().unwrap_or(0) >= 8,
+            "each char must fire a trusted keydown, got {kd:?}"
+        );
+    }
+}

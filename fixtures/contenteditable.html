@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>contenteditable fixture</title></head>
+<body>
+  <main>
+    <h1>Rich text</h1>
+    <!-- A contenteditable that only reflects TRUSTED keystrokes:
+         it appends the beforeinput data to #mirror, ignoring
+         programmatic value/textContent writes. Mimics DraftJS'
+         "we only trust the input pipeline" behavior. -->
+    <div id="editor" contenteditable="true" style="border:1px solid #888;min-height:2em;padding:4px">type here</div>
+    <p>captured: <span id="mirror"></span></p>
+    <p>keydowns: <span id="kd">0</span></p>
+  </main>
+  <script>
+    const ed = document.getElementById('editor');
+    const mirror = document.getElementById('mirror');
+    let kd = 0;
+    ed.addEventListener('keydown', (e) => {
+      if (!e.isTrusted) return;      // synthetic el.dispatchEvent is ignored
+      kd += 1;
+      document.getElementById('kd').textContent = String(kd);
+    });
+    ed.addEventListener('beforeinput', (e) => {
+      if (!e.isTrusted) return;
+      if (e.data) mirror.textContent += e.data;
+    });
+  </script>
+</body>
+</html>

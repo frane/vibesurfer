@@ -66,6 +66,11 @@ Coordinate-addressed input with native trusted dispatch on every backend. macOS 
 
 `human` synthesizes a Bezier path from the last known cursor position with Fitts-law arrival timing; the visible motion is indistinguishable from a real cursor reaching the target before the click. `careful` is a single-shot move. `robotic` is a teleport (no path).
 
+### Trusted typing (`vs type`, v0.1.27+; macOS)
+
+`vs type <PAGE> <TEXT> [--secret] [-M mode]` (MCP `vs_type`) sends real per-character key events (KeyDown/KeyUp NSEvent) into the FOCUSED element, so the page sees `isTrusted=true` keydown -> beforeinput -> input. Rich-text editors (DraftJS/ProseMirror/contenteditable) and framework-controlled inputs need this — `act fill` uses the prototype-setter path, which those editors ignore. Place the caret first (`vs click-at` on the field). `--secret` redacts the text in the audit log (length only). Same `-M {human,careful,robotic}` cadence as the cursor primitives. macOS only for now (the keyboard path is not yet wired on the Linux XTest/libei and Windows SendKeyboard dispatchers — they return `! ENGINE_UNSUPPORTED`; use `act fill` there for plain inputs).
+
+
 | # | CLI | Short | What |
 |---|-----|-------|------|
 | 20 | `vs move-to <PAGE> <X> <Y> [-M=human]` | `mt` | Move the cursor to (x, y). No click. |

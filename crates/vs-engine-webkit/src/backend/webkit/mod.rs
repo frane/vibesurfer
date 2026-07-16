@@ -623,6 +623,31 @@ impl Engine for WkBackend {
         Ok(events)
     }
 
+    fn type_text(&mut self, page: PageHandle, text: &str, mode: InputMode) -> EngineResult<()> {
+        let p = self.page_mut(page)?;
+        let web_view = p.web_view.clone();
+        let web_view_flush = p.web_view.clone();
+        // Vary cadence per call so repeated typing is not identical.
+        let seed = text
+            .chars()
+            .map(|c| c as u64)
+            .fold(0x9e37_79b9_u64, |a, c| a.wrapping_mul(31).wrapping_add(c));
+        let humanize_mode = match mode {
+            InputMode::Human => vs_humanize::InputMode::Human,
+            InputMode::Careful => vs_humanize::InputMode::Careful,
+            InputMode::Robotic => vs_humanize::InputMode::Robotic,
+        };
+        input::type_text(&web_view, text, humanize_mode, seed)?;
+        // Drain rAF-deferred work (headless macOS pauses the frame
+        // clock) so React state settles before the next primitive.
+        let _ = eval_js_string(
+            &web_view_flush,
+            "String(window.__vsFlushRAF ? window.__vsFlushRAF() : 0)",
+            Duration::from_secs(2),
+        );
+        Ok(())
+    }
+
     fn cursor_op(&mut self, page: PageHandle, op: CursorOp, mode: InputMode) -> EngineResult<()> {
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();

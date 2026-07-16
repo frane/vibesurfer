@@ -260,6 +260,22 @@ pub enum Command {
         #[arg(long, short = 'M', default_value = "human")]
         mode: String,
     },
+    /// Type text into the FOCUSED element with trusted per-key
+    /// events (real keydown/beforeinput/input, isTrusted=true).
+    /// Rich-text editors (DraftJS/ProseMirror/contenteditable) and
+    /// framework-controlled inputs need this — `act fill` bypasses
+    /// their change pipeline. Place the caret first (e.g. `vs
+    /// click-at`). macOS only for now; ENGINE_UNSUPPORTED elsewhere.
+    #[command(visible_alias = "ty")]
+    Type {
+        page: String,
+        text: String,
+        /// Redact the text in the audit log (length only).
+        #[arg(long)]
+        secret: bool,
+        #[arg(long, short = 'M', default_value = "human")]
+        mode: String,
+    },
     /// Drag from `(x1, y1)` to `(x2, y2)`.
     #[command(visible_alias = "dr")]
     Drag {
@@ -742,6 +758,23 @@ impl Command {
                     .arg(y.to_string())
                     .flag_value("session", s)
                     .flag_value("mode", mode.clone())
+            }
+            Self::Type {
+                page,
+                text,
+                secret,
+                mode,
+            } => {
+                let s = require_session(session_id)?;
+                let mut req = Request::new("vs_type")
+                    .arg(page.clone())
+                    .arg(text.clone())
+                    .flag_value("session", s)
+                    .flag_value("mode", mode.clone());
+                if *secret {
+                    req = req.flag("secret");
+                }
+                req
             }
             Self::Drag {
                 page,

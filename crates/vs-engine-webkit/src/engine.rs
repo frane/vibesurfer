@@ -402,6 +402,21 @@ pub trait Engine {
         Ok(Vec::new())
     }
 
+    /// Trusted keyboard typing into the focused element. Sends real
+    /// per-character key events (KeyDown/KeyUp) so the page sees
+    /// isTrusted=true keydown → beforeinput → input, which
+    /// rich-text editors (DraftJS/ProseMirror/contenteditable) and
+    /// framework-controlled inputs require — the prototype-setter
+    /// `fill` path bypasses their change pipeline. The caller places
+    /// the caret first (e.g. `vs_click_at`). Backends without native
+    /// keyboard dispatch fall through to `ENGINE_UNSUPPORTED`.
+    fn type_text(&mut self, _page: PageHandle, _text: &str, _mode: InputMode) -> EngineResult<()> {
+        Err(EngineError::Unsupported {
+            engine: self.capabilities().name,
+            primitive: "type_text",
+        })
+    }
+
     /// Coordinate-addressed cursor operation. Backends that don't
     /// implement native input dispatch fall through to the default
     /// `ENGINE_UNSUPPORTED` here; agents see `! ENGINE_UNSUPPORTED`

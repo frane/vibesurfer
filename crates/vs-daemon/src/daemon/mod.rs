@@ -454,6 +454,42 @@ impl Daemon {
         })
     }
 
+    /// Trusted keyboard typing into the focused element (see
+    /// [`vs_engine_webkit::Engine::type_text`]). Secret is redacted in
+    /// the audit log — the length only.
+    pub fn type_text(
+        &self,
+        session_id: &str,
+        page_id: &str,
+        text: &str,
+        secret: bool,
+        mode: vs_engine_webkit::engine::InputMode,
+    ) -> Result<vs_protocol::StateToken> {
+        let redacted = if secret {
+            format!(
+                "*** ({} chars) mode={}",
+                text.chars().count(),
+                mode.as_str()
+            )
+        } else {
+            format!("{} chars mode={}", text.chars().count(), mode.as_str())
+        };
+        let ctx = AuditCtx::new("vs_type", session_id)
+            .with_page(page_id)
+            .with_args(
+                redacted.clone(),
+                crate::tokens::args_hash("vs_type", &[redacted]),
+            );
+        self.audit_call(ctx, |ctx| {
+            self.require_session(session_id)?;
+            let handle = self.engine_handle_for(session_id, page_id)?;
+            self.inner.engine.type_text(handle, text, mode)?;
+            let token = self.current_token(session_id, page_id)?;
+            ctx.after_token = Some(token);
+            Ok(token)
+        })
+    }
+
     pub fn inspect_scripts(
         &self,
         session_id: &str,

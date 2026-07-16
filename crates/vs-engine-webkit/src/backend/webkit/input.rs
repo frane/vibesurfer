@@ -300,3 +300,83 @@ pub(super) fn drag_xy(
     let _ = run_loop_until(|| false, Duration::from_millis(30));
     Ok(landed)
 }
+
+/// Type `text` into the focused element with trusted per-character
+/// key events. Each char becomes a KeyDown+KeyUp NSEvent whose
+/// `characters` field carries the glyph; WebKit runs its full text
+/// insertion pipeline (keydown → beforeinput → input) with
+/// isTrusted=true, so DraftJS/ProseMirror/contenteditable and
+/// framework-controlled inputs accept it where the prototype-setter
+/// `fill` path is ignored. The caller places the caret first.
+///
+/// `mode` controls inter-keystroke delay so the cadence isn't
+/// robotically uniform: Human jitters ~30-90ms, Careful ~120ms,
+/// Robotic fires as fast as the run loop drains.
+pub(super) fn type_text(
+    web_view: &Retained<WKWebView>,
+    text: &str,
+    mode: vs_humanize::InputMode,
+    seed: u64,
+) -> EngineResult<()> {
+    let make_key = |ty: NSEventType, ch: &str| -> EngineResult<Retained<NSEvent>> {
+        let chars = objc2_foundation::NSString::from_str(ch);
+        // keyCode 0 is fine for text insertion: WebKit inserts from
+        // the `characters` string, not the virtual keycode, for the
+        // printable path. Modifier flags empty — we type literal
+        // glyphs, not chords (chords stay on `vs_act key`).
+        NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
+            ty,
+            NSPoint::new(0.0, 0.0),
+            NSEventModifierFlags::empty(),
+            0.0,
+            0,
+            None,
+            &chars,
+            &chars,
+            false,
+            0,
+        )
+        .ok_or_else(|| EngineError::Other(format!("keyEventWithType returned nil for {ch:?}")))
+    };
+
+    let base_delay = match mode {
+        vs_humanize::InputMode::Robotic => 0u64,
+        vs_humanize::InputMode::Careful => 120,
+        vs_humanize::InputMode::Human => 45,
+    };
+    let mut jitter = seed | 1;
+    for (i, ch) in text.chars().enumerate() {
+        let s = ch.to_string();
+        let down = make_key(NSEventType::KeyDown, &s)?;
+        let up = make_key(NSEventType::KeyUp, &s)?;
+        web_view.keyDown(&down);
+        // Between down and up, and between chars, drain the run loop
+        // so WebKit processes the insertion before the next event.
+        let hold = if base_delay == 0 { 1 } else { base_delay / 3 };
+        let _ = run_loop_until(|| false, Duration::from_millis(hold.max(1)));
+        web_view.keyUp(&up);
+        if base_delay > 0 {
+            // xorshift jitter in ±40% of base, Human only.
+            jitter ^= jitter << 13;
+            jitter ^= jitter >> 7;
+            jitter ^= jitter << 17;
+            let span = if matches!(mode, vs_humanize::InputMode::Human) {
+                base_delay * 4 / 10
+            } else {
+                0
+            };
+            let extra = if span == 0 {
+                0
+            } else {
+                jitter % (span * 2 + 1)
+            };
+            let wait = base_delay.saturating_sub(span).saturating_add(extra);
+            let _ = run_loop_until(|| false, Duration::from_millis(wait.max(1)));
+        } else if i % 8 == 0 {
+            // Robotic: still yield occasionally so a long string
+            // doesn't starve the main thread.
+            let _ = run_loop_until(|| false, Duration::from_millis(1));
+        }
+    }
+    Ok(())
+}

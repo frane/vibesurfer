@@ -121,6 +121,12 @@ fn base_tools() -> Vec<Value> {
             ("token", str_prop("State token from the most recent read.", true)),
             ("mode", str_prop("Input mode: human | careful | robotic. Default: human.", false)),
         ])),
+tool("vs_type", "Type text into the FOCUSED element with trusted keystrokes (real keydown/beforeinput/input, isTrusted=true). Use for rich-text editors (DraftJS/ProseMirror/contenteditable) and framework inputs where vs_act fill is ignored. Place the caret first with vs_click_at. Use --secret for credentials. macOS only for now.", obj(&[
+            ("page", str_prop("Page id.", true)),
+            ("text", str_prop("Text to type into the focused element.", true)),
+            ("secret", bool_prop("Redact the text in the audit log (length only). Default false.", false)),
+            ("mode", str_prop("Cadence: human | careful | robotic. Default human.", false)),
+        ])),
         tool("vs_hover_at", "Hover at coordinates without clicking.", obj(&[
             ("page", str_prop("Page id.", true)),
             ("x", num_prop("Hover X in CSS pixels.", true)),
@@ -343,6 +349,12 @@ pub fn build_cli(name: &str, args: &Value) -> Result<(Cli, CallOpts)> {
             x: req_f64(args, "x")?,
             y: req_f64(args, "y")?,
             token: req_str(args, "token")?,
+            mode: opt_str(args, "mode").unwrap_or_else(|| "human".into()),
+        },
+        "vs_type" => Command::Type {
+            page: req_str(args, "page")?,
+            text: req_str(args, "text")?,
+            secret: opt_bool(args, "secret").unwrap_or(false),
             mode: opt_str(args, "mode").unwrap_or_else(|| "human".into()),
         },
         "vs_hover_at" => Command::HoverAt {
