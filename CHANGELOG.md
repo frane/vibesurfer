@@ -6,6 +6,10 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
+
+
+## [v0.1.25] - 2026-07-16
+
 ### Added
 - Sessions survive daemon restarts. On startup the daemon rebuilds open sessions and their pages from `state.db` — same session and page ids, each page reopened at its last URL (cookies from the engine's persistent store, or `vs auth load`; re-`view` for a fresh baseline). Open sessions with no page activity in 24h are closed in the store instead. Before this, a restart stranded parked agents in `WRONG_SESSION` and cost a re-login. Cell `cell_session_resurrection_across_daemon_restart`.
 - Hidden interactive refs are visible as such: the walker marks invisible or zero-size interactive elements with `hid=1` in the tree, and `vs act` on such a ref warns `? hidden_target ref=N` (the event still dispatches). Sites keep dead duplicates of buttons in the DOM; agents can now tell them from the live one before clicking into a void.
@@ -15,7 +19,7 @@ All notable changes to vibesurfer are recorded here. The format follows
 - macOS: `vs act click` on a zero-size element no longer ACKs without effect. Sites keep visually-hidden 0x0 duplicates of buttons in the DOM (x.com login); the native NSEvent path aimed at the empty box and hit nothing. Zero-size targets now fall back to the JS event path, which dispatches on the element regardless of geometry. Cell `cell_act_click_zero_size_target`.
 
 ### Changed
-- One-line description unified across GitHub, crates.io, and the brew formula/cask: "A browser for LLMs, not humans. Headless WebKit with a line protocol built for agents in loops — no Chrome, no CDP." (Was three different phrasings, one of them marketing filler.) Cask copy lands with the next cask bump.
+- One-line description unified across GitHub, crates.io, and the brew formula/cask: "A browser for LLMs, not humans." (Was three different phrasings of marketing filler.) Cask copy lands with the next cask bump.
 
 ## [v0.1.24] - 2026-07-15
 

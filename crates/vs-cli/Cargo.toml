@@ -1,6 +1,6 @@
 [package]
 name = "vibesurfer"
-description = "A browser for LLMs, not humans. Headless WebKit with a line protocol built for agents in loops — no Chrome, no CDP."
+description = "A browser for LLMs, not humans."
 readme = "README.md"
 version.workspace = true
 edition.workspace = true
@@ -21,10 +21,10 @@ name = "vs_cli"
 path = "src/lib.rs"
 
 [dependencies]
-vs-protocol = { path = "../vs-protocol", version = "0.1.24" }
-vs-daemon = { path = "../vs-daemon", version = "0.1.24" }
-vs-engine-webkit = { path = "../vs-engine-webkit", version = "0.1.24" }
-vs-store = { path = "../vs-store", version = "0.1.24" }
+vs-protocol = { path = "../vs-protocol", version = "0.1.25" }
+vs-daemon = { path = "../vs-daemon", version = "0.1.25" }
+vs-engine-webkit = { path = "../vs-engine-webkit", version = "0.1.25" }
+vs-store = { path = "../vs-store", version = "0.1.25" }
 clap = { version = "4", features = ["derive", "wrap_help"] }
 anyhow = "1"
 serde_json = "1"

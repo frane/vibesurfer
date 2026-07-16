@@ -12,7 +12,7 @@
 # published, switch to the prebuilt-bottle pattern.
 
 class Vibesurfer < Formula
-  desc "A browser for LLMs, not humans. Headless WebKit with a line protocol built for agents in loops — no Chrome, no CDP."
+  desc "A browser for LLMs, not humans."
   homepage "https://github.com/frane/vibesurfer"
   url "https://github.com/frane/vibesurfer/archive/refs/tags/v0.1.24.tar.gz"
   # Update on each release: `shasum -a 256 <tarball>`.
