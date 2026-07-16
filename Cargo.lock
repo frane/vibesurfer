@@ -2448,7 +2448,7 @@ checksum = "03c2856837ef78f57382f06b2b8563a2f512f7185d732608fd9176cb3b8edf0e"
 
 [[package]]
 name = "vibesurfer"
-version = "0.1.26"
+version = "0.1.27"
 dependencies = [
  "anyhow",
  "base64",
@@ -2477,7 +2477,7 @@ dependencies = [
 
 [[package]]
 name = "vs-daemon"
-version = "0.1.26"
+version = "0.1.27"
 dependencies = [
  "anyhow",
  "blake3",
@@ -2497,7 +2497,7 @@ dependencies = [
 
 [[package]]
 name = "vs-engine-webkit"
-version = "0.1.26"
+version = "0.1.27"
 dependencies = [
  "ashpd",
  "block2",
@@ -2523,11 +2523,11 @@ dependencies = [
 
 [[package]]
 name = "vs-humanize"
-version = "0.1.26"
+version = "0.1.27"
 
 [[package]]
 name = "vs-protocol"
-version = "0.1.26"
+version = "0.1.27"
 dependencies = [
  "proptest",
  "thiserror",
@@ -2535,7 +2535,7 @@ dependencies = [
 
 [[package]]
 name = "vs-store"
-version = "0.1.26"
+version = "0.1.27"
 dependencies = [
  "apple-native-keyring-store",
  "keyring-core",
