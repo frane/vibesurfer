@@ -378,5 +378,10 @@ pub(super) fn type_text(
             let _ = run_loop_until(|| false, Duration::from_millis(1));
         }
     }
+    // Always drain after the final keystroke so its keyUp ->
+    // beforeinput -> input is delivered before the caller reads the
+    // page. Robotic mode fires fast enough that the last char's input
+    // event otherwise races the next primitive (flaked on CI).
+    let _ = run_loop_until(|| false, Duration::from_millis(40));
     Ok(())
 }
