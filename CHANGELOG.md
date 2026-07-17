@@ -14,6 +14,9 @@ All notable changes to vibesurfer are recorded here. The format follows
 - Trusted keyboard typing: `vs type <PAGE> <TEXT>` (MCP `vs_type`) sends real per-character key events into the focused element (`isTrusted=true` keydown → beforeinput → input). Rich-text editors — DraftJS, ProseMirror, contenteditable — and framework-controlled inputs ignore the prototype-setter `fill` path but accept this; `act fill` and synthetic `act key` were no-ops in X's composer, which is what prompted it. Place the caret first (`vs click-at`), then type. `--secret` redacts the text in the audit log (length only); `-M {human,careful,robotic}` sets cadence. macOS only for now (native `NSEvent` KeyDown/KeyUp); Linux/Windows keyboard dispatch returns `ENGINE_UNSUPPORTED` until the XTest/libei and WebView2 paths are wired — `act fill` still covers plain inputs there. Reported via `#vibesurfer`; cell `cell_type_trusted_into_contenteditable`.
 - Windows install: `irm https://raw.githubusercontent.com/frane/vibesurfer/main/install.ps1 | iex`. The repo shipped only `install.sh` (curl → sh), and its Windows branch pointed at the wrong triple/extension (`pc-windows-gnu` `.tar.gz` vs the published `pc-windows-msvc` `.zip`); the PowerShell installer downloads the correct asset, falls back to `cargo install`, and nudges about PATH.
 
+### Changed
+- SKILL.md scopes the credential guidance. It said "never `act fill` a credential — always `prompt-input --secret`", which drove agents to bounce even a test password THEY invented back through the human (pure friction, no security). Now: secrets the human holds go through `prompt-input`/`prompt-form`; credentials the agent owns (test users it created, seeded fixtures, its own env/config) get filled directly with `act fill` or `vs type`.
+
 
 
 ## [v0.1.26] - 2026-07-16
