@@ -7,6 +7,8 @@ All notable changes to vibesurfer are recorded here. The format follows
 ## [Unreleased]
 
 ### Added (0.2)
+- `vs flow run <FILE>`: run a declarative flow. The file is a JSON array of steps; each step is an array of `vs` arguments. Steps run in order in one session, reusing the normal command dispatch. `` expands to the last page an `open`/`goto` step produced, and `` to that page's current state token (fetched with a `vs_view` right before the step), so scripted login-and-drive flows need no manual id/token threading. Stops at the first step that returns an error.
+
 - `vs goto <PAGE> <URL>` (alias `g`, MCP `vs_goto`): navigate an existing page in place. It reuses the page's web view (and web-content process) instead of opening a new page, so it skips the ~90ms browser spin-up; a goto costs ~15ms vs ~90ms for open on the same content. The page id is unchanged and refs are re-baselined (the next view is a full tree). `--view` appends a fresh view, like `vs open --view`.
 
 - `vs record start <PAGE> [--fps N]` and `vs record stop <PAGE>` (alias `rec`) capture a page to an AV1 video while the agent works. `start` spawns a background thread that grabs live frames at `--fps` (1..=30, default 4) through the same capture path as `vs frame`; `stop` flushes the encoder and prints the file path (`~/.vibesurfer/captures/rec-<page>.ivf`). Encoding is pure-Rust rav1e (new `vs-record` crate, no ffmpeg or nasm), wrapped in an IVF container playable by ffmpeg, VLC, and any dav1d player. One recording per page. MCP: `vs_record_start` / `vs_record_stop`.

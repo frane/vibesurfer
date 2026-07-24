@@ -40,6 +40,7 @@ Wire form is `vs_<name>` (over the socket); CLI subcommand is `<name>` with hyph
 | 2 | `vs session-close` | Close the active session. |
 | 3 | `vs open <URL>` | Open a page in the session. |
 | - | `vs goto <PAGE> <URL>` (`g`) | Navigate an existing page in place. Reuses the web view, so it skips browser spin-up and is much faster than open for successive navigations. Refs are fresh afterward. |
+| - | `vs flow run <FILE>` | Run a declarative flow: a JSON array of steps, each an array of `vs` args. Runs in one session; `$page` expands to the last opened/navigated page, `$token` to its current token (fetched as needed). Stops at the first failing step. |
 | 4 | `vs close <PAGE>` | Close a page. |
 
 ### Read (5–6, 13–14)

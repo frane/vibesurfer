@@ -211,6 +211,39 @@ fn cell_goto_navigates_in_place() {
     }
 }
 
+// vs flow run executes a JSON step list in one session, threading
+//  and  so scripted flows need no manual id/token plumbing.
+#[test]
+fn cell_flow_run_executes_steps() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let form = ctx.url("/form.html");
+        let dash = ctx.url("/dashboard.html");
+        let flow = serde_json::json!([
+            ["open", form],
+            ["view", "$page", "--full"],
+            ["goto", "$page", dash],
+            ["view", "$page"],
+            ["status"],
+        ])
+        .to_string();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("flow.json");
+        std::fs::write(&path, flow).unwrap();
+        let r = ctx.vs(&["flow", "run", path.to_str().unwrap()]);
+        assert_eq!(
+            r.code, 0,
+            "flow run should succeed:\nstdout={}\nstderr={}",
+            r.stdout, r.stderr
+        );
+        assert!(
+            r.stderr.contains("5 step(s) ok"),
+            "flow should report all steps ok:\n{}",
+            r.stderr
+        );
+    }
+}
+
 // Sessions survive a daemon restart. state.db is the source of truth
 
 // (ARCHITECTURE.md); a restart used to drop every open session and

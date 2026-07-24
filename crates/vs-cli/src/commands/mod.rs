@@ -451,7 +451,19 @@ pub enum Command {
         #[arg(long)]
         stop: bool,
     },
+    /// Run a declarative flow: a JSON file that is an array of steps,
+    /// each step an array of `vs` arguments. Steps run in order in one
+    /// session; `$page` expands to the last opened/navigated page and
+    /// `$token` to that page's current state token (fetched as needed),
+    /// so login-and-drive scripts need no manual id/token threading.
+    /// Stops at the first failing step. Example file contents:
+    /// `[["open","https://x"],["act","$page","5","fill","hi","--token","$token"]]`
+    Flow {
+        #[command(subcommand)]
+        sub: FlowSub,
+    },
     /// Run the MCP (Model Context Protocol) server over stdio.
+
     /// Speaks JSON-RPC 2.0; each of the 19 vibesurfer primitives is
     /// exposed as one MCP tool. Wire to Claude Desktop / Claude Code
     /// by configuring `vs mcp` as the server command.
@@ -477,6 +489,12 @@ pub enum CaptureSub {
         #[arg(long, value_name = "N")]
         keep: Option<usize>,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum FlowSub {
+    /// Execute the flow file at PATH.
+    Run { file: PathBuf },
 }
 
 #[derive(Debug, Subcommand)]
@@ -936,6 +954,9 @@ impl Command {
             Self::Serve { .. } => {
                 anyhow::bail!("vs_serve is local; route via main, not the wire dispatcher");
             }
+            Self::Flow { .. } => {
+                anyhow::bail!("vs_flow is local; route via main, not the wire dispatcher");
+            }
             Self::Mcp => {
                 anyhow::bail!("vs_mcp is local; route via main, not the wire dispatcher");
             }
@@ -951,6 +972,7 @@ impl Command {
                 | Self::Status
                 | Self::Serve { .. }
                 | Self::Mcp
+                | Self::Flow { .. }
                 | Self::Pending { .. }
                 | Self::Frame { .. }
         )
