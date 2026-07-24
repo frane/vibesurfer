@@ -268,7 +268,10 @@ impl Engine for WkBackend {
             ucc.addUserScript(&shim);
         }
         let inspector_installed = inspector_handler::install(mtm, &ucc, &inspector);
-        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1280.0, 800.0));
+        // Default browser window: a natural 1440x900 (MacBook-class),
+        // the logical size pages render at. Retina still doubles the
+        // pixel density for screenshots; recordings capture at this size.
+        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1440.0, 900.0));
         let web_view: Retained<WKWebView> = unsafe {
             WKWebView::initWithFrame_configuration(WKWebView::alloc(mtm), frame, &config)
         };

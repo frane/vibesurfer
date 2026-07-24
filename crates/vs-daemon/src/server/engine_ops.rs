@@ -1121,12 +1121,12 @@ pub(super) fn handle_record(daemon: &Daemon, req: &Request) -> String {
             let fps = flag_value(req, "fps")
                 .and_then(|s| s.parse::<u32>().ok())
                 .unwrap_or(4);
-            // Downscale to 1280px wide by default; `--retina` keeps the
-            // full device resolution (bigger + heavier).
+            // Downscale to the logical window width by default (1440px);
+            // `--retina` keeps the full device resolution (bigger + heavier).
             let max_width = if req.flags.contains_key("retina") {
                 0
             } else {
-                1280
+                1440
             };
             daemon.record_start(&session_id, &page_id, fps, max_width)
         }
@@ -1178,7 +1178,7 @@ pub(super) fn handle_frame(daemon: &Daemon, req: &Request) -> String {
             vec!["vs_frame: missing page id".into()],
         );
     };
-    match daemon.live_frame_path(&page_id, 1280) {
+    match daemon.live_frame_path(&page_id, 1440) {
         Ok(path) => format!(
             "{}{}\n",
             ResponseHead::ok(StateToken([0u8; 8])).encode(),

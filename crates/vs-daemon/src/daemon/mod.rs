@@ -688,7 +688,7 @@ impl Daemon {
         let frame: webentry::FrameFn = Arc::new(move |page: &str| {
             let inner = weak.upgrade().ok_or_else(|| "daemon gone".to_string())?;
             Daemon { inner }
-                .live_frame(page, 1280)
+                .live_frame(page, 1440)
                 .map_err(|e| e.to_string())
         });
         let s = webentry::WebEntry::start(self.inner.pending.clone(), frame)?;

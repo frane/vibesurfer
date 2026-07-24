@@ -514,7 +514,7 @@ pub enum RecordSub {
         #[arg(long, default_value_t = 4)]
         fps: u32,
         /// Record at full device (retina) resolution instead of the
-        /// default 1280px-wide downscale. Much larger and heavier.
+        /// default 1440px-wide downscale. Much larger and heavier.
         #[arg(long)]
         retina: bool,
     },
