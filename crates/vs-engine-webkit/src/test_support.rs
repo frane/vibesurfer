@@ -139,6 +139,11 @@ impl Engine for TestEngine {
         Ok(())
     }
 
+    fn enable_webauthn(&mut self, page: PageHandle) -> EngineResult<()> {
+        let _ = self.page(page)?;
+        Ok(())
+    }
+
     fn close(&mut self, page: PageHandle) -> EngineResult<()> {
         self.pages.remove(&page);
         Ok(())

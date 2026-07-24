@@ -245,6 +245,13 @@ impl Engine for WpeBackend {
         })
     }
 
+    fn enable_webauthn(&mut self, _page: PageHandle) -> EngineResult<()> {
+        Err(EngineError::NotImplemented {
+            engine: "wpe",
+            primitive: "enable_webauthn",
+        })
+    }
+
     fn close(&mut self, page: PageHandle) -> EngineResult<()> {
         if let Some(p) = self.pages.remove(&page) {
             // Dismiss the hidden host window so its `GdkSurface` is

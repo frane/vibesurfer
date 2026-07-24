@@ -216,6 +216,28 @@ impl Daemon {
         })
     }
 
+    /// Install a virtual WebAuthn authenticator on a page
+    /// (`vs auth webauthn`): a JS software authenticator that overrides
+    /// `navigator.credentials` so passkey registration and login work
+    /// headlessly. This is the primary passkey path — no platform
+    /// authenticator, no CDP; `vs auth import` remains the fallback for
+    /// sessions captured out of band.
+    pub fn enable_webauthn(&self, session_id: &str, page_id: &str) -> Result<AuthSaveResponse> {
+        let ctx = AuditCtx::new("vs_auth", session_id)
+            .with_page(page_id)
+            .with_args(
+                "webauthn".into(),
+                tokens::args_hash("vs_auth", &["webauthn".into()]),
+            );
+        self.audit_call(ctx, |_ctx| {
+            let engine_handle = self.engine_handle_for(session_id, page_id)?;
+            self.inner.engine.enable_webauthn(engine_handle)?;
+            Ok(AuthSaveResponse {
+                name: "webauthn".to_string(),
+            })
+        })
+    }
+
     /// Import an externally-captured session (`vs auth import`): store a
     /// human-supplied cookies+storage blob under `name` so a later
     /// `vs auth load` injects it. This is the passkey fallback — when an

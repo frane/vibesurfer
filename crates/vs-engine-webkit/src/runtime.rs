@@ -180,6 +180,10 @@ impl EngineRuntime {
         self.dispatch(move |e| e.close(page))
     }
 
+    pub fn enable_webauthn(&self, page: PageHandle) -> EngineResult<()> {
+        self.dispatch(move |e| e.enable_webauthn(page))
+    }
+
     pub fn snapshot(&self, page: PageHandle) -> EngineResult<Tree> {
         self.dispatch(move |e| e.snapshot(page))
     }
@@ -432,6 +436,9 @@ mod tests {
         }
         fn navigate(&mut self, _page: PageHandle, url: &str) -> EngineResult<()> {
             self.last_url = url.to_string();
+            Ok(())
+        }
+        fn enable_webauthn(&mut self, _page: PageHandle) -> EngineResult<()> {
             Ok(())
         }
         fn close(&mut self, _page: PageHandle) -> EngineResult<()> {

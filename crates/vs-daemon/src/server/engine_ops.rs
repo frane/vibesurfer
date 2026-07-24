@@ -324,6 +324,20 @@ pub(super) fn handle_auth(daemon: &Daemon, req: &Request) -> String {
             }
             Err(e) => format_daemon_error(&e),
         },
+        "webauthn" => {
+            let Some(page_id) = req.args.get(1).cloned() else {
+                return format_error(
+                    ErrorCode::BadRequest,
+                    vec!["vs_auth webauthn: missing page id".into()],
+                );
+            };
+            match daemon.enable_webauthn(&session_id, &page_id) {
+                Ok(AuthSaveResponse { name }) => {
+                    format!("{}{name}\n", ResponseHead::ok(StateToken::ZERO).encode())
+                }
+                Err(e) => format_daemon_error(&e),
+            }
+        }
         "import" => {
             let Some(name) = req.args.get(1).cloned() else {
                 return format_error(

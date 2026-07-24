@@ -192,3 +192,31 @@ fn cell_auth_import_and_load() {
         );
     }
 }
+
+// vs_auth webauthn — the virtual authenticator. A pure-JS software
+// authenticator overrides navigator.credentials so a real passkey
+// registration + login round-trips headlessly. The fixture registers a
+// credential, authenticates, and verifies the assertion signature
+// against the registered public key with WebCrypto; VERIFIED proves the
+// authenticator is cryptographically correct.
+#[test]
+fn cell_auth_webauthn_virtual_authenticator() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        // Load any page, enable the authenticator (installs a
+        // document-start shim), then navigate to the WebAuthn fixture so
+        // the shim is in place before its create()/get() run.
+        let (_s, page, _t) = open_fixture(&ctx, "/static.html");
+        let r = ctx.vs(&["auth", "webauthn", &page]);
+        assert_ok("auth webauthn", &r);
+        let r = ctx.vs(&["goto", &page, &ctx.url("/webauthn.html")]);
+        assert_ok("goto webauthn fixture", &r);
+        let r = ctx.vs(&["wait", &page, "text", "VERIFIED", "--timeout=8000"]);
+        assert_ok("wait for VERIFIED", &r);
+        let status = eval_js(&ctx, &page, "document.getElementById('status').textContent");
+        assert!(
+            status.contains("VERIFIED"),
+            "virtual authenticator: create->get->verify must round-trip, got {status:?}"
+        );
+    }
+}

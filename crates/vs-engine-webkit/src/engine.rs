@@ -317,6 +317,14 @@ pub trait Engine {
     /// `open` for successive navigations.
     fn navigate(&mut self, page: PageHandle, url: &str) -> EngineResult<()>;
 
+    /// Install a virtual WebAuthn authenticator on `page`: a pure-JS
+    /// software authenticator that overrides `navigator.credentials`
+    /// so passkey registration and login work headlessly, with no
+    /// platform authenticator and no automation protocol. Applies to
+    /// the current document and (where the backend supports it) to
+    /// subsequent navigations in the same page.
+    fn enable_webauthn(&mut self, page: PageHandle) -> EngineResult<()>;
+
     /// Close a page. Idempotent — closing a closed page is a no-op.
     fn close(&mut self, page: PageHandle) -> EngineResult<()>;
 

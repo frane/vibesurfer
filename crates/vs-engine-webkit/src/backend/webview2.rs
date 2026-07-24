@@ -576,6 +576,13 @@ impl Engine for Webview2Backend {
         })
     }
 
+    fn enable_webauthn(&mut self, _page: PageHandle) -> EngineResult<()> {
+        Err(EngineError::NotImplemented {
+            engine: "webview2",
+            primitive: "enable_webauthn",
+        })
+    }
+
     fn close(&mut self, page: PageHandle) -> EngineResult<()> {
         if let Some(p) = self.pages.remove(&page) {
             // Closing the controller releases the WebView2 process

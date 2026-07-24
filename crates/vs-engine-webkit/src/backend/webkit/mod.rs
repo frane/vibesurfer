@@ -33,8 +33,8 @@ use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{NSBackingStoreType, NSWindow, NSWindowStyleMask};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSURLRequest, NSURL};
 use objc2_web_kit::{
-    WKNavigationDelegate, WKUserScript, WKUserScriptInjectionTime, WKWebView,
-    WKWebViewConfiguration,
+    WKNavigationDelegate, WKUserContentController, WKUserScript, WKUserScriptInjectionTime,
+    WKWebView, WKWebViewConfiguration,
 };
 use vs_protocol::{Ref, Tree};
 
@@ -63,6 +63,10 @@ struct WkPage {
     /// property on `WKWebView` is `weak`). Its nav slot is reused by
     /// `navigate` to wait for in-place navigations.
     nav_delegate: Retained<NavDelegate>,
+    /// The page's user-content controller, kept so `enable_webauthn`
+    /// can install a document-start user script that survives
+    /// navigation (adding to a live UCC applies to subsequent loads).
+    ucc: Retained<WKUserContentController>,
     /// Console / network ring buffers + request-detail map. Populated
     /// by the JS bridge installed at construction time.
     inspector: super::inspector_bridge::InspectorSlots,
@@ -138,6 +142,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::common::{parse_snapshot, SNAPSHOT_DOM_WALKER_JS as SNAPSHOT_JS};
+
+/// Virtual WebAuthn authenticator shim (see `webauthn_virtual.js`).
+const WEBAUTHN_JS: &str = include_str!("../webauthn_virtual.js");
 
 // =============================================================================
 // Engine impl
@@ -316,6 +323,7 @@ impl Engine for WkBackend {
                 web_view,
                 window,
                 nav_delegate: delegate,
+                ucc,
                 inspector,
                 inspector_installed,
                 cookie_baseline: std::cell::RefCell::new(None),
@@ -362,6 +370,27 @@ impl Engine for WkBackend {
         }
     }
 
+    fn enable_webauthn(&mut self, page: PageHandle) -> EngineResult<()> {
+        let mtm = self.mtm;
+        let p = self.page_mut(page)?;
+        let web_view = p.web_view.clone();
+        // Persist across navigations: add the shim as a document-start
+        // user script on the live UCC (applies to subsequent loads).
+        unsafe {
+            let src = NSString::from_str(WEBAUTHN_JS);
+            let shim = WKUserScript::initWithSource_injectionTime_forMainFrameOnly(
+                WKUserScript::alloc(mtm),
+                &src,
+                WKUserScriptInjectionTime::AtDocumentStart,
+                false,
+            );
+            p.ucc.addUserScript(&shim);
+        }
+        // Apply to the document already loaded, too.
+        eval_js_string(&web_view, WEBAUTHN_JS, Duration::from_secs(5))?;
+        Ok(())
+    }
+
     fn close(&mut self, page: PageHandle) -> EngineResult<()> {
         if let Some(p) = self.pages.remove(&page) {
             // Tear the page down explicitly instead of relying solely on
@@ -374,6 +403,16 @@ impl Engine for WkBackend {
             // (`could not connect to the server`); prompt teardown keeps
             // the process-pool footprint flat.
             unsafe {
+                // Break the WKWebView retain cycle. A
+                // WKUserContentController strongly retains its script
+                // message handlers and user scripts, and the web view
+                // retains the controller through its configuration — so
+                // leaving them attached keeps the whole web view (and its
+                // web-content process, ~90 MB) alive forever after close.
+                // Apple documents removing them explicitly; without this,
+                // every open/close leaked a render process.
+                p.ucc.removeAllScriptMessageHandlers();
+                p.ucc.removeAllUserScripts();
                 p.web_view.stopLoading();
                 p.web_view.setNavigationDelegate(None);
                 p.window.setContentView(None);
