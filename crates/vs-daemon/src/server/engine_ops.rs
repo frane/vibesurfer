@@ -1,6 +1,8 @@
 //! Wire handlers for engine-backed primitives: skill, capture,
 //! viewport, layout, auth.
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 use vs_engine_webkit::{CaptureScope, Viewport};
 use vs_protocol::{ErrorCode, Ref, Request, ResponseHead, StateToken};
 
@@ -298,6 +300,7 @@ pub(super) fn handle_layout(daemon: &Daemon, req: &Request) -> String {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub(super) fn handle_auth(daemon: &Daemon, req: &Request) -> String {
     let session_id = match require_session(req) {
         Ok(s) => s,
@@ -321,6 +324,35 @@ pub(super) fn handle_auth(daemon: &Daemon, req: &Request) -> String {
             }
             Err(e) => format_daemon_error(&e),
         },
+        "import" => {
+            let Some(name) = req.args.get(1).cloned() else {
+                return format_error(
+                    ErrorCode::BadRequest,
+                    vec!["vs_auth import: missing name".into()],
+                );
+            };
+            let Some(b64) = req.args.get(2).cloned() else {
+                return format_error(
+                    ErrorCode::BadRequest,
+                    vec!["vs_auth import: missing base64 blob".into()],
+                );
+            };
+            let blob = match STANDARD.decode(b64.as_bytes()) {
+                Ok(b) => b,
+                Err(e) => {
+                    return format_error(
+                        ErrorCode::BadRequest,
+                        vec![format!("vs_auth import: bad base64: {e}")],
+                    )
+                }
+            };
+            match daemon.auth_import(&session_id, &name, &blob) {
+                Ok(AuthSaveResponse { name }) => {
+                    format!("{}{name}\n", ResponseHead::ok(StateToken::ZERO).encode())
+                }
+                Err(e) => format_daemon_error(&e),
+            }
+        }
         "save" => {
             let Some(page_id) = req.args.get(1).cloned() else {
                 return format_error(

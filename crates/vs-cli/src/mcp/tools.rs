@@ -210,7 +210,7 @@ tool("vs_type", "Type text into the FOCUSED element with trusted keystrokes (rea
                 "description": "Ref numbers."
             })),
         ])),
-        tool("vs_auth", "Persist or restore per-origin auth (cookies + storage). Sub: save | load | list | clear.", obj(&[
+        tool("vs_auth", "Persist or restore per-origin auth (cookies + storage). Sub: save | load | list | clear | import. `import` (rest: name, path-to-json) brings a session captured elsewhere — the passkey fallback: a human logs in with a passkey in a real browser, exports cookies + storage as a v2 auth-blob JSON, and imports it so `load` injects it into a headless page.", obj(&[
             ("sub", str_prop("save | load | list | clear.", true)),
             ("rest", json!({
                 "type": "array",

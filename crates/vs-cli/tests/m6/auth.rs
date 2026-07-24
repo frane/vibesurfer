@@ -153,3 +153,42 @@ fn cell_auth_http_only_save_and_load() {
         );
     }
 }
+
+// vs_auth import — the passkey fallback. A human logs in with a passkey
+// in their own browser, exports cookies + storage as a v2 auth-blob
+// JSON, imports it here, and loads it onto a headless page.
+#[test]
+fn cell_auth_import_and_load() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let blob = serde_json::json!({
+            "version": 2,
+            "url": "http://127.0.0.1/",
+            "origin": "http://127.0.0.1",
+            "cookies": [{"name": "sid", "value": "abc", "domain": "127.0.0.1", "path": "/"}],
+            "localStorage": {"k": "v"},
+            "sessionStorage": {}
+        })
+        .to_string();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.json");
+        std::fs::write(&path, blob).unwrap();
+
+        let r = ctx.vs(&["auth", "import", "imported", path.to_str().unwrap()]);
+        assert_ok("auth import", &r);
+        let r = ctx.vs(&["auth", "list"]);
+        assert!(
+            r.stdout.contains("imported"),
+            "auth list should include the imported blob:\n{}",
+            r.stdout
+        );
+        // Loading it onto a page injects the cookies + storage.
+        let (_s, page, _t) = open_fixture(&ctx, "/form.html");
+        let r = ctx.vs(&["auth", "load", &page, "imported"]);
+        assert!(
+            r.stdout.contains("auth_loaded"),
+            "loading the imported blob should succeed:\n{}",
+            r.stdout
+        );
+    }
+}

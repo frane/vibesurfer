@@ -124,6 +124,7 @@ In MCP Apps hosts (Claude Desktop, ChatGPT, VS Code Copilot), calling `vs_watch`
 
 Over MCP, `vs_act` and `vs_open` take `capture: true` to attach a ~400px JPEG thumbnail image block to the result (~100 vision tokens) — visual confirmation without a separate capture round-trip. `VS_THUMBS=1` on the `vs mcp` process forces it on for every act/open (set it in the MCP server config for a visual transcript; costs tokens per action). CLI equivalent: chain `vs capture` when needed.
 | 19 | `vs auth save\|load\|list\|clear <PAGE> <NAME>` | Per-origin cookie+storage blob, AES-256-GCM at rest. |
+| - | `vs auth import <NAME> <FILE>` | Import a session captured elsewhere (passkey fallback): log in with a passkey in a real browser, export cookies + local/session storage as a v2 auth-blob JSON, import it, then `auth load` injects it into a headless page. |
 
 ## Optimistic concurrency
 

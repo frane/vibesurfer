@@ -212,7 +212,12 @@ pub enum Command {
         refs: Vec<u32>,
     },
     /// 19. Auth blob management. Subcommand: `save <page> <name>`,
-    ///     `load <page> <name>`, `list`, or `clear <name>`.
+    ///     `load <page> <name>`, `list`, `clear <name>`, or
+    ///     `import <name> <file>`. `import` brings a session captured
+    ///     elsewhere (the passkey fallback): log in with a passkey in a
+    ///     real browser, export cookies + local/session storage as a v2
+    ///     auth-blob JSON, and import it so `load` can inject it into a
+    ///     headless page.
     #[command(visible_alias = "au")]
     Auth {
         sub: String,

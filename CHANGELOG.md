@@ -7,6 +7,8 @@ All notable changes to vibesurfer are recorded here. The format follows
 ## [Unreleased]
 
 ### Added (0.2)
+- `vs auth import <NAME> <FILE>` (MCP `vs_auth` sub `import`): import a session captured outside vibesurfer. This is the passkey/WebAuthn fallback. When an origin requires a passkey login the headless engine cannot drive, the human logs in in their own browser, exports the session (cookies + local/session storage) as a v2 auth-blob JSON, and imports it; `vs auth load` then injects it into a headless page. The blob is validated (v1 or v2 accepted, normalized to v2) and stored AES-256-GCM at rest like a saved blob. The CLI reads the file and ships it base64-encoded so the JSON body cannot break the line protocol.
+
 - `vs flow run <FILE>`: run a declarative flow. The file is a JSON array of steps; each step is an array of `vs` arguments. Steps run in order in one session, reusing the normal command dispatch. `` expands to the last page an `open`/`goto` step produced, and `` to that page's current state token (fetched with a `vs_view` right before the step), so scripted login-and-drive flows need no manual id/token threading. Stops at the first step that returns an error.
 
 - `vs goto <PAGE> <URL>` (alias `g`, MCP `vs_goto`): navigate an existing page in place. It reuses the page's web view (and web-content process) instead of opening a new page, so it skips the ~90ms browser spin-up; a goto costs ~15ms vs ~90ms for open on the same content. The page id is unchanged and refs are re-baselined (the next view is a full tree). `--view` appends a fresh view, like `vs open --view`.

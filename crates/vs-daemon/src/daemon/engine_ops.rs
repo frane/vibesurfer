@@ -216,6 +216,36 @@ impl Daemon {
         })
     }
 
+    /// Import an externally-captured session (`vs auth import`): store a
+    /// human-supplied cookies+storage blob under `name` so a later
+    /// `vs auth load` injects it. This is the passkey fallback — when an
+    /// origin requires a WebAuthn/passkey login the headless engine
+    /// cannot drive, the human logs in in their own browser, exports the
+    /// session (cookies + local/session storage as a v2 auth-blob JSON),
+    /// and imports it here. No page is touched; it is a pure store write.
+    pub fn auth_import(
+        &self,
+        session_id: &str,
+        name: &str,
+        blob_json: &[u8],
+    ) -> Result<AuthSaveResponse> {
+        let ctx = AuditCtx::new("vs_auth", session_id).with_args(
+            format!("import {name}"),
+            tokens::args_hash("vs_auth", &["import".into(), name.to_string()]),
+        );
+        self.audit_call(ctx, |_ctx| {
+            self.require_session(session_id)?;
+            let key = self.require_master_key()?;
+            let bytes = vs_engine_webkit::normalize_auth_blob(blob_json)
+                .map_err(|e| DaemonError::BadRequest(format!("invalid auth blob: {e}")))?;
+            let mut store = self.inner.store.lock().expect("poisoned");
+            store.save_auth(name, key, &bytes)?;
+            Ok(AuthSaveResponse {
+                name: name.to_string(),
+            })
+        })
+    }
+
     pub fn auth_load(
         &self,
         session_id: &str,

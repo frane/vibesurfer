@@ -18,6 +18,8 @@
 use std::path::PathBuf;
 
 use anyhow::{Context as _, Result};
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 
 use super::{Cli, Command};
 use crate::caller;
@@ -156,6 +158,28 @@ pub fn run(cli: &Cli) -> Result<Response> {
     // is collected by the CLI in the user's terminal; the agent that
     // invoked vs prompt-input never sees the bytes.
     match &cli.command {
+        // `vs auth import <name> <file>`: read the session blob file
+        // here (CLI-side) and ship it base64-encoded so the JSON body,
+        // which contains newlines, can't break the line protocol.
+        Command::Auth { sub, rest } if sub == "import" => {
+            let name = rest
+                .first()
+                .context("vs auth import: missing <name>")?
+                .clone();
+            let file = rest.get(1).context("vs auth import: missing <file>")?;
+            let bytes =
+                std::fs::read(file).with_context(|| format!("read auth blob file {file}"))?;
+            let b64 = STANDARD.encode(&bytes);
+            let s = session_id
+                .clone()
+                .context("vs auth import: no active session")?;
+            let req = vs_protocol::Request::new("vs_auth")
+                .arg("import")
+                .arg(name)
+                .arg(b64)
+                .flag_value("session", s);
+            return client.call(&req).context("daemon call (auth import)");
+        }
         Command::PromptInput {
             page,
             r,

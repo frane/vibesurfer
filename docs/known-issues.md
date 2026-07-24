@@ -29,7 +29,11 @@ Honest list of behaviors that aren't yet what they should be. Each entry has a s
 
 ## Daemon shutdown ordering
 
-- On macOS, `vs serve` ctrl-c is handled on the tokio worker thread; the main thread's `NSRunLoop` loop only exits when the engine channel closes (i.e., when the daemon and runtime are dropped). In practice this is one extra runloop slice (~50ms). Acceptable; flagged here so it isn't surprising in a profiling trace.
+- On macOS, `vs serve` ctrl-c is handled on the tokio worker thread; the main thread's `NSRunLoop` loop only exits when the engine channel closes (i.e., when the daemon and runtime are dropped). In practice this is one extra runloop slice (~4ms). Acceptable; flagged here so it isn't surprising in a profiling trace.
+
+## WebAuthn / passkeys (virtual authenticator)
+
+- vibesurfer cannot drive a passkey/WebAuthn login automatically on the macOS (WKWebView) backend. A scripted virtual authenticator (the CDP `WebAuthn.addVirtualAuthenticator` primitive) has no public WKWebView API — it exists only through a browser automation protocol (CDP in Chromium/WebView2, or `safaridriver`'s W3C WebAuthn extension), and attaching such a protocol is exactly the automation surface vibesurfer deliberately does not expose. The supported path is the fallback: `vs auth import` — the human completes the passkey login in their own browser, exports the session (cookies + storage) as a v2 auth-blob JSON, and imports it so `vs auth load` injects it into the headless page. A real virtual authenticator may land later on the Windows WebView2 backend (which speaks CDP); it is not planned for WKWebView.
 
 ## Caller-key sessions vs command substitution
 
