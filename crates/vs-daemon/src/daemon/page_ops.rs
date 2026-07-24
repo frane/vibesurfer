@@ -314,6 +314,16 @@ impl Daemon {
     fn render_status(&self, session_id_opt: Option<&str>) -> Result<String> {
         use std::fmt::Write as _;
         let mut out = String::new();
+        // Daemon identity line: version + protocol level + the
+        // capability flags a client can auto-negotiate (so testsurfer
+        // et al. can enable actDeltas / clickVia without pinning to a
+        // hardcoded daemon version). Always first, both modes.
+        writeln!(
+            out,
+            "daemon\tversion={}\tproto=1\tflags=actDeltas,clickVia",
+            env!("CARGO_PKG_VERSION")
+        )
+        .ok();
         let sessions = self.inner.sessions.lock().expect("poisoned");
         if let Some(sid) = session_id_opt {
             let s = sessions

@@ -9,6 +9,14 @@ All notable changes to vibesurfer are recorded here. The format follows
 ### Added (0.2)
 - `vs record start <PAGE> [--fps N]` and `vs record stop <PAGE>` (alias `rec`) capture a page to an AV1 video while the agent works. `start` spawns a background thread that grabs live frames at `--fps` (1..=30, default 4) through the same capture path as `vs frame`; `stop` flushes the encoder and prints the file path (`~/.vibesurfer/captures/rec-<page>.ivf`). Encoding is pure-Rust rav1e (new `vs-record` crate, no ffmpeg or nasm), wrapped in an IVF container playable by ffmpeg, VLC, and any dav1d player. One recording per page. MCP: `vs_record_start` / `vs_record_stop`.
 - `vs prompt-scan <PAGE>` (alias `ps`): show the human a live view of the headless page and block until they confirm, so QR-based 2FA and other visual out-of-band steps work. Mints a live-view URL and waits. Over MCP, compose `vs_watch` + `vs_prompt_confirm`.
+- `vs status` now opens with a `daemon` line carrying the daemon version, protocol level, and the capability flags a client can auto-negotiate (`flags=actDeltas,clickVia`), so tools like testsurfer enable those paths from the running daemon instead of pinning a hardcoded version.
+
+### Changed (0.2)
+- `vs view` folds the console-error check into the snapshot's own engine hop. It used to fire a separate `inspect_console` engine dispatch (and write a `vs_inspect` audit row) on every view once armed, which dominated view latency; steady-state view dropped from ~157ms to ~50ms on a warm daemon. The `? console_error` warning behaves the same.
+
+### Fixed (0.2)
+- The snapshot walker no longer emits ref 0 for a roleless structural wrapper. Ref 0 is the tree-delta grammar's ROOT sentinel, so a real node at ref 0 made `+`/`@` parent references ambiguous. Every emitted node now gets a real ref. (Reported via `#vibesurfer`.)
+
 
 
 

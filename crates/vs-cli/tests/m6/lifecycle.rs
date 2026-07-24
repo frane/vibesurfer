@@ -170,6 +170,12 @@ fn cell_status() {
             "status must reference current session + page:\n{}",
             r.stdout
         );
+        // The daemon identity line lets clients auto-negotiate flags.
+        assert!(
+            r.stdout.contains("daemon\tversion=") && r.stdout.contains("flags=actDeltas,clickVia"),
+            "status must advertise daemon version + negotiable flags:\n{}",
+            r.stdout
+        );
     }
 }
 

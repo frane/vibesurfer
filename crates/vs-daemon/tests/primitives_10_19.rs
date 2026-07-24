@@ -14,8 +14,15 @@ use vs_store::{AnnotationTarget, MasterKey, Store};
 fn make_daemon() -> (Daemon, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path().join("state.db")).unwrap();
-    let runtime =
-        EngineRuntime::spawn(|| Ok(Box::new(TestEngine::new()) as Box<dyn Engine>)).unwrap();
+    // Isolate the TestEngine's capture files per test. Without this the
+    // engine writes `test-engine-<page>-<seq>.png` into the shared
+    // system temp dir, and parallel tests (page handle 1, seq 1) race
+    // the same path — a flaky corrupt-PNG read.
+    let cap_dir = dir.path().join("engine-captures");
+    let runtime = EngineRuntime::spawn(move || {
+        Ok(Box::new(TestEngine::new().with_capture_dir(&cap_dir)) as Box<dyn Engine>)
+    })
+    .unwrap();
     let daemon = Daemon::new(store, Arc::new(runtime))
         .with_captures_dir(dir.path().join("captures"))
         .with_skills_dir(dir.path().join("skills"))
