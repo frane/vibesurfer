@@ -211,6 +211,25 @@ impl EngineRuntime {
         self.dispatch(move |e| e.act(page, target, action, mode))
     }
 
+    /// Perform an action and snapshot the resulting tree in a single
+    /// main-thread hop. `vs_act` always snapshots right after acting, so
+    /// folding the two into one dispatch removes a full engine round
+    /// trip (~10ms) from every action. The backend's `act` already
+    /// settles input + flushes rAF before returning, so the snapshot
+    /// sees the post-action DOM exactly as the two-call form did.
+    pub fn act_and_snapshot(
+        &self,
+        page: PageHandle,
+        target: ActTarget,
+        action: Action,
+        mode: crate::engine::InputMode,
+    ) -> EngineResult<Tree> {
+        self.dispatch(move |e| {
+            e.act(page, target, action, mode)?;
+            e.snapshot(page)
+        })
+    }
+
     pub fn wait(
         &self,
         page: PageHandle,

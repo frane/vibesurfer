@@ -16,6 +16,8 @@ All notable changes to vibesurfer are recorded here. The format follows
 - `vs status` now opens with a `daemon` line carrying the daemon version, protocol level, and the capability flags a client can auto-negotiate (`flags=actDeltas,clickVia`), so tools like testsurfer enable those paths from the running daemon instead of pinning a hardcoded version.
 
 ### Changed (0.2)
+- `vs act` folds its post-action snapshot into the same engine main-thread hop as the input dispatch (new `EngineRuntime::act_and_snapshot`). Every action snapshots right after acting; doing both in one dispatch removes a full engine round trip (~10ms) per action. Robotic click dropped from ~47ms to ~35ms. The remaining cost is native trusted input (NSEvent through the responder chain, settle, rAF flush, snapshot) — the mechanism behind `isTrusted=true`.
+
 - `vs view` folds the console-error check into the snapshot's own engine hop. It used to fire a separate `inspect_console` engine dispatch (and write a `vs_inspect` audit row) on every view once armed, which dominated view latency; steady-state view dropped from ~157ms to ~50ms on a warm daemon. The `? console_error` warning behaves the same.
 
 ### Fixed (0.2)

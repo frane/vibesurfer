@@ -157,8 +157,10 @@ impl Daemon {
                     ));
                 }
             }
-            self.inner.engine.act(engine_handle, target, action, mode)?;
-            let tree = self.inner.engine.snapshot(engine_handle)?;
+            let tree = self
+                .inner
+                .engine
+                .act_and_snapshot(engine_handle, target, action, mode)?;
             let (token, form) = {
                 let mut sessions = self.inner.sessions.lock().expect("poisoned");
                 let page = sessions
