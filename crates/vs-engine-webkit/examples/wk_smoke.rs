@@ -13,7 +13,7 @@
 //! the real browser.
 #[cfg(target_os = "macos")]
 use vs_engine_webkit::{
-    engine::{ActTarget, Action, Viewport, WaitCondition},
+    engine::{ActTarget, Action, InputMode, Viewport, WaitCondition},
     CaptureScope,
 };
 
@@ -58,11 +58,11 @@ fn main() {
     let actionable = find_actionable(&tree);
     if let Some(r) = actionable {
         eprintln!("[wk_smoke] hover ref={r:?}");
-        if let Err(e) = backend.act(page, ActTarget::Ref(r), Action::Hover) {
+        if let Err(e) = backend.act(page, ActTarget::Ref(r), Action::Hover, InputMode::Careful) {
             eprintln!("[wk_smoke] hover failed: {e}");
         }
         eprintln!("[wk_smoke] focus ref={r:?}");
-        if let Err(e) = backend.act(page, ActTarget::Ref(r), Action::Focus) {
+        if let Err(e) = backend.act(page, ActTarget::Ref(r), Action::Focus, InputMode::Careful) {
             eprintln!("[wk_smoke] focus failed: {e}");
         }
         eprintln!("[wk_smoke] layout for ref={r:?}");

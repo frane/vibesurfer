@@ -259,6 +259,9 @@ pub(super) fn handle_act(daemon: &Daemon, req: &Request) -> String {
     // Save copies of ids for the optional --view composite below.
     let session_for_view = session_id.clone();
     let page_for_view = page_id.clone();
+    let mode = flag_value(req, "mode")
+        .and_then(|s| vs_engine_webkit::engine::InputMode::parse(&s))
+        .unwrap_or(vs_engine_webkit::engine::InputMode::Careful);
     let act_outcome = daemon.act(ActCall {
         session_id,
         page_id,
@@ -267,8 +270,10 @@ pub(super) fn handle_act(daemon: &Daemon, req: &Request) -> String {
         before_token,
         args_hash,
         args_redacted,
+        mode,
         group_label,
     });
+
     let act_wire = match act_outcome {
         Ok(ActResponse { token, warnings }) => {
             let mut head = ResponseHead::ok(token);

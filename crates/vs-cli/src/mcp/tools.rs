@@ -67,6 +67,7 @@ fn base_tools() -> Vec<Value> {
             ("value", str_prop("Optional value (text for fill, key chord for key, etc.).", false)),
             ("token", str_prop("State token from the most recent read.", true)),
             ("group", str_prop("Optional audit-group label (e.g. \"login-flow\").", false)),
+            ("mode", str_prop("Ref-click cursor motion: careful (default, fast, trusted), human (slow humanized path for detector-scored flows), robotic (teleport). macOS native click only.", false)),
             ("capture", bool_prop("Attach a screenshot image block to the result. Default false; VS_THUMBS=1 forces on.", false)),
         ])),
         tool("vs_prompt_input", "Prompt the human at the local terminal for a value, then fill it into a ref. The agent that invokes this never sees the value the user types — vs reads from /dev/tty itself and ships the bytes to the daemon, which writes them into the field via the trusted prototype-setter fill path. Use --secret for passwords, TANs, credit-card numbers, and anything else the agent should not see.", obj(&[
@@ -255,6 +256,7 @@ pub fn build_cli(name: &str, args: &Value) -> Result<(Cli, CallOpts)> {
             value: opt_str(args, "value"),
             token: req_str(args, "token")?,
             group: opt_str(args, "group"),
+            mode: opt_str(args, "mode").unwrap_or_else(|| "careful".into()),
         },
         "vs_find" => Command::Find {
             query: req_str(args, "query")?,

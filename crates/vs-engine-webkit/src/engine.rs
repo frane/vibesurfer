@@ -317,7 +317,13 @@ pub trait Engine {
     fn snapshot(&mut self, page: PageHandle) -> EngineResult<Tree>;
 
     /// Perform `action` on `target` at `page`.
-    fn act(&mut self, page: PageHandle, target: ActTarget, action: Action) -> EngineResult<()>;
+    fn act(
+        &mut self,
+        page: PageHandle,
+        target: ActTarget,
+        action: Action,
+        mode: InputMode,
+    ) -> EngineResult<()>;
 
     /// Wait for `cond` at `page` until satisfied or `budget` elapses.
     fn wait(&mut self, page: PageHandle, cond: WaitCondition, budget: Duration)

@@ -95,7 +95,14 @@ pub enum Command {
         token: String,
         #[arg(long)]
         group: Option<String>,
+        /// Cursor motion for a ref click: careful (default, fast,
+        /// trusted single move), human (slow humanized path for
+        /// detector-scored flows), robotic (teleport). Only the
+        /// macOS native ref-click path uses this.
+        #[arg(long, short = 'M', default_value = "careful")]
+        mode: String,
     },
+
     /// 8. Search across pages in the session.
     #[command(visible_alias = "f")]
     Find { query: String },
@@ -535,6 +542,7 @@ impl Command {
                 value,
                 token,
                 group,
+                mode,
             } => {
                 let s = require_session(session_id)?;
                 let mut req = Request::new("vs_act")
@@ -550,6 +558,7 @@ impl Command {
                 if let Some(g) = group {
                     req = req.flag_value("group", g.clone());
                 }
+                req = req.flag_value("mode", mode.clone());
                 req
             }
             Self::Find { query } => {

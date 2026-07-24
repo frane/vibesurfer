@@ -104,6 +104,7 @@ fn log_filters_by_group() {
         before_token: v.token,
         args_hash: h,
         args_redacted: "click 4".into(),
+        mode: vs_engine_webkit::engine::InputMode::Careful,
         group_label: Some("login-flow".into()),
     })
     .unwrap();

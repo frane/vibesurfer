@@ -584,7 +584,13 @@ impl Engine for Webview2Backend {
         super::common::parse_snapshot(&json).map_err(EngineError::Other)
     }
 
-    fn act(&mut self, page: PageHandle, target: ActTarget, action: Action) -> EngineResult<()> {
+    fn act(
+        &mut self,
+        page: PageHandle,
+        target: ActTarget,
+        action: Action,
+        _mode: InputMode,
+    ) -> EngineResult<()> {
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
         super::common::run_act(

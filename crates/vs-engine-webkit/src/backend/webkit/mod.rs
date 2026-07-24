@@ -352,8 +352,15 @@ impl Engine for WkBackend {
         parse_snapshot(&json).map_err(EngineError::Other)
     }
 
-    fn act(&mut self, page: PageHandle, target: ActTarget, action: Action) -> EngineResult<()> {
+    fn act(
+        &mut self,
+        page: PageHandle,
+        target: ActTarget,
+        action: Action,
+        mode: InputMode,
+    ) -> EngineResult<()> {
         let p = self.page_mut(page)?;
+
         let web_view = p.web_view.clone();
         let web_view_flush = p.web_view.clone();
         let window = p.window.clone();
@@ -396,9 +403,16 @@ impl Engine for WkBackend {
             if rect.width > 0.5 && rect.height > 0.5 {
                 let frame = web_view.frame();
                 let start = p.last_mouse.get();
-                // Default to Human mode for now; v0.1.8 follow-up surfaces a
-                // `--mode={human,careful,robotic}` flag on the wire.
-                let mode = vs_humanize::InputMode::Human;
+                // Mode comes from the wire (-M/--mode). Ref-click
+                // defaults to careful, a single-shot trusted move:
+                // fast and still isTrusted. human is opt-in for
+                // detector-scored flows, robotic teleports.
+                let mode = match mode {
+                    InputMode::Human => vs_humanize::InputMode::Human,
+                    InputMode::Careful => vs_humanize::InputMode::Careful,
+                    InputMode::Robotic => vs_humanize::InputMode::Robotic,
+                };
+
                 let seed = vs_humanize_seed_for_ref(r);
                 let landed = input::click_at_rect(
                     &web_view,

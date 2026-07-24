@@ -22,7 +22,10 @@ pub enum RecordError {
     #[error("rav1e: {0}")]
     Encode(String),
     #[error("frame size {got:?} does not match recording size {want:?}")]
-    SizeMismatch { got: (usize, usize), want: (usize, usize) },
+    SizeMismatch {
+        got: (usize, usize),
+        want: (usize, usize),
+    },
     #[error("bad frame: {0}")]
     Frame(&'static str),
     #[error("png decode: {0}")]
@@ -151,7 +154,7 @@ impl Recorder {
         out.extend_from_slice(&1u32.to_le_bytes()); // timebase num
         out.extend_from_slice(&u32::try_from(self.packets.len()).unwrap_or(0).to_le_bytes());
         out.extend_from_slice(&0u32.to_le_bytes()); // unused
-        // Per-frame: 12-byte header (size u32, timestamp u64) + data.
+                                                    // Per-frame: 12-byte header (size u32, timestamp u64) + data.
         for (i, pkt) in self.packets.iter().enumerate() {
             out.extend_from_slice(&u32::try_from(pkt.len()).unwrap_or(0).to_le_bytes());
             out.extend_from_slice(&(i as u64).to_le_bytes());
@@ -232,9 +235,16 @@ mod tests {
         assert_eq!(&ivf[0..4], b"DKIF", "IVF signature");
         assert_eq!(&ivf[8..12], b"AV01", "codec fourcc");
         let frame_count = u32::from_le_bytes(ivf[24..28].try_into().unwrap());
-        assert!(frame_count >= 1, "at least one encoded frame, got {frame_count}");
+        assert!(
+            frame_count >= 1,
+            "at least one encoded frame, got {frame_count}"
+        );
         // Header plus at least one framed packet.
-        assert!(ivf.len() > 32 + 12, "encoded body present, got {} bytes", ivf.len());
+        assert!(
+            ivf.len() > 32 + 12,
+            "encoded body present, got {} bytes",
+            ivf.len()
+        );
     }
 
     #[test]

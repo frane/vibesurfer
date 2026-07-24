@@ -53,6 +53,7 @@ pub struct ActCall {
     pub before_token: StateToken,
     pub args_hash: String,
     pub args_redacted: String,
+    pub mode: vs_engine_webkit::engine::InputMode,
     pub group_label: Option<String>,
 }
 

@@ -86,6 +86,7 @@ impl Daemon {
             args_hash,
             args_redacted,
             group_label,
+            mode,
         } = call;
         let ctx = AuditCtx::new("vs_act", &session_id)
             .with_page(&page_id)
@@ -154,7 +155,7 @@ impl Daemon {
                     ));
                 }
             }
-            self.inner.engine.act(engine_handle, target, action)?;
+            self.inner.engine.act(engine_handle, target, action, mode)?;
             let tree = self.inner.engine.snapshot(engine_handle)?;
             let (token, _form) = {
                 let mut sessions = self.inner.sessions.lock().expect("poisoned");

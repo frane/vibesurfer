@@ -179,8 +179,14 @@ impl EngineRuntime {
         self.dispatch(move |e| e.snapshot(page))
     }
 
-    pub fn act(&self, page: PageHandle, target: ActTarget, action: Action) -> EngineResult<()> {
-        self.dispatch(move |e| e.act(page, target, action))
+    pub fn act(
+        &self,
+        page: PageHandle,
+        target: ActTarget,
+        action: Action,
+        mode: crate::engine::InputMode,
+    ) -> EngineResult<()> {
+        self.dispatch(move |e| e.act(page, target, action, mode))
     }
 
     pub fn wait(
@@ -393,7 +399,13 @@ mod tests {
                 &self.last_url,
             )))
         }
-        fn act(&mut self, _: PageHandle, _: ActTarget, _: Action) -> EngineResult<()> {
+        fn act(
+            &mut self,
+            _: PageHandle,
+            _: ActTarget,
+            _: Action,
+            _: crate::engine::InputMode,
+        ) -> EngineResult<()> {
             Ok(())
         }
         fn wait(&mut self, _: PageHandle, _: WaitCondition, _: Duration) -> EngineResult<()> {
@@ -493,6 +505,7 @@ mod tests {
             page,
             ActTarget::Ref(Ref(3)),
             Action::Fill { value: "x".into() },
+            crate::engine::InputMode::Careful,
         )
         .unwrap();
         let auth = rt.save_auth(page).unwrap();

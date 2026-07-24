@@ -645,6 +645,7 @@ impl Daemon {
             before_token,
             args_hash: crate::tokens::args_hash("vs_act", &["fill".into(), "***".into()]),
             args_redacted: "fill ***".into(),
+            mode: vs_engine_webkit::engine::InputMode::Careful,
             group_label: group,
         };
         let resp = self.act(call)?;
@@ -796,6 +797,7 @@ impl Daemon {
                 before_token,
                 args_hash: crate::tokens::args_hash("vs_act", &["fill".into(), "***".into()]),
                 args_redacted: "fill ***".into(),
+                mode: vs_engine_webkit::engine::InputMode::Careful,
                 group_label: entry.group.clone(),
             })?;
             token = Some(resp.token);
