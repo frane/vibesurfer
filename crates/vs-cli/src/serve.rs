@@ -269,6 +269,16 @@ pub fn run(args: &ServeArgs) -> Result<()> {
         })
         .context("spawn vs-daemon-tokio thread")?;
 
+    // Release the main thread's engine-runtime handle now that the daemon
+    // (on the tokio worker) holds the only other reference. On shutdown
+    // the daemon drops, taking the last EngineRuntime Arc with it and
+    // closing the engine channel — so the loop below exits, drops
+    // `dispatcher`, and runs WkBackend::drop to reap the web-content
+    // processes. Holding this handle here kept the channel open forever
+    // and deadlocked the shutdown: the backend never dropped, so every
+    // open page's ~90 MB render process orphaned to launchd on exit.
+    drop(engine_runtime);
+
     // Main run-loop: drain engine jobs, then pump NSRunLoop briefly.
     // Exit when the channel closes (the worker dropped the daemon).
     let runloop = NSRunLoop::currentRunLoop();
@@ -305,7 +315,6 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     }
 
     let _ = server_thread.join();
-    drop(engine_runtime); // explicit, even though it's already dead
     Ok(())
 }
 
@@ -406,6 +415,12 @@ pub fn run(args: &ServeArgs) -> Result<()> {
         })
         .context("spawn vs-daemon-tokio thread")?;
 
+    // Drop the main thread's engine-runtime handle so the engine channel
+    // can close when the daemon drops on shutdown (see the macOS run for
+    // the full rationale — holding it here deadlocked shutdown and
+    // orphaned render processes).
+    drop(engine_runtime);
+
     // Pump the GLib main context on the main thread, draining engine
     // jobs between iterations. Exit when the channel closes.
     let main_ctx = glib::MainContext::default();
@@ -425,7 +440,6 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     }
 
     let _ = server_thread.join();
-    drop(engine_runtime);
     Ok(())
 }
 
@@ -533,6 +547,12 @@ pub fn run(args: &ServeArgs) -> Result<()> {
         })
         .context("spawn vs-daemon-tokio thread")?;
 
+    // Drop the main thread's engine-runtime handle so the engine channel
+    // can close when the daemon drops on shutdown (see the macOS run for
+    // the full rationale — holding it here deadlocked shutdown and
+    // orphaned render processes).
+    drop(engine_runtime);
+
     // Pump Win32 messages on the main thread, draining engine jobs
     // between iterations. Exit when the channel closes.
     let mut shutdown = false;
@@ -560,7 +580,6 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     }
 
     let _ = server_thread.join();
-    drop(engine_runtime);
     Ok(())
 }
 

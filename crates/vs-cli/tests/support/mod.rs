@@ -71,6 +71,21 @@ impl DaemonGuard {
 
 impl Drop for DaemonGuard {
     fn drop(&mut self) {
+        // Stop the daemon gracefully (SIGTERM) so its engine reaps the
+        // page render processes on exit. A plain SIGKILL skips the
+        // shutdown path and orphans a ~90 MB web-content process per open
+        // page — across a full test run that piled into gigabytes.
+        #[cfg(unix)]
+        {
+            let pid = self.child.id().to_string();
+            let _ = Command::new("kill").arg("-TERM").arg(&pid).status();
+            for _ in 0..60 {
+                if matches!(self.child.try_wait(), Ok(Some(_))) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }

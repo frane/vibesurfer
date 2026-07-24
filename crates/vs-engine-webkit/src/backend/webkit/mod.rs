@@ -134,6 +134,26 @@ impl WkBackend {
     }
 }
 
+impl Drop for WkBackend {
+    fn drop(&mut self) {
+        // On daemon shutdown, tear every open page down and pump the run
+        // loop so WebKit actually terminates its web-content processes
+        // (~90 MB each) instead of orphaning them to launchd. `close`
+        // detaches the message handlers / delegate and closes the host
+        // window; the pump gives WebKit the main-thread turns it needs to
+        // reap the process before the daemon exits. This only runs if the
+        // backend is genuinely dropped — see the ordering in
+        // `vs-cli::serve` that lets the engine channel close on shutdown.
+        let handles: Vec<PageHandle> = self.pages.keys().copied().collect();
+        for h in handles {
+            let _ = self.close(h);
+        }
+        for _ in 0..20 {
+            let _ = run_loop_until(|| false, Duration::from_millis(25));
+        }
+    }
+}
+
 // =============================================================================
 // Shared payloads + parsers
 // =============================================================================
