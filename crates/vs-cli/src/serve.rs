@@ -282,8 +282,16 @@ pub fn run(args: &ServeArgs) -> Result<()> {
             }
         }
         // Pump the runloop briefly so WKWebView delegates / JS
-        // completion handlers fire on this thread.
-        let slice = NSDate::dateWithTimeIntervalSinceNow(0.05);
+        // completion handlers fire on this thread. The slice also
+        // bounds how long a freshly-queued engine job waits to be
+        // picked up: an mpsc send from a daemon worker is not a
+        // run-loop source, so it can't cut this wait short, and the
+        // loop only returns to `tick()` when the slice elapses. At
+        // 50ms that was a ~50ms floor on *every* engine hop (measured:
+        // a trivial layout eval cost ~50ms). 4ms drops per-hop latency
+        // to ~10ms while keeping idle wakeups cheap (runMode sleeps
+        // efficiently between them).
+        let slice = NSDate::dateWithTimeIntervalSinceNow(0.004);
         unsafe { runloop.runMode_beforeDate(NSDefaultRunLoopMode, &slice) };
     }
 
