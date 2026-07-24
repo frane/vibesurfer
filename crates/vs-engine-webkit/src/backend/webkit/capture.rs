@@ -1,5 +1,5 @@
 //! `capture` for the Cocoa backend: WKWebView snapshot →
-//! NSImage → TIFF → NSBitmapImageRep → PNG → on-disk file.
+//! NSImage → CGImage → NSBitmapImageRep → PNG → on-disk file.
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -9,8 +9,8 @@ use std::time::Duration;
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::MainThreadMarker;
-use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage};
+use objc2::{AllocAnyThread, MainThreadMarker};
+use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage, NSImageCacheMode};
 use objc2_foundation::{NSData, NSDictionary, NSError};
 use objc2_web_kit::{WKSnapshotConfiguration, WKWebView};
 
@@ -18,6 +18,22 @@ use super::eval::run_loop_until;
 use crate::engine::{EngineError, EngineResult, PageHandle};
 
 pub(super) fn capture_to_png(
+    web_view: &WKWebView,
+    page: PageHandle,
+    captures_dir: Option<&Path>,
+    mtm: MainThreadMarker,
+) -> EngineResult<PathBuf> {
+    // Wrap the whole capture in a dedicated autorelease pool. Each
+    // snapshot builds a large *uncompressed* TIFF (`TIFFRepresentation`,
+    // ~w*h*4 bytes, tens of MB at retina) plus a PNG NSData, both
+    // autoreleased. Under recording this runs many times a second; the
+    // serve loop's per-iteration pool doesn't drain between captures, so
+    // those buffers piled up (~100 MB/s leak, measured). Draining per
+    // capture keeps recording memory flat.
+    objc2::rc::autoreleasepool(|_| capture_to_png_inner(web_view, page, captures_dir, mtm))
+}
+
+fn capture_to_png_inner(
     web_view: &WKWebView,
     page: PageHandle,
     captures_dir: Option<&Path>,
@@ -73,12 +89,17 @@ pub(super) fn capture_to_png(
         None => unreachable!(),
     };
 
-    // NSImage → TIFF → NSBitmapImageRep → PNG.
-    let tiff = image
-        .TIFFRepresentation()
-        .ok_or_else(|| EngineError::Other("NSImage has no TIFF representation".into()))?;
-    let bitmap = NSBitmapImageRep::imageRepWithData(&tiff)
-        .ok_or_else(|| EngineError::Other("imageRepWithData returned nil".into()))?;
+    image.setCacheMode(NSImageCacheMode::Never);
+
+    // NSImage → CGImage → NSBitmapImageRep → PNG. The older
+    // TIFFRepresentation path leaked a full uncompressed bitmap
+    // (~16 MB) per frame under recording — the rendered TIFF buffer was
+    // never reclaimed. Rendering to a CGImage once and wrapping it
+    // directly keeps memory flat.
+    let cg =
+        unsafe { image.CGImageForProposedRect_context_hints(std::ptr::null_mut(), None, None) }
+            .ok_or_else(|| EngineError::Other("snapshot has no CGImage".into()))?;
+    let bitmap = NSBitmapImageRep::initWithCGImage(NSBitmapImageRep::alloc(), &cg);
     let empty: Retained<NSDictionary<objc2_foundation::NSString, AnyObject>> = NSDictionary::new();
     let png_data: Retained<NSData> =
         unsafe { bitmap.representationUsingType_properties(NSBitmapImageFileType::PNG, &empty) }

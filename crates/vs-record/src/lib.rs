@@ -97,12 +97,21 @@ impl Recorder {
         if width == 0 || height == 0 {
             return Err(RecordError::Frame("zero-sized recording"));
         }
+        // Low-latency, no lookahead: encode and emit each frame as it
+        // arrives. Without this, rav1e buffers its whole reorder /
+        // lookahead window of *uncompressed* frames — tens of MB each at
+        // screen resolution — which grew unbounded during a live
+        // recording (~90 MB/s). Screen capture doesn't benefit from the
+        // lookahead anyway.
+        let mut speed_settings = SpeedSettings::from_preset(speed.min(10));
+        speed_settings.rdo_lookahead_frames = 1;
         let enc = EncoderConfig {
             width,
             height,
             time_base: Rational::new(1, u64::from(fps.max(1))),
             chroma_sampling: ChromaSampling::Cs420,
-            speed_settings: SpeedSettings::from_preset(speed.min(10)),
+            low_latency: true,
+            speed_settings,
             ..Default::default()
         };
         let cfg = Config::new().with_encoder_config(enc).with_threads(1);
