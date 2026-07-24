@@ -18,6 +18,7 @@ mod engine_ops;
 mod lifecycle;
 mod page_ops;
 pub mod pending;
+mod record;
 mod store_ops;
 pub mod webentry;
 
@@ -71,6 +72,7 @@ pub(crate) struct Inner {
     pub(crate) master_key: Option<vs_store::MasterKey>,
     pub(crate) pending: Arc<pending::PendingQueue>,
     pub(crate) webentry: Mutex<Option<Arc<webentry::WebEntry>>>,
+    pub(crate) recorders: Mutex<HashMap<String, record::RecorderHandle>>,
 }
 
 impl Daemon {
@@ -88,6 +90,7 @@ impl Daemon {
                 master_key: None,
                 pending: pending::PendingQueue::new(),
                 webentry: Mutex::new(None),
+                recorders: Mutex::new(HashMap::new()),
             }),
         }
     }

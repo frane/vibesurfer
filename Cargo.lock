@@ -2857,6 +2857,7 @@ dependencies = [
  "uuid",
  "vs-engine-webkit",
  "vs-protocol",
+ "vs-record",
  "vs-store",
 ]
 

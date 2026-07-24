@@ -221,3 +221,33 @@ fn auth_save_without_master_key_errors() {
     let err = d.auth_save(&s.session_id, &p.page_id, "x").unwrap_err();
     assert!(matches!(err, vs_daemon::DaemonError::BadRequest(_)));
 }
+
+#[test]
+fn record_plumbing_validates_page_and_dedupes() {
+    // Frame encoding is covered by vs-record's own unit tests (it needs
+    // real page-sized frames; TestEngine only stubs a 1x1 PNG). Here we
+    // pin the daemon plumbing: page validation, one-recording-per-page,
+    // and teardown so a page can be recorded again after stop.
+    let (d, _dir) = make_daemon();
+    let s = d.session_open(None).unwrap();
+    let p = d.open(&s.session_id, "https://x").unwrap();
+
+    // An unaddressable page cannot be recorded.
+    assert!(d.record_start(&s.session_id, "no-such-page", 10).is_err());
+    // Stopping a page that is not recording is a BadRequest.
+    let err = d.record_stop(&p.page_id).unwrap_err();
+    assert!(matches!(err, vs_daemon::DaemonError::BadRequest(_)));
+
+    // First start registers the recorder; a second is rejected.
+    let out = d.record_start(&s.session_id, &p.page_id, 10).unwrap();
+    assert!(out.ends_with(format!("rec-{}.ivf", p.page_id).as_str()));
+    let err = d.record_start(&s.session_id, &p.page_id, 10).unwrap_err();
+    assert!(matches!(err, vs_daemon::DaemonError::BadRequest(_)));
+
+    // Stop tears the recorder down (the stub-frame encode may error;
+    // we only assert the handle is released).
+    let _ = d.record_stop(&p.page_id);
+    // Which means the page can be recorded again.
+    let _ = d.record_start(&s.session_id, &p.page_id, 10).unwrap();
+    let _ = d.record_stop(&p.page_id);
+}

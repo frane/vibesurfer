@@ -36,6 +36,13 @@ pub enum RecordError {
 
 type Result<T> = std::result::Result<T, RecordError>;
 
+/// Decode just the dimensions of a PNG, so a caller can size a
+/// [`Recorder`] from the first captured frame.
+pub fn png_dimensions(png: &[u8]) -> Result<(usize, usize)> {
+    let img = image::load_from_memory_with_format(png, image::ImageFormat::Png)?;
+    Ok((img.width() as usize, img.height() as usize))
+}
+
 /// Encodes RGB frames to AV1 and writes an IVF file.
 pub struct Recorder {
     width: usize,

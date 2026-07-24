@@ -424,7 +424,17 @@ pub enum Command {
         #[command(subcommand)]
         sub: PendingSub,
     },
+    /// Record a page to an AV1 video (IVF container, pure-Rust rav1e).
+    /// `start` spawns a background capture at `--fps`; `stop` flushes
+    /// and writes the file. Both print the output path. One recording
+    /// per page.
+    #[command(visible_alias = "rec")]
+    Record {
+        #[command(subcommand)]
+        sub: RecordSub,
+    },
     /// Run the daemon in this process. The `vs` binary doubles as the
+
     /// daemon — `vs serve` is what auto-spawn re-execs when the socket
     /// is missing. SIGINT shuts down cleanly.
     Serve {
@@ -460,6 +470,19 @@ pub enum CaptureSub {
         #[arg(long, value_name = "N")]
         keep: Option<usize>,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum RecordSub {
+    /// Start recording a page. Captures until `vs record stop <page>`.
+    Start {
+        page: String,
+        /// Frames per second (clamped 1..=30). Default 4.
+        #[arg(long, default_value_t = 4)]
+        fps: u32,
+    },
+    /// Stop recording a page, flush the encoder, print the file path.
+    Stop { page: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -881,6 +904,20 @@ impl Command {
                 PendingSub::Cancel { id } => Request::new("vs_pending_cancel").arg(id.clone()),
                 PendingSub::Url => Request::new("vs_pending_url"),
             },
+            Self::Record { sub } => {
+                let s = require_session(session_id)?;
+                match sub {
+                    RecordSub::Start { page, fps } => Request::new("vs_record")
+                        .arg("start")
+                        .arg(page.clone())
+                        .flag_value("session", s)
+                        .flag_value("fps", fps.to_string()),
+                    RecordSub::Stop { page } => Request::new("vs_record")
+                        .arg("stop")
+                        .arg(page.clone())
+                        .flag_value("session", s),
+                }
+            }
             Self::Serve { .. } => {
                 anyhow::bail!("vs_serve is local; route via main, not the wire dispatcher");
             }

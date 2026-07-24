@@ -104,7 +104,15 @@ fn base_tools() -> Vec<Value> {
         tool("vs_watch", "Mint a read-only live-view URL for a page (~1 fps screenshots while open, 30 min). Relay it so the human can watch the browser work. Returns `url\\t<URL>`.", obj(&[
             ("page", str_prop("Page id.", true)),
         ])),
+        tool("vs_record_start", "Start recording a page to an AV1 video (IVF). Captures frames until vs_record_stop. Returns `path\\t<file>`. One recording per page.", obj(&[
+            ("page", str_prop("Page id.", true)),
+            ("fps", uint_prop("Frames per second, clamped 1..=30. Default 4.", false)),
+        ])),
+        tool("vs_record_stop", "Stop recording a page, flush the encoder, and return `path\\t<ivf file>`.", obj(&[
+            ("page", str_prop("Page id.", true)),
+        ])),
         tool("vs_pending_url", "Mint a single-use localhost URL where the human can fulfill every pending prompt entry as one browser form. Returns `url\\t<URL>`.", obj(&[])),
+
         tool("vs_prompt_confirm", "Block until the human at the local terminal presses Enter. Returns `ok` on confirm or aborts on EOF / Ctrl-C. Use as a human-in-loop gate before a sensitive vs_act click (e.g. \"about to transfer $5000 — Enter to confirm\"). No state change; the next call after this still uses whatever state token the agent already had.", obj(&[
             ("page", str_prop("Page id (passed for audit context; the primitive itself does not touch the page).", true)),
             ("message", str_prop("Prompt text shown to the human. State what they are confirming.", true)),
@@ -427,6 +435,17 @@ pub fn build_cli(name: &str, args: &Value) -> Result<(Cli, CallOpts)> {
         "vs_watch" => Command::Watch {
             page: req_str(args, "page")?,
             open: false,
+        },
+        "vs_record_start" => Command::Record {
+            sub: crate::commands::RecordSub::Start {
+                page: req_str(args, "page")?,
+                fps: opt_u32(args, "fps").unwrap_or(4),
+            },
+        },
+        "vs_record_stop" => Command::Record {
+            sub: crate::commands::RecordSub::Stop {
+                page: req_str(args, "page")?,
+            },
         },
         "vs_pending_url" => Command::Pending {
             sub: crate::commands::PendingSub::Url,

@@ -1056,6 +1056,45 @@ pub(super) fn handle_pending_url(daemon: &Daemon, _req: &Request) -> String {
 }
 
 /// `vs_watch` — mint a live-view URL for a page. Body: `url\t<url>`.
+/// `vs_record` start|stop. Args: `<action> <page>`. `--fps` on start.
+/// Body: `path\t<ivf path>`.
+pub(super) fn handle_record(daemon: &Daemon, req: &Request) -> String {
+    let session_id = match require_session(req) {
+        Ok(s) => s,
+        Err(msg) => return format_error(ErrorCode::BadRequest, vec![msg]),
+    };
+    let action = req.args.first().map_or("", String::as_str);
+    let Some(page_id) = req.args.get(1).cloned() else {
+        return format_error(
+            ErrorCode::BadRequest,
+            vec!["vs_record: missing page id".into()],
+        );
+    };
+    let result = match action {
+        "start" => {
+            let fps = flag_value(req, "fps")
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(4);
+            daemon.record_start(&session_id, &page_id, fps)
+        }
+        "stop" => daemon.record_stop(&page_id),
+        other => {
+            return format_error(
+                ErrorCode::BadRequest,
+                vec![format!("vs_record: unknown action {other:?} (start|stop)")],
+            )
+        }
+    };
+    match result {
+        Ok(path) => format!(
+            "{}path\t{}\n",
+            ResponseHead::ok(StateToken([0u8; 8])).encode(),
+            path.display()
+        ),
+        Err(e) => format_daemon_error(&e),
+    }
+}
+
 pub(super) fn handle_watch(daemon: &Daemon, req: &Request) -> String {
     let session_id = match require_session(req) {
         Ok(s) => s,
