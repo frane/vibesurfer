@@ -52,6 +52,17 @@ pub(super) struct ClientRect {
 /// below the fold, the WebKit input pipeline no-ops the click
 /// because hit-testing at the synthesized location finds nothing.
 /// Returns `None` if the element isn't in the DOM.
+/// Settle waits (ms) after mouseDown and mouseUp, per input mode.
+/// Robotic skips the inter-event delays for a fast trusted click;
+/// human and careful keep enough for the click to deliver and its
+/// handlers to run before the caller reads state.
+fn click_settle(mode: vs_humanize::InputMode) -> (u64, u64) {
+    match mode {
+        vs_humanize::InputMode::Robotic => (2, 6),
+        _ => (15, 30),
+    }
+}
+
 pub(super) fn ref_rect(
     web_view: &Retained<WKWebView>,
     r: vs_protocol::Ref,
@@ -153,10 +164,11 @@ pub(super) fn click_at_rect(
 
     let down = make_event(NSEventType::LeftMouseDown, end)?;
     let up = make_event(NSEventType::LeftMouseUp, end)?;
+    let (down_ms, up_ms) = click_settle(mode);
     web_view.mouseDown(&down);
-    let _ = run_loop_until(|| false, Duration::from_millis(15));
+    let _ = run_loop_until(|| false, Duration::from_millis(down_ms));
     web_view.mouseUp(&up);
-    let _ = run_loop_until(|| false, Duration::from_millis(30));
+    let _ = run_loop_until(|| false, Duration::from_millis(up_ms));
     Ok(end)
 }
 
@@ -255,12 +267,13 @@ pub(super) fn click_at_xy(
             ty, loc, NSEventModifierFlags::empty(), 0.0, window_number, None, 0, 1, 1.0,
         ).ok_or_else(|| EngineError::Other(format!("NSEvent::mouseEventWithType returned nil for {ty:?}")))
     };
+    let (down_ms, up_ms) = click_settle(mode);
     let down = make(NSEventType::LeftMouseDown)?;
     web_view.mouseDown(&down);
-    let _ = run_loop_until(|| false, Duration::from_millis(15));
+    let _ = run_loop_until(|| false, Duration::from_millis(down_ms));
     let up = make(NSEventType::LeftMouseUp)?;
     web_view.mouseUp(&up);
-    let _ = run_loop_until(|| false, Duration::from_millis(30));
+    let _ = run_loop_until(|| false, Duration::from_millis(up_ms));
     Ok(landed)
 }
 
