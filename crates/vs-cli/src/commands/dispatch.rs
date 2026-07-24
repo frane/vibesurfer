@@ -204,6 +204,36 @@ pub fn run(cli: &Cli) -> Result<Response> {
                 *timeout_ms,
             );
         }
+        Command::PromptScan {
+            page,
+            message,
+            open,
+        } => {
+            // Mint a live-view URL so the human can see the QR or 2FA
+            // screen of the headless page, then wait for them to
+            // finish the step out of band.
+            let session = session_id.as_deref().unwrap_or_default();
+            let req = vs_protocol::Request::new("vs_watch")
+                .arg(page.clone())
+                .flag_value("session", session);
+            let resp = client
+                .call(&req)
+                .context("daemon call (prompt-scan watch)")?;
+            if let vs_protocol::Envelope::Error { .. } = &resp.envelope {
+                return Ok(resp);
+            }
+            let url = body_value(&resp, "url").context("prompt-scan: no url in response")?;
+            eprintln!("vs prompt-scan: open {url} to view the page. {message}");
+            if *open {
+                open_in_browser(&url);
+            }
+            read_user_confirm(message)?;
+            return Ok(Response {
+                envelope: vs_protocol::Envelope::Success(vs_protocol::StateToken([0u8; 8])),
+                body: Vec::new(),
+                warnings: Vec::new(),
+            });
+        }
         Command::Pending {
             sub: super::PendingSub::Fulfill { id },
         } => {

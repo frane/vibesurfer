@@ -354,6 +354,22 @@ pub enum Command {
         #[arg(long)]
         message: String,
     },
+    /// Show the human a live view of the page (a QR code, a 2FA
+    /// screen, anything visual) and block until they press Enter.
+    /// Mints a read-only live-view URL and waits, so out-of-band
+    /// steps like scanning a TOTP enrollment QR work headlessly.
+    /// `--open` launches the browser at the live view.
+    #[command(visible_alias = "ps")]
+    PromptScan {
+        page: String,
+        #[arg(
+            long,
+            default_value = "Scan the code or complete the step shown, then press Enter."
+        )]
+        message: String,
+        #[arg(long)]
+        open: bool,
+    },
     /// Wire-only `vs_prompt_input` variant — does NOT read from the
     /// local tty. Used by `vs mcp` so an MCP-driven agent can enqueue
     /// a prompt the local user fulfills via `vs pending fulfill`.
@@ -796,7 +812,10 @@ impl Command {
                     .flag_value("token", token.clone())
                     .flag_value("mode", mode.clone())
             }
-            Self::PromptInput { .. } | Self::PromptConfirm { .. } | Self::PromptForm { .. } => {
+            Self::PromptInput { .. }
+            | Self::PromptConfirm { .. }
+            | Self::PromptForm { .. }
+            | Self::PromptScan { .. } => {
                 anyhow::bail!("vs_prompt_* is local; route via main, not the wire dispatcher");
             }
             Self::PromptInputQueue {

@@ -6,6 +6,9 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added (0.2)
+- `vs prompt-scan <PAGE>` (alias `ps`): show the human a live view of the headless page and block until they confirm, so QR-based 2FA and other visual out-of-band steps work. Mints a live-view URL and waits. Over MCP, compose `vs_watch` + `vs_prompt_confirm`.
+
 
 
 ## [v0.1.28] - 2026-07-24
