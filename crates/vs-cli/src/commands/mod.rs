@@ -513,6 +513,10 @@ pub enum RecordSub {
         /// Frames per second (clamped 1..=30). Default 4.
         #[arg(long, default_value_t = 4)]
         fps: u32,
+        /// Record at full device (retina) resolution instead of the
+        /// default 1280px-wide downscale. Much larger and heavier.
+        #[arg(long)]
+        retina: bool,
     },
     /// Stop recording a page, flush the encoder, print the file path.
     Stop { page: String },
@@ -948,11 +952,17 @@ impl Command {
             Self::Record { sub } => {
                 let s = require_session(session_id)?;
                 match sub {
-                    RecordSub::Start { page, fps } => Request::new("vs_record")
-                        .arg("start")
-                        .arg(page.clone())
-                        .flag_value("session", s)
-                        .flag_value("fps", fps.to_string()),
+                    RecordSub::Start { page, fps, retina } => {
+                        let mut r = Request::new("vs_record")
+                            .arg("start")
+                            .arg(page.clone())
+                            .flag_value("session", s)
+                            .flag_value("fps", fps.to_string());
+                        if *retina {
+                            r = r.flag("retina");
+                        }
+                        r
+                    }
                     RecordSub::Stop { page } => Request::new("vs_record")
                         .arg("stop")
                         .arg(page.clone())

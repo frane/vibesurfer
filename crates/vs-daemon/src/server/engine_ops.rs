@@ -1121,7 +1121,14 @@ pub(super) fn handle_record(daemon: &Daemon, req: &Request) -> String {
             let fps = flag_value(req, "fps")
                 .and_then(|s| s.parse::<u32>().ok())
                 .unwrap_or(4);
-            daemon.record_start(&session_id, &page_id, fps)
+            // Downscale to 1280px wide by default; `--retina` keeps the
+            // full device resolution (bigger + heavier).
+            let max_width = if req.flags.contains_key("retina") {
+                0
+            } else {
+                1280
+            };
+            daemon.record_start(&session_id, &page_id, fps, max_width)
         }
         "stop" => daemon.record_stop(&page_id),
         other => {

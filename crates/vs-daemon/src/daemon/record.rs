@@ -26,7 +26,17 @@ impl Daemon {
     /// Start recording `page_id` to an AV1 IVF file at about `fps`
     /// (clamped 1..=30). Returns the output path. Errors if the page
     /// is already recording.
-    pub fn record_start(&self, session_id: &str, page_id: &str, fps: u32) -> Result<PathBuf> {
+    /// `max_width` downscales each frame so its width is at most that
+    /// many pixels (aspect preserved); `0` keeps the full device
+    /// resolution (retina). Downscaling is the default because a retina
+    /// screen recording is huge to capture and encode.
+    pub fn record_start(
+        &self,
+        session_id: &str,
+        page_id: &str,
+        fps: u32,
+        max_width: u32,
+    ) -> Result<PathBuf> {
         self.require_session(session_id)?;
         // Validate the page is addressable in this session.
         let _ = self.engine_handle_for(session_id, page_id)?;
@@ -78,8 +88,14 @@ impl Daemon {
                         continue;
                     };
                     misses = 0;
+                    // Decode + downscale once, then feed raw RGB to the
+                    // encoder (avoids a second PNG round trip and bounds
+                    // the encoder's per-frame memory at retina).
+                    let Ok((w, h, rgb)) = vs_record::png_to_scaled_rgb(&png, max_width) else {
+                        std::thread::sleep(interval);
+                        continue;
+                    };
                     if rec.is_none() {
-                        let (w, h) = vs_record::png_dimensions(&png).map_err(|e| e.to_string())?;
                         // Stream straight to the IVF file: memory stays at
                         // ~one frame no matter how long the recording runs.
                         rec = Some(
@@ -90,7 +106,7 @@ impl Daemon {
                     if let Some(r) = rec.as_mut() {
                         // A frame that changed size (viewport change) is
                         // skipped, not fatal.
-                        let _ = r.push_png(&png);
+                        let _ = r.push_rgb(w, h, &rgb);
                         frames += 1;
                     }
                     std::thread::sleep(interval);

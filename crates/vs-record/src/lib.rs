@@ -43,6 +43,25 @@ pub fn png_dimensions(png: &[u8]) -> Result<(usize, usize)> {
     Ok((img.width() as usize, img.height() as usize))
 }
 
+/// Decode a PNG and downscale it so its width is at most `max_width`
+/// (aspect preserved), returning `(width, height, rgb)`. Screen captures
+/// arrive at the device backing scale (retina 2x), which is needlessly
+/// large for a recording: it slows capture and multiplies the encoder's
+/// per-frame memory. Downscaling to a sane width keeps recordings small
+/// and light. A frame already within `max_width` is returned unscaled.
+pub fn png_to_scaled_rgb(png: &[u8], max_width: u32) -> Result<(usize, usize, Vec<u8>)> {
+    let img = image::load_from_memory_with_format(png, image::ImageFormat::Png)?;
+    let img = if img.width() > max_width && max_width > 0 {
+        let h = u64::from(max_width) * u64::from(img.height()) / u64::from(img.width());
+        let h = u32::try_from(h).unwrap_or(u32::MAX).max(1);
+        img.resize_exact(max_width, h, image::imageops::FilterType::Triangle)
+    } else {
+        img
+    };
+    let rgb = img.to_rgb8();
+    Ok((rgb.width() as usize, rgb.height() as usize, rgb.into_raw()))
+}
+
 /// Where encoded frames go. A file-backed recorder streams each frame
 /// straight to disk so memory stays at ~one frame regardless of how long
 /// the recording runs; the in-memory sink is only for tests.

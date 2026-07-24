@@ -240,21 +240,25 @@ fn record_plumbing_validates_page_and_dedupes() {
     let p = d.open(&s.session_id, "https://x").unwrap();
 
     // An unaddressable page cannot be recorded.
-    assert!(d.record_start(&s.session_id, "no-such-page", 10).is_err());
+    assert!(d
+        .record_start(&s.session_id, "no-such-page", 10, 1280)
+        .is_err());
     // Stopping a page that is not recording is a BadRequest.
     let err = d.record_stop(&p.page_id).unwrap_err();
     assert!(matches!(err, vs_daemon::DaemonError::BadRequest(_)));
 
     // First start registers the recorder; a second is rejected.
-    let out = d.record_start(&s.session_id, &p.page_id, 10).unwrap();
+    let out = d.record_start(&s.session_id, &p.page_id, 10, 1280).unwrap();
     assert!(out.ends_with(format!("rec-{}.ivf", p.page_id).as_str()));
-    let err = d.record_start(&s.session_id, &p.page_id, 10).unwrap_err();
+    let err = d
+        .record_start(&s.session_id, &p.page_id, 10, 1280)
+        .unwrap_err();
     assert!(matches!(err, vs_daemon::DaemonError::BadRequest(_)));
 
     // Stop tears the recorder down (the stub-frame encode may error;
     // we only assert the handle is released).
     let _ = d.record_stop(&p.page_id);
     // Which means the page can be recorded again.
-    let _ = d.record_start(&s.session_id, &p.page_id, 10).unwrap();
+    let _ = d.record_start(&s.session_id, &p.page_id, 10, 1280).unwrap();
     let _ = d.record_stop(&p.page_id);
 }
