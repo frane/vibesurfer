@@ -79,7 +79,7 @@ impl Daemon {
                 let max_frames = u64::from(fps) * 60 * 30;
                 let mut frames = 0u64;
                 while !stop_t.load(Ordering::Relaxed) && frames < max_frames {
-                    let Ok(png) = daemon.live_frame(&page) else {
+                    let Ok(png) = daemon.live_frame(&page, max_width) else {
                         misses += 1;
                         if misses > give_up_after {
                             break;

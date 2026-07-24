@@ -348,6 +348,15 @@ pub trait Engine {
     /// written.
     fn capture(&mut self, page: PageHandle, scope: CaptureScope) -> EngineResult<PathBuf>;
 
+    /// Capture a live frame (watch / record) at a reduced width
+    /// (`max_width` px, `0` = full resolution). Cheaper to produce and
+    /// encode than a full-resolution screenshot. The default delegates
+    /// to [`Self::capture`]; backends that can render a smaller snapshot
+    /// override it.
+    fn capture_live(&mut self, page: PageHandle, _max_width: u32) -> EngineResult<PathBuf> {
+        self.capture(page, CaptureScope::Viewport)
+    }
+
     /// Compute layout boxes for `refs` at `page`.
     fn layout(&mut self, page: PageHandle, refs: &[Ref]) -> EngineResult<Vec<LayoutBox>>;
 

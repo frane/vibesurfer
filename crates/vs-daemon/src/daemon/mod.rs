@@ -687,7 +687,9 @@ impl Daemon {
         let weak = Arc::downgrade(&self.inner);
         let frame: webentry::FrameFn = Arc::new(move |page: &str| {
             let inner = weak.upgrade().ok_or_else(|| "daemon gone".to_string())?;
-            Daemon { inner }.live_frame(page).map_err(|e| e.to_string())
+            Daemon { inner }
+                .live_frame(page, 1280)
+                .map_err(|e| e.to_string())
         });
         let s = webentry::WebEntry::start(self.inner.pending.clone(), frame)?;
         *guard = Some(s.clone());
@@ -720,7 +722,7 @@ impl Daemon {
     /// NOT retained by the captures-dir policy: the caller must
     /// delete it after reading. Serves `/live/<nonce>/frame` and the
     /// wire op `vs_frame` (MCP panel frames and action thumbnails).
-    pub fn live_frame_path(&self, page_id: &str) -> Result<std::path::PathBuf> {
+    pub fn live_frame_path(&self, page_id: &str, max_width: u32) -> Result<std::path::PathBuf> {
         let session_id = {
             let sessions = self.inner.sessions.lock().expect("poisoned");
             sessions
@@ -730,15 +732,12 @@ impl Daemon {
         };
         let handle = self.engine_handle_for(&session_id, page_id)?;
         std::fs::create_dir_all(&self.inner.captures_dir).map_err(DaemonError::Io)?;
-        Ok(self
-            .inner
-            .engine
-            .capture(handle, vs_engine_webkit::CaptureScope::Viewport)?)
+        Ok(self.inner.engine.capture_live(handle, max_width)?)
     }
 
     /// [`Self::live_frame_path`], read and deleted: PNG bytes.
-    pub(crate) fn live_frame(&self, page_id: &str) -> Result<Vec<u8>> {
-        let path = self.live_frame_path(page_id)?;
+    pub(crate) fn live_frame(&self, page_id: &str, max_width: u32) -> Result<Vec<u8>> {
+        let path = self.live_frame_path(page_id, max_width)?;
         let bytes = std::fs::read(&path).map_err(DaemonError::Io)?;
         let _ = std::fs::remove_file(&path);
         Ok(bytes)

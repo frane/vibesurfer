@@ -557,7 +557,19 @@ impl Engine for WkBackend {
         let mtm = self.mtm;
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
-        capture::capture_to_png(&web_view, page, captures_dir.as_deref(), mtm)
+        // Screenshots keep full device resolution.
+        capture::capture_to_png(&web_view, page, captures_dir.as_deref(), mtm, None)
+    }
+
+    fn capture_live(&mut self, page: PageHandle, max_width: u32) -> EngineResult<PathBuf> {
+        let captures_dir = self.captures_dir.clone();
+        let mtm = self.mtm;
+        let p = self.page_mut(page)?;
+        let web_view = p.web_view.clone();
+        // Live frames (watch / record) render smaller: faster to capture
+        // and encode. `0` means full resolution.
+        let width = (max_width > 0).then(|| f64::from(max_width));
+        capture::capture_to_png(&web_view, page, captures_dir.as_deref(), mtm, width)
     }
 
     fn layout(&mut self, page: PageHandle, refs: &[Ref]) -> EngineResult<Vec<LayoutBox>> {

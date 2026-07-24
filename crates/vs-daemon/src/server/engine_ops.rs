@@ -1178,7 +1178,7 @@ pub(super) fn handle_frame(daemon: &Daemon, req: &Request) -> String {
             vec!["vs_frame: missing page id".into()],
         );
     };
-    match daemon.live_frame_path(&page_id) {
+    match daemon.live_frame_path(&page_id, 1280) {
         Ok(path) => format!(
             "{}{}\n",
             ResponseHead::ok(StateToken([0u8; 8])).encode(),

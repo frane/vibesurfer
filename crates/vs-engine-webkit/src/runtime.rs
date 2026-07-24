@@ -247,6 +247,10 @@ impl EngineRuntime {
         self.dispatch(move |e| e.capture(page, scope))
     }
 
+    pub fn capture_live(&self, page: PageHandle, max_width: u32) -> EngineResult<PathBuf> {
+        self.dispatch(move |e| e.capture_live(page, max_width))
+    }
+
     pub fn layout(&self, page: PageHandle, refs: Vec<Ref>) -> EngineResult<Vec<LayoutBox>> {
         self.dispatch(move |e| e.layout(page, &refs))
     }

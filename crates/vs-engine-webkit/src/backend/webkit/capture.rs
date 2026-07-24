@@ -22,6 +22,7 @@ pub(super) fn capture_to_png(
     page: PageHandle,
     captures_dir: Option<&Path>,
     mtm: MainThreadMarker,
+    snapshot_width: Option<f64>,
 ) -> EngineResult<PathBuf> {
     // Wrap the whole capture in a dedicated autorelease pool. Each
     // snapshot builds a large *uncompressed* TIFF (`TIFFRepresentation`,
@@ -30,7 +31,9 @@ pub(super) fn capture_to_png(
     // serve loop's per-iteration pool doesn't drain between captures, so
     // those buffers piled up (~100 MB/s leak, measured). Draining per
     // capture keeps recording memory flat.
-    objc2::rc::autoreleasepool(|_| capture_to_png_inner(web_view, page, captures_dir, mtm))
+    objc2::rc::autoreleasepool(|_| {
+        capture_to_png_inner(web_view, page, captures_dir, mtm, snapshot_width)
+    })
 }
 
 fn capture_to_png_inner(
@@ -38,6 +41,7 @@ fn capture_to_png_inner(
     page: PageHandle,
     captures_dir: Option<&Path>,
     mtm: MainThreadMarker,
+    snapshot_width: Option<f64>,
 ) -> EngineResult<PathBuf> {
     let slot: Rc<RefCell<Option<Result<Retained<NSImage>, String>>>> = Rc::new(RefCell::new(None));
     let slot_for_block = slot.clone();
@@ -66,6 +70,12 @@ fn capture_to_png_inner(
     // a headless snapshot wants.
     let config = unsafe { WKSnapshotConfiguration::new(mtm) };
     unsafe { config.setAfterScreenUpdates(false) };
+    // For live frames (watch / record) WebKit renders the snapshot at
+    // this width instead of the full device backing scale — cheaper to
+    // produce and encode. Screenshots pass None to keep full resolution.
+    if let Some(w) = snapshot_width {
+        unsafe { config.setSnapshotWidth(Some(&objc2_foundation::NSNumber::new_f64(w))) };
+    }
 
     unsafe {
         web_view.takeSnapshotWithConfiguration_completionHandler(Some(&config), &block);
