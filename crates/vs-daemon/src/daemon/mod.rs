@@ -434,7 +434,7 @@ impl Daemon {
         page_id: &str,
         op: vs_engine_webkit::engine::CursorOp,
         mode: vs_engine_webkit::engine::InputMode,
-    ) -> Result<vs_protocol::StateToken> {
+    ) -> Result<(vs_protocol::StateToken, crate::page_state::ViewForm)> {
         let ctx = AuditCtx::new("vs_cursor_op", session_id)
             .with_page(page_id)
             .with_args(
@@ -448,9 +448,22 @@ impl Daemon {
             self.require_session(session_id)?;
             let handle = self.engine_handle_for(session_id, page_id)?;
             self.inner.engine.cursor_op(handle, op, mode)?;
-            let token = self.current_token(session_id, page_id)?;
+            let tree = self.inner.engine.snapshot(handle)?;
+            let (token, form) = {
+                let mut sessions = self.inner.sessions.lock().expect("poisoned");
+                let page = sessions
+                    .get_mut(session_id)
+                    .ok_or_else(|| DaemonError::UnknownSession(session_id.to_string()))?
+                    .pages
+                    .get_mut(page_id)
+                    .ok_or_else(|| DaemonError::UnknownPage(page_id.to_string()))?;
+                page.apply_snapshot(tree)
+            };
             ctx.after_token = Some(token);
-            Ok(token)
+            let mut store = self.inner.store.lock().expect("poisoned");
+            store.update_page_token(page_id, &token.to_string(), "engine", None)?;
+            drop(store);
+            Ok((token, form))
         })
     }
 

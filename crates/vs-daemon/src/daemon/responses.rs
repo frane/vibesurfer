@@ -60,6 +60,7 @@ pub struct ActCall {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActResponse {
     pub token: StateToken,
+    pub form: ViewForm,
     pub warnings: Vec<Warning>,
 }
 

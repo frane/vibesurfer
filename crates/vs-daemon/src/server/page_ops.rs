@@ -275,11 +275,21 @@ pub(super) fn handle_act(daemon: &Daemon, req: &Request) -> String {
     });
 
     let act_wire = match act_outcome {
-        Ok(ActResponse { token, warnings }) => {
+        Ok(ActResponse {
+            token,
+            form,
+            warnings,
+        }) => {
             let mut head = ResponseHead::ok(token);
             head.warnings = warnings;
-            head.encode()
+            let body = match form {
+                ViewForm::Full(tree) => tree.encode(),
+                ViewForm::Delta(ops) => vs_protocol::delta::encode(&ops),
+                ViewForm::NoChange => String::new(),
+            };
+            format!("{}{body}", head.encode())
         }
+
         Err(e) => return format_daemon_error(&e),
     };
 

@@ -9,6 +9,7 @@ use crate::daemon::{
     AuthListResponse, AuthLoadResponse, AuthSaveResponse, CaptureResponse, Daemon, LayoutResponse,
     SkillListResponse, SkillShowResponse, ViewportResponse,
 };
+use crate::page_state::ViewForm;
 
 /// Default body truncation for `vs_inspect request` output. Override
 /// with `--full`.
@@ -239,9 +240,14 @@ pub(super) fn handle_cursor(daemon: &Daemon, req: &Request, kind: &str) -> Strin
         };
     }
     match daemon.cursor_op(&session_id, &page_id, op, mode) {
-        Ok(token) => {
+        Ok((token, form)) => {
             let head = vs_protocol::ResponseHead::ok(token).encode();
-            format!("{head}\n")
+            let body = match form {
+                ViewForm::Full(tree) => tree.encode(),
+                ViewForm::Delta(ops) => vs_protocol::delta::encode(&ops),
+                ViewForm::NoChange => String::new(),
+            };
+            format!("{head}{body}")
         }
         Err(e) => format_daemon_error(&e),
     }
