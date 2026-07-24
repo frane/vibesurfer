@@ -378,10 +378,14 @@ pub(super) fn type_text(
             let _ = run_loop_until(|| false, Duration::from_millis(1));
         }
     }
-    // Always drain after the final keystroke so its keyUp ->
-    // beforeinput -> input is delivered before the caller reads the
-    // page. Robotic mode fires fast enough that the last char's input
-    // event otherwise races the next primitive (flaked on CI).
-    let _ = run_loop_until(|| false, Duration::from_millis(40));
+    // Drain the run loop several times after the final keystroke so
+    // the web-content process delivers the last keyUp -> beforeinput
+    // -> input before the caller reads the page. One block is not
+    // enough under load (CI mac dropped the last char or two);
+    // repeated short ticks give the content process more scheduling
+    // opportunities.
+    for _ in 0..6 {
+        let _ = run_loop_until(|| false, Duration::from_millis(25));
+    }
     Ok(())
 }

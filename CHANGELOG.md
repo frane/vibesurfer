@@ -11,7 +11,7 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ### Fixed
 - The SKILL.md frontmatter `version` and `gemini-extension.json` version were stuck at 0.1.21 (hand-maintained, never bumped at release); now 0.1.27 and in the release runbook so they track going forward. This is user-visible in skill registries like Antigravity's.
-
+- `vs type` now drains the run loop repeatedly after the last keystroke so the web-content process finishes delivering `keyUp → beforeinput → input` before the call returns. A single drain was not enough under load, so a fast follow-up read (or a `vs view`) could miss the last character or two. The regression cell also polls for the text rather than reading once.
 
 
 ## [v0.1.27] - 2026-07-16

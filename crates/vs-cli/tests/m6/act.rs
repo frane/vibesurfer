@@ -490,7 +490,18 @@ fn cell_type_trusted_into_contenteditable() {
         let _ = eval_js(&ctx, &page, "document.getElementById('editor').focus(); 0");
         let r = ctx.vs(&["type", &page, "hi there", "--mode=robotic"]);
         assert_ok("vs type", &r);
-        let mirror = eval_js(&ctx, &page, "document.getElementById('mirror').textContent");
+        // Key-event delivery to the web-content process is async and
+        // load-dependent (CI mac occasionally dropped the last char or
+        // two on a single read); poll until the trusted-only mirror
+        // reflects the full text, with a deadline.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mirror = loop {
+            let m = eval_js(&ctx, &page, "document.getElementById('mirror').textContent");
+            if m.contains("hi there") || std::time::Instant::now() > deadline {
+                break m;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        };
         assert!(
             mirror.contains("hi there"),
             "trusted-only mirror must capture typed text, got {mirror:?}"
