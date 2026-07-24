@@ -6,7 +6,12 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
+
+
+## [v0.1.28] - 2026-07-24
+
 ### Added
+- Run vibesurfer with `npx vibesurfer <args>` — no install. The new `vibesurfer` npm package is a thin launcher that downloads the prebuilt binary for your platform from the matching GitHub release, verifies its SHA-256 against `checksums.txt`, caches it under `~/.vibesurfer/bin/<version>/`, and execs it; later runs are instant and offline. `npx vibesurfer@<version>` pins the exact build. Documented on the npm page, the README (now the first "try it" option), and SKILL.md.
 - `vs skill install` now targets Google Antigravity (the Gemini CLI's successor). It writes the native SKILL.md to `~/.gemini/skills/vibesurfer/SKILL.md` and the MCP server to `~/.gemini/config/mcp_config.json` (`mcpServers.vibesurfer = {command: "vs", args: ["mcp"]}`) — Antigravity reads plain SKILL.md with frontmatter, so no GEMINI.md/manifest hack (the legacy Gemini CLI target stays for anyone still on it). Detected via `~/.gemini/antigravity[-cli]` or an `antigravity` binary. Verified end-to-end against a real Antigravity install.
 
 ### Fixed

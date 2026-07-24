@@ -1,11 +1,13 @@
 <h1 align="center">vibesurfer (<code>vs</code>)</h1>
 
-<p align="center"><strong>A real browser for your local AI agent.</strong></p>
+<p align="center"><strong>A browser for LLMs, not humans.</strong></p>
 
 <p align="center">
   <a href="https://github.com/frane/vibesurfer/actions/workflows/ci.yml"><img alt="ci" src="https://img.shields.io/github/actions/workflow/status/frane/vibesurfer/ci.yml?branch=main&label=ci&style=flat-square"></a>
   <a href="https://github.com/frane/vibesurfer/actions/workflows/engine-tests.yml"><img alt="engine-tests" src="https://img.shields.io/github/actions/workflow/status/frane/vibesurfer/engine-tests.yml?branch=main&label=engine-tests&style=flat-square"></a>
   <a href="https://github.com/frane/vibesurfer/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/frane/vibesurfer?style=flat-square"></a>
+  <a href="https://www.npmjs.com/package/vibesurfer"><img alt="npm" src="https://img.shields.io/npm/v/vibesurfer?style=flat-square&label=npm"></a>
+  <a href="https://crates.io/crates/vibesurfer"><img alt="crates.io" src="https://img.shields.io/crates/v/vibesurfer?style=flat-square"></a>
   <a href="https://github.com/frane/vibesurfer/blob/main/LICENSE"><img alt="license" src="https://img.shields.io/badge/license-Apache_2.0-blue?style=flat-square"></a>
 </p>
 
@@ -24,6 +26,13 @@ vibesurfer is a native browser daemon in Rust. Reads return state tokens and tre
 When you actually need pixels there's `vs capture` for screenshots, `vs viewport` to switch between mobile and desktop layouts, and `vs layout` to get bounding boxes. But text comes first.
 
 ## Install
+
+Try it instantly, no install — `npx` downloads the prebuilt binary for your platform (checksum-verified, then cached), so this just works:
+
+```
+npx vibesurfer session-open
+npx vibesurfer open https://example.com
+```
 
 Homebrew (macOS, Linux):
 

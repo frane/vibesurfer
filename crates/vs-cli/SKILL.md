@@ -1,13 +1,13 @@
 ---
 name: vibesurfer
-version: 0.1.27
+version: 0.1.28
 binary: vs
 description: Agent-native headless browser. 20 primitives over a Unix-socket wire protocol. Real WKWebView (macOS), WebKitGTK 6 (Linux), or WebView2 (Windows) — all three engines CI-verified by 48 integration cells per platform. Optimistic concurrency via state tokens; tree-delta wire format; durable session/page/auth state in SQLite.
 ---
 
 # vibesurfer (binary: `vs`)
 
-`vs` is a stateless CLI that talks to a daemon (`vs serve`, auto-spawned on first call) over a Unix socket. The daemon owns one long-lived browser engine on the OS main thread and a SQLite store at `~/.vibesurfer/state.db`. Every primitive writes one audit row before returning — there's no opt-out, no untracked operation.
+`vs` is a stateless CLI that talks to a daemon (`vs serve`, auto-spawned on first call) over a Unix socket. Not installed? `npx vibesurfer <args>` runs the same binary (downloaded and cached on first use); `vs skill install` wires it into every detected agent. The daemon owns one long-lived browser engine on the OS main thread and a SQLite store at `~/.vibesurfer/state.db`. Every primitive writes one audit row before returning — there's no opt-out, no untracked operation.
 
 ## Short forms are the default in agent contexts
 

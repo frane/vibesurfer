@@ -1,0 +1,47 @@
+{
+  "name": "vibesurfer",
+  "version": "0.1.28",
+  "description": "A browser for LLMs, not humans. Headless WebKit with a line protocol built for agents — try it with `npx vibesurfer`.",
+  "keywords": [
+    "browser-automation",
+    "headless-browser",
+    "ai-agents",
+    "agent",
+    "agentic",
+    "llm",
+    "claude",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "computer-use",
+    "playwright-alternative",
+    "selenium-alternative",
+    "e2e",
+    "e2e-testing",
+    "web-scraping",
+    "webkit",
+    "browser",
+    "cli",
+    "rust"
+  ],
+  "homepage": "https://github.com/frane/vibesurfer#readme",
+  "bugs": "https://github.com/frane/vibesurfer/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/frane/vibesurfer.git",
+    "directory": "npm"
+  },
+  "license": "Apache-2.0",
+  "author": "Frane Bandov",
+  "bin": {
+    "vibesurfer": "bin/vibesurfer.js",
+    "vs": "bin/vibesurfer.js"
+  },
+  "files": [
+    "bin/vibesurfer.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}
