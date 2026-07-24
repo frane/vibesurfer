@@ -27,7 +27,7 @@ When you actually need pixels there's `vs capture` for screenshots, `vs viewport
 
 ## Install
 
-Try it instantly, no install — `npx` downloads the prebuilt binary for your platform (checksum-verified, then cached), so this just works:
+Try it instantly, no install. `npx` downloads the prebuilt binary for your platform (checksum-verified, then cached), so this just works:
 
 ```
 npx vibesurfer session-open
