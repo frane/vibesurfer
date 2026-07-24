@@ -54,26 +54,50 @@ impl Daemon {
             .spawn(move || -> std::result::Result<PathBuf, String> {
                 let interval = Duration::from_millis(1000 / u64::from(fps));
                 let mut rec: Option<vs_record::Recorder> = None;
-                while !stop_t.load(Ordering::Relaxed) {
+                // A `live_frame` capture transiently fails mid-navigation
+                // (the page is between documents). That is normal during a
+                // recording that spans clicks and gotos, so skip the frame
+                // and keep going; only give up once the page has been
+                // unreachable for a sustained stretch (~5s), which means it
+                // was really closed.
+                let mut misses = 0u32;
+                let give_up_after = fps * 5;
+                // Hard cap so a `record start` that never gets a matching
+                // stop can't fill the disk. 30 minutes at the requested
+                // fps; frames stream to disk, so memory is bounded either
+                // way, but the file size is not.
+                let max_frames = u64::from(fps) * 60 * 30;
+                let mut frames = 0u64;
+                while !stop_t.load(Ordering::Relaxed) && frames < max_frames {
                     let Ok(png) = daemon.live_frame(&page) else {
-                        break; // page closed or engine gone
+                        misses += 1;
+                        if misses > give_up_after {
+                            break;
+                        }
+                        std::thread::sleep(interval);
+                        continue;
                     };
+                    misses = 0;
                     if rec.is_none() {
                         let (w, h) = vs_record::png_dimensions(&png).map_err(|e| e.to_string())?;
+                        // Stream straight to the IVF file: memory stays at
+                        // ~one frame no matter how long the recording runs.
                         rec = Some(
-                            vs_record::Recorder::new(w, h, fps, 9).map_err(|e| e.to_string())?,
+                            vs_record::Recorder::create(&out_t, w, h, fps, 9)
+                                .map_err(|e| e.to_string())?,
                         );
                     }
                     if let Some(r) = rec.as_mut() {
                         // A frame that changed size (viewport change) is
                         // skipped, not fatal.
                         let _ = r.push_png(&png);
+                        frames += 1;
                     }
                     std::thread::sleep(interval);
                 }
                 match rec {
                     Some(r) => {
-                        r.finish_to_file(&out_t).map_err(|e| e.to_string())?;
+                        r.finish().map_err(|e| e.to_string())?;
                         Ok(out_t)
                     }
                     None => Err("no frames captured".into()),

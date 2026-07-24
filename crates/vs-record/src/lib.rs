@@ -12,7 +12,7 @@
 //! frames in one recording must share dimensions; the first frame
 //! fixes them and later frames of a different size are rejected.
 
-use std::io::Write as _;
+use std::io::{Seek as _, Write};
 
 use rav1e::config::SpeedSettings;
 use rav1e::prelude::*;
@@ -43,22 +43,55 @@ pub fn png_dimensions(png: &[u8]) -> Result<(usize, usize)> {
     Ok((img.width() as usize, img.height() as usize))
 }
 
+/// Where encoded frames go. A file-backed recorder streams each frame
+/// straight to disk so memory stays at ~one frame regardless of how long
+/// the recording runs; the in-memory sink is only for tests.
+enum Sink {
+    File {
+        writer: std::io::BufWriter<std::fs::File>,
+        frames: u32,
+    },
+    Mem(Vec<Vec<u8>>),
+}
+
+/// The 32-byte IVF file header. `frame_count` is patched in at finish
+/// for the streaming path (written as 0 up front, seeked back later).
+fn ivf_header(width: usize, height: usize, fps: u32, frame_count: u32) -> [u8; 32] {
+    let mut h = [0u8; 32];
+    h[0..4].copy_from_slice(b"DKIF");
+    h[6..8].copy_from_slice(&32u16.to_le_bytes()); // header length (version 0)
+    h[8..12].copy_from_slice(b"AV01");
+    h[12..14].copy_from_slice(&u16::try_from(width).unwrap_or(0).to_le_bytes());
+    h[14..16].copy_from_slice(&u16::try_from(height).unwrap_or(0).to_le_bytes());
+    h[16..20].copy_from_slice(&fps.max(1).to_le_bytes()); // timebase den
+    h[20..24].copy_from_slice(&1u32.to_le_bytes()); // timebase num
+    h[24..28].copy_from_slice(&frame_count.to_le_bytes());
+    h
+}
+
+/// One IVF frame record: 12-byte header (size u32, timestamp u64) + data.
+fn write_frame_record(out: &mut impl Write, pkt: &[u8], ts: u64) -> std::io::Result<()> {
+    out.write_all(&u32::try_from(pkt.len()).unwrap_or(0).to_le_bytes())?;
+    out.write_all(&ts.to_le_bytes())?;
+    out.write_all(pkt)
+}
+
 /// Encodes RGB frames to AV1 and writes an IVF file.
 pub struct Recorder {
     width: usize,
     height: usize,
     fps: u32,
     ctx: Context<u8>,
-    /// Encoded AV1 frames (OBU payloads), in order.
-    packets: Vec<Vec<u8>>,
+    sink: Sink,
 }
 
 impl Recorder {
-    /// Start a recording at `width` x `height` (both rounded down to
-    /// even, required by 4:2:0 chroma) and `fps`. `speed` is 0..=10;
-    /// higher is faster and lower quality. 8 is a good default for
-    /// screen capture where encode time matters more than size.
-    pub fn new(width: usize, height: usize, fps: u32, speed: u8) -> Result<Self> {
+    fn build_ctx(
+        width: usize,
+        height: usize,
+        fps: u32,
+        speed: u8,
+    ) -> Result<(usize, usize, Context<u8>)> {
         let width = width & !1;
         let height = height & !1;
         if width == 0 || height == 0 {
@@ -76,12 +109,47 @@ impl Recorder {
         let ctx: Context<u8> = cfg
             .new_context()
             .map_err(|e| RecordError::Encode(format!("{e:?}")))?;
+        Ok((width, height, ctx))
+    }
+
+    /// Start an in-memory recording at `width` x `height` (both rounded
+    /// down to even, required by 4:2:0 chroma) and `fps`. `speed` is
+    /// 0..=10; higher is faster and lower quality. For tests — real
+    /// recordings should use [`Recorder::create`], which streams to disk.
+    pub fn new(width: usize, height: usize, fps: u32, speed: u8) -> Result<Self> {
+        let (width, height, ctx) = Self::build_ctx(width, height, fps, speed)?;
         Ok(Self {
             width,
             height,
             fps,
             ctx,
-            packets: Vec::new(),
+            sink: Sink::Mem(Vec::new()),
+        })
+    }
+
+    /// Start a recording that streams straight to the IVF file at `path`.
+    /// Each encoded frame is written and dropped, so memory stays at
+    /// about one frame no matter how long the recording runs. Finalize
+    /// with [`Recorder::finish`].
+    pub fn create(
+        path: &std::path::Path,
+        width: usize,
+        height: usize,
+        fps: u32,
+        speed: u8,
+    ) -> Result<Self> {
+        let (width, height, ctx) = Self::build_ctx(width, height, fps, speed)?;
+        let mut f = std::fs::File::create(path)?;
+        f.write_all(&ivf_header(width, height, fps, 0))?;
+        Ok(Self {
+            width,
+            height,
+            fps,
+            ctx,
+            sink: Sink::File {
+                writer: std::io::BufWriter::new(f),
+                frames: 0,
+            },
         })
     }
 
@@ -117,13 +185,19 @@ impl Recorder {
         self.drain()
     }
 
-    /// Pull whatever packets are ready and stop when the encoder
-    /// wants more input or reports it is drained. Safe to call after
-    /// each send and after flush.
+    /// Pull whatever packets are ready and route them to the sink,
+    /// stopping when the encoder wants more input or reports it is
+    /// drained. Safe to call after each send and after flush.
     fn drain(&mut self) -> Result<()> {
         loop {
             match self.ctx.receive_packet() {
-                Ok(pkt) => self.packets.push(pkt.data),
+                Ok(pkt) => match &mut self.sink {
+                    Sink::File { writer, frames } => {
+                        write_frame_record(writer, &pkt.data, u64::from(*frames))?;
+                        *frames += 1;
+                    }
+                    Sink::Mem(packets) => packets.push(pkt.data),
+                },
                 Err(EncoderStatus::Encoded) => {}
                 Err(EncoderStatus::NeedMoreData | EncoderStatus::LimitReached) => return Ok(()),
                 Err(e) => return Err(RecordError::Encode(format!("receive_packet: {e:?}"))),
@@ -131,43 +205,49 @@ impl Recorder {
         }
     }
 
-    /// Flush the encoder and write the IVF file to `path`.
-    pub fn finish_to_file(mut self, path: &std::path::Path) -> Result<usize> {
+    /// Flush the encoder and finalize the streamed IVF file: patch the
+    /// real frame count into the header. Use with [`Recorder::create`].
+    pub fn finish(mut self) -> Result<()> {
         self.ctx.flush();
         self.drain()?;
-        let bytes = self.into_ivf();
-        let mut f = std::fs::File::create(path)?;
-        f.write_all(&bytes)?;
-        Ok(bytes.len())
+        match self.sink {
+            Sink::File { writer, frames } => {
+                let mut f = writer
+                    .into_inner()
+                    .map_err(std::io::IntoInnerError::into_error)?;
+                f.seek(std::io::SeekFrom::Start(24))?;
+                f.write_all(&frames.to_le_bytes())?;
+                f.flush()?;
+                Ok(())
+            }
+            Sink::Mem(_) => Err(RecordError::Frame(
+                "finish() on an in-memory recorder; use finish_to_vec",
+            )),
+        }
     }
 
-    /// Flush and return the IVF bytes (used by tests).
+    /// Flush and return the IVF bytes (in-memory recorders / tests).
     pub fn finish_to_vec(mut self) -> Result<Vec<u8>> {
         self.ctx.flush();
         self.drain()?;
-        Ok(self.into_ivf())
-    }
-
-    fn into_ivf(self) -> Vec<u8> {
-        let mut out = Vec::new();
-        // IVF file header, 32 bytes.
-        out.extend_from_slice(b"DKIF");
-        out.extend_from_slice(&0u16.to_le_bytes()); // version
-        out.extend_from_slice(&32u16.to_le_bytes()); // header length
-        out.extend_from_slice(b"AV01"); // codec fourcc
-        out.extend_from_slice(&u16::try_from(self.width).unwrap_or(0).to_le_bytes());
-        out.extend_from_slice(&u16::try_from(self.height).unwrap_or(0).to_le_bytes());
-        out.extend_from_slice(&self.fps.max(1).to_le_bytes()); // timebase den
-        out.extend_from_slice(&1u32.to_le_bytes()); // timebase num
-        out.extend_from_slice(&u32::try_from(self.packets.len()).unwrap_or(0).to_le_bytes());
-        out.extend_from_slice(&0u32.to_le_bytes()); // unused
-                                                    // Per-frame: 12-byte header (size u32, timestamp u64) + data.
-        for (i, pkt) in self.packets.iter().enumerate() {
-            out.extend_from_slice(&u32::try_from(pkt.len()).unwrap_or(0).to_le_bytes());
-            out.extend_from_slice(&(i as u64).to_le_bytes());
-            out.extend_from_slice(pkt);
+        match self.sink {
+            Sink::Mem(packets) => {
+                let mut out = Vec::new();
+                out.extend_from_slice(&ivf_header(
+                    self.width,
+                    self.height,
+                    self.fps,
+                    u32::try_from(packets.len()).unwrap_or(0),
+                ));
+                for (i, pkt) in packets.iter().enumerate() {
+                    write_frame_record(&mut out, pkt, i as u64)?;
+                }
+                Ok(out)
+            }
+            Sink::File { .. } => Err(RecordError::Frame(
+                "finish_to_vec() on a file recorder; use finish",
+            )),
         }
-        out
     }
 }
 

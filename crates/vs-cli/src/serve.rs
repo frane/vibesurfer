@@ -273,13 +273,22 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     // Exit when the channel closes (the worker dropped the daemon).
     let runloop = NSRunLoop::currentRunLoop();
     'main: loop {
-        // Drain all queued jobs.
-        loop {
+        // Drain all queued jobs inside an autorelease pool. The engine
+        // runs on this thread with a hand-rolled run loop that never
+        // returns to Cocoa's own pool-draining point, so without an
+        // explicit pool every autoreleased Obj-C temporary (crucially, a
+        // closed page's WKWebView and its ~90 MB web-content process)
+        // stays alive until the daemon exits. Draining per iteration
+        // reclaims them right after `close`.
+        let keep_going = objc2::rc::autoreleasepool(|_| loop {
             match dispatcher.tick() {
                 Ok(true) => {}
-                Ok(false) => break,
-                Err(()) => break 'main,
+                Ok(false) => return true,
+                Err(()) => return false,
             }
+        });
+        if !keep_going {
+            break 'main;
         }
         // Pump the runloop briefly so WKWebView delegates / JS
         // completion handlers fire on this thread. The slice also
