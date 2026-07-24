@@ -22,7 +22,7 @@ impl Daemon {
             .with_args(String::new(), tokens::args_hash("vs_view", &[]));
         self.audit_call(ctx, |ctx| {
             let engine_handle = self.engine_handle_for(session_id, page_id)?;
-            let tree = self.inner.engine.snapshot(engine_handle)?;
+            let (tree, console) = self.inner.engine.snapshot_with_console(engine_handle)?;
             let (token, form) = {
                 let mut sessions = self.inner.sessions.lock().expect("poisoned");
                 let page = sessions
@@ -44,6 +44,7 @@ impl Daemon {
                 token,
                 form,
                 warnings: Vec::new(),
+                console,
             })
         })
     }

@@ -179,6 +179,23 @@ impl EngineRuntime {
         self.dispatch(move |e| e.snapshot(page))
     }
 
+    /// Snapshot the tree and read the console buffer in a single
+    /// main-thread hop. `vs_view` needs both (the tree, plus the
+    /// console entries behind its `? console_error` warning); folding
+    /// the cheap native console read into the snapshot dispatch avoids
+    /// a second round trip on every view. The console read is a buffer
+    /// borrow, so it adds no measurable cost.
+    pub fn snapshot_with_console(
+        &self,
+        page: PageHandle,
+    ) -> EngineResult<(Tree, Vec<crate::inspector::ConsoleEntry>)> {
+        self.dispatch(move |e| {
+            let tree = e.snapshot(page)?;
+            let console = e.console_entries(page)?;
+            Ok((tree, console))
+        })
+    }
+
     pub fn act(
         &self,
         page: PageHandle,

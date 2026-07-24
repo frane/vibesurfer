@@ -57,7 +57,7 @@ impl ConsoleLevel {
 }
 
 /// One captured console event.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConsoleEntry {
     /// Wall-clock when the event was captured.
     pub timestamp: SystemTime,

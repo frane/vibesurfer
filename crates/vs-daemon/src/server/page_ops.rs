@@ -33,13 +33,16 @@ pub(super) fn handle_view(daemon: &Daemon, req: &Request) -> String {
             token,
             form,
             warnings,
+            console,
         }) => {
             let mut head = ResponseHead::ok(token);
             head.warnings = warnings;
             // M5.7 PR6: ? console_error warning. If new console errors
             // arrived since the previous vs_view for this page, prepend
             // a warning so the agent knows to call `vs_inspect console`.
-            let new_errors = count_new_console_errors(daemon, &session_id, &page_id);
+            // `console` came back in the snapshot's own engine hop, so
+            // this costs no extra dispatch.
+            let new_errors = count_new_console_errors(daemon, &page_id, &console);
             if new_errors > 0 {
                 head.warnings.push(vs_protocol::Warning::with_args(
                     vs_protocol::WarningCode::ConsoleError,
@@ -84,7 +87,14 @@ pub(super) fn handle_view(daemon: &Daemon, req: &Request) -> String {
 /// most recent is the one that just landed inside `daemon.view()`'s
 /// audit_call. Returns 0 if there is no prior view (i.e., this is the
 /// first one for the page).
-fn count_new_console_errors(daemon: &Daemon, session_id: &str, page_id: &str) -> u32 {
+///
+/// `entries` are the console entries already read in the snapshot's
+/// engine hop, so no `vs_inspect` dispatch happens here.
+fn count_new_console_errors(
+    daemon: &Daemon,
+    page_id: &str,
+    entries: &[vs_engine_webkit::inspector::ConsoleEntry],
+) -> u32 {
     let prior_finished_at = {
         let rows = daemon
             .audit_log(&vs_store::ActionFilter {
@@ -101,9 +111,6 @@ fn count_new_console_errors(daemon: &Daemon, session_id: &str, page_id: &str) ->
         }
         view_rows[view_rows.len() - 2].finished_at
     };
-    let entries = daemon
-        .inspect_console(session_id, page_id)
-        .unwrap_or_default();
     entries
         .iter()
         .filter(|e| matches!(e.level, vs_engine_webkit::inspector::ConsoleLevel::Error))
