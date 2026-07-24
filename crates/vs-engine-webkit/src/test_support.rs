@@ -130,6 +130,15 @@ impl Engine for TestEngine {
         Ok(handle)
     }
 
+    fn navigate(&mut self, page: PageHandle, url: &str) -> EngineResult<()> {
+        let p = self.pages.get_mut(&page).ok_or(EngineError::NotFound {
+            kind: "page",
+            id: page.0.to_string(),
+        })?;
+        p.url = url.to_string();
+        Ok(())
+    }
+
     fn close(&mut self, page: PageHandle) -> EngineResult<()> {
         self.pages.remove(&page);
         Ok(())

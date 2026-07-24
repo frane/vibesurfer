@@ -179,7 +179,40 @@ fn cell_status() {
     }
 }
 
+// vs_goto navigates a page in place: same page id, new document,
+// fresh refs. Much cheaper than open (reuses the web view).
+#[test]
+fn cell_goto_navigates_in_place() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (session, page, _t) = open_fixture(&ctx, "/static.html");
+        let r = ctx.vs(&["goto", &page, &ctx.url("/form.html")]);
+        assert_ok("goto", &r);
+        // Same page id comes back.
+        assert!(
+            r.stdout.contains(&page),
+            "goto must return the same page id {page}:\n{}",
+            r.stdout
+        );
+        // The page now shows the form document, and status reflects the
+        // new url on the same page.
+        let v = ctx.vs(&["view", &page, "--full"]);
+        let body = body_rest(&v);
+        assert!(
+            body.contains("frm"),
+            "after goto to form.html the view should contain a form:\n{body}"
+        );
+        let st = ctx.vs(&["status"]);
+        assert!(
+            st.stdout.contains("form.html") && st.stdout.contains(&session),
+            "status should show the new url on the same session:\n{}",
+            st.stdout
+        );
+    }
+}
+
 // Sessions survive a daemon restart. state.db is the source of truth
+
 // (ARCHITECTURE.md); a restart used to drop every open session and
 // strand parked agents in WRONG_SESSION — reported after an x.com
 // login was lost mid prompt_form_wait (#vibesurfer 01KXJV).

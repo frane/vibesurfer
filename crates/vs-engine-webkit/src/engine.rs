@@ -310,6 +310,13 @@ pub trait Engine {
     /// Open a fresh page navigated to `url`.
     fn open(&mut self, url: &str) -> EngineResult<PageHandle>;
 
+    /// Navigate an existing page to `url` in place, reusing its
+    /// web view (and web-content process) instead of creating a new
+    /// one. The page handle is unchanged; the document is replaced, so
+    /// callers must re-baseline (all refs are fresh). Much cheaper than
+    /// `open` for successive navigations.
+    fn navigate(&mut self, page: PageHandle, url: &str) -> EngineResult<()>;
+
     /// Close a page. Idempotent — closing a closed page is a no-op.
     fn close(&mut self, page: PageHandle) -> EngineResult<()>;
 

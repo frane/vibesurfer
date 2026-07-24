@@ -569,6 +569,13 @@ impl Engine for Webview2Backend {
         Ok(handle)
     }
 
+    fn navigate(&mut self, _page: PageHandle, _url: &str) -> EngineResult<()> {
+        Err(EngineError::NotImplemented {
+            engine: "webview2",
+            primitive: "navigate",
+        })
+    }
+
     fn close(&mut self, page: PageHandle) -> EngineResult<()> {
         if let Some(p) = self.pages.remove(&page) {
             // Closing the controller releases the WebView2 process

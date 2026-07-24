@@ -238,6 +238,13 @@ impl Engine for WpeBackend {
         Ok(handle)
     }
 
+    fn navigate(&mut self, _page: PageHandle, _url: &str) -> EngineResult<()> {
+        Err(EngineError::NotImplemented {
+            engine: "wpe",
+            primitive: "navigate",
+        })
+    }
+
     fn close(&mut self, page: PageHandle) -> EngineResult<()> {
         if let Some(p) = self.pages.remove(&page) {
             // Dismiss the hidden host window so its `GdkSurface` is

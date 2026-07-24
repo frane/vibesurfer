@@ -39,6 +39,7 @@ Wire form is `vs_<name>` (over the socket); CLI subcommand is `<name>` with hyph
 | 1 | `vs session-open [--policy=NAME]` | Create a session. Writes `~/.vibesurfer/active-session`. |
 | 2 | `vs session-close` | Close the active session. |
 | 3 | `vs open <URL>` | Open a page in the session. |
+| - | `vs goto <PAGE> <URL>` (`g`) | Navigate an existing page in place. Reuses the web view, so it skips browser spin-up and is much faster than open for successive navigations. Refs are fresh afterward. |
 | 4 | `vs close <PAGE>` | Close a page. |
 
 ### Read (5–6, 13–14)

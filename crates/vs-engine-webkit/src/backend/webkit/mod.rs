@@ -60,8 +60,9 @@ struct WkPage {
     /// no responder chain for the event to traverse.
     window: Retained<NSWindow>,
     /// Owned so the webview keeps a strong reference (the delegate
-    /// property on `WKWebView` is `weak`).
-    _nav_delegate: Retained<NavDelegate>,
+    /// property on `WKWebView` is `weak`). Its nav slot is reused by
+    /// `navigate` to wait for in-place navigations.
+    nav_delegate: Retained<NavDelegate>,
     /// Console / network ring buffers + request-detail map. Populated
     /// by the JS bridge installed at construction time.
     inspector: super::inspector_bridge::InspectorSlots,
@@ -314,7 +315,7 @@ impl Engine for WkBackend {
             WkPage {
                 web_view,
                 window,
-                _nav_delegate: delegate,
+                nav_delegate: delegate,
                 inspector,
                 inspector_installed,
                 cookie_baseline: std::cell::RefCell::new(None),
@@ -323,6 +324,42 @@ impl Engine for WkBackend {
             },
         );
         Ok(handle)
+    }
+
+    fn navigate(&mut self, page: PageHandle, url: &str) -> EngineResult<()> {
+        // Reuse the existing web view, host window, and web-content
+        // process: just reset the shared nav slot and load the new URL.
+        // This skips the whole WKWebView / NSWindow / process spin-up
+        // that dominates `open` (~90ms), leaving only nav + load.
+        let (web_view, slot) = {
+            let p = self.page_mut(page)?;
+            (p.web_view.clone(), p.nav_delegate.slot())
+        };
+        *slot.borrow_mut() = None;
+        let ns_url_str = NSString::from_str(url);
+        let ns_url = NSURL::URLWithString(&ns_url_str)
+            .ok_or_else(|| EngineError::Other(format!("invalid url: {url}")))?;
+        let request = NSURLRequest::requestWithURL(&ns_url);
+        let _ = unsafe { web_view.loadRequest(&request) };
+        let slot_check = slot.clone();
+        let ok = run_loop_until(
+            move || slot_check.borrow().is_some(),
+            Duration::from_secs(15),
+        );
+        if !ok {
+            return Err(EngineError::Timeout {
+                budget: Duration::from_secs(15),
+                primitive: "navigate",
+            });
+        }
+        let result = slot.borrow_mut().take();
+        match result {
+            Some(Ok(())) => Ok(()),
+            Some(Err(msg)) => Err(EngineError::Other(format!("navigation failed: {msg}"))),
+            None => Err(EngineError::Other(
+                "navigation completed without a result".into(),
+            )),
+        }
     }
 
     fn close(&mut self, page: PageHandle) -> EngineResult<()> {

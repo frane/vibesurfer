@@ -171,6 +171,11 @@ impl EngineRuntime {
         self.dispatch(move |e| e.open(&url))
     }
 
+    pub fn navigate(&self, page: PageHandle, url: &str) -> EngineResult<()> {
+        let url = url.to_string();
+        self.dispatch(move |e| e.navigate(page, &url))
+    }
+
     pub fn close(&self, page: PageHandle) -> EngineResult<()> {
         self.dispatch(move |e| e.close(page))
     }
@@ -405,6 +410,10 @@ mod tests {
             self.next_handle += 1;
             self.last_url = url.to_string();
             Ok(PageHandle(self.next_handle))
+        }
+        fn navigate(&mut self, _page: PageHandle, url: &str) -> EngineResult<()> {
+            self.last_url = url.to_string();
+            Ok(())
         }
         fn close(&mut self, _page: PageHandle) -> EngineResult<()> {
             Ok(())

@@ -142,6 +142,7 @@ pub fn dispatch(daemon: &Daemon, req: &Request) -> String {
         "vs_session_open" => lifecycle::handle_session_open(daemon, req),
         "vs_session_close" => lifecycle::handle_session_close(daemon, req),
         "vs_open" => lifecycle::handle_open(daemon, req),
+        "vs_goto" => lifecycle::handle_goto(daemon, req),
         "vs_close" => lifecycle::handle_close(daemon, req),
         "vs_view" => page_ops::handle_view(daemon, req),
         "vs_read" => page_ops::handle_read(daemon, req),

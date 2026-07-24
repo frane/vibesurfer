@@ -66,6 +66,24 @@ impl Store {
         Ok(())
     }
 
+    /// Update a page's URL after an in-place navigation (`vs_goto`), so
+    /// the persisted row and any later resurrection reflect the current
+    /// document.
+    pub fn update_page_url(&mut self, id: &str, url: &str) -> Result<()> {
+        let now = epoch_secs();
+        let n = self.conn().execute(
+            "UPDATE pages SET url=?2, last_seen_at=?3 WHERE id=?1",
+            params![id, url, now],
+        )?;
+        if n == 0 {
+            return Err(StoreError::NotFound {
+                kind: "page",
+                id: id.to_string(),
+            });
+        }
+        Ok(())
+    }
+
     pub fn get_page(&self, id: &str) -> Result<Option<Page>> {
         let mut stmt = self.conn().prepare("SELECT * FROM pages WHERE id=?1")?;
         let mut rows = stmt.query([id])?;

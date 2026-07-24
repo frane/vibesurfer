@@ -66,6 +66,13 @@ pub enum Command {
     /// 3. Open a page navigated to URL.
     #[command(visible_alias = "o")]
     Open { url: String },
+    /// Navigate an existing page to URL in place. Reuses the page's
+    /// web view instead of opening a new one, so it skips the
+    /// browser-process spin-up and is much faster for successive
+    /// navigations. Refs are fresh afterward (re-baselined).
+    #[command(visible_alias = "g")]
+    Goto { page: String, url: String },
+
     /// 4. Close a page.
     #[command(visible_alias = "c")]
     Close { page: String },
@@ -535,6 +542,14 @@ impl Command {
                     .arg(url.clone())
                     .flag_value("session", s)
             }
+            Self::Goto { page, url } => {
+                let s = require_session(session_id)?;
+                Request::new("vs_goto")
+                    .arg(page.clone())
+                    .arg(url.clone())
+                    .flag_value("session", s)
+            }
+
             Self::Close { page } => {
                 let s = require_session(session_id)?;
                 Request::new("vs_close")

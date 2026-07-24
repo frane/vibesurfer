@@ -66,6 +66,44 @@ pub(super) fn handle_open(daemon: &Daemon, req: &Request) -> String {
     }
 }
 
+pub(super) fn handle_goto(daemon: &Daemon, req: &Request) -> String {
+    let session_id = match require_session(req) {
+        Ok(s) => s,
+        Err(msg) => return format_error(ErrorCode::BadRequest, vec![msg]),
+    };
+    let Some(page_id) = req.args.first().cloned() else {
+        return format_error(
+            ErrorCode::BadRequest,
+            vec!["vs_goto: missing page id".into()],
+        );
+    };
+    let Some(url) = req.args.get(1).cloned() else {
+        return format_error(ErrorCode::BadRequest, vec!["vs_goto: missing url".into()]);
+    };
+    match daemon.navigate(&session_id, &page_id, &url) {
+        Ok(OpenResponse {
+            page_id,
+            token,
+            warnings,
+        }) => {
+            let mut head = ResponseHead::ok(token);
+            head.warnings = warnings;
+            let goto_wire = format!("{}{page_id}\n", head.encode());
+            // `--view` composite: append a fresh full view of the page
+            // after navigating, same as `vs_open --view`.
+            if req.flags.contains_key("view") {
+                let view_req = Request::new("vs_view")
+                    .arg(page_id.clone())
+                    .flag_value("session", session_id.clone());
+                let view_wire = super::page_ops::handle_view(daemon, &view_req);
+                return format!("{goto_wire}\n{view_wire}");
+            }
+            goto_wire
+        }
+        Err(e) => format_daemon_error(&e),
+    }
+}
+
 pub(super) fn handle_close(daemon: &Daemon, req: &Request) -> String {
     let session_id = match require_session(req) {
         Ok(s) => s,

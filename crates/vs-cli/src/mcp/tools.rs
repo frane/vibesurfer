@@ -49,6 +49,10 @@ fn base_tools() -> Vec<Value> {
             ("url", str_prop("URL to navigate to.", true)),
             ("capture", bool_prop("Attach a screenshot image block to the result. Default false; VS_THUMBS=1 forces on.", false)),
         ])),
+        tool("vs_goto", "Navigate an existing page to a URL in place, reusing its web view (much faster than vs_open for successive navigations). Refs are fresh afterward. Returns the page id + new token.", obj(&[
+            ("page", str_prop("Page id to navigate.", true)),
+            ("url", str_prop("URL to navigate to.", true)),
+        ])),
         tool("vs_close", "Close a page.", obj(&[
             ("page", str_prop("Page id (e.g. p_xxxxxx).", true)),
         ])),
@@ -244,6 +248,10 @@ pub fn build_cli(name: &str, args: &Value) -> Result<(Cli, CallOpts)> {
         },
         "vs_session_close" => Command::SessionClose,
         "vs_open" => Command::Open {
+            url: req_str(args, "url")?,
+        },
+        "vs_goto" => Command::Goto {
+            page: req_str(args, "page")?,
             url: req_str(args, "url")?,
         },
         "vs_close" => Command::Close {
