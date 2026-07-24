@@ -71,7 +71,7 @@ The auto-installer does both where supported. After `vs` is on your PATH:
 vs skill install
 ```
 
-It detects Claude Desktop, Claude Code, Cursor, Codex CLI, Gemini CLI, and OpenClaw, then writes the SKILL.md plus the MCP entry into each one. Agents that only support one of the two get only the relevant piece. Re-run after upgrading.
+It detects Claude Desktop, Claude Code, Cursor, Codex CLI, Gemini CLI, Google Antigravity, and OpenClaw, then writes the SKILL.md plus the MCP entry into each one. Agents that only support one of the two get only the relevant piece. Re-run after upgrading.
 
 ### Doing it by hand
 

@@ -6,6 +6,12 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `vs skill install` now targets Google Antigravity (the Gemini CLI's successor). It writes the native SKILL.md to `~/.gemini/skills/vibesurfer/SKILL.md` and the MCP server to `~/.gemini/config/mcp_config.json` (`mcpServers.vibesurfer = {command: "vs", args: ["mcp"]}`) — Antigravity reads plain SKILL.md with frontmatter, so no GEMINI.md/manifest hack (the legacy Gemini CLI target stays for anyone still on it). Detected via `~/.gemini/antigravity[-cli]` or an `antigravity` binary. Verified end-to-end against a real Antigravity install.
+
+### Fixed
+- The SKILL.md frontmatter `version` and `gemini-extension.json` version were stuck at 0.1.21 (hand-maintained, never bumped at release); now 0.1.27 and in the release runbook so they track going forward. This is user-visible in skill registries like Antigravity's.
+
 
 
 ## [v0.1.27] - 2026-07-16

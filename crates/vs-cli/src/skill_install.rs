@@ -2,9 +2,7 @@
 //!
 //! Each agent is targeted on two surfaces (when supported):
 //!
-//!   1. **Skill** — SKILL.md (or GEMINI.md for Gemini) at the agent's
-//!      conventional skills location, plus any sibling manifest the
-//!      agent expects (Gemini's `gemini-extension.json`).
+//!   1. **Skill** — SKILL.md at the agent's conventional skills\n//!      location. The legacy Gemini CLI is the one exception: it reads\n//!      GEMINI.md inside an extension dir plus a `gemini-extension.json`\n//!      manifest. Its successor, Google Antigravity, reads native\n//!      SKILL.md from `~/.gemini/skills/`.
 //!   2. **MCP** — an `mcpServers.vibesurfer = {command: "vs",
 //!      args: ["mcp"]}` entry in the agent's MCP config file. Most
 //!      agents share a JSON shape; Codex stores `[mcp_servers.<name>]`
@@ -132,6 +130,24 @@ fn agents() -> Vec<Agent> {
             mcp_format: McpFormat::Json,
         },
         Agent {
+            name: "antigravity",
+            always_write: false,
+            // Google Antigravity (the successor to the Gemini CLI) shares
+            // the ~/.gemini home but keeps its own dirs. Reads native
+            // SKILL.md (frontmatter + body) from ~/.gemini/skills/ and
+            // its MCP servers from ~/.gemini/config/mcp_config.json — no
+            // GEMINI.md/manifest hack the legacy Gemini CLI needs.
+            detect: || {
+                dir_exists(".gemini/antigravity")
+                    || dir_exists(".gemini/antigravity-cli")
+                    || on_path("antigravity")
+            },
+            skill_path: |h| Some(h.join(".gemini/skills/vibesurfer/SKILL.md")),
+            skill_post: None,
+            mcp_path: |h| Some(h.join(".gemini/config/mcp_config.json")),
+            mcp_format: McpFormat::Json,
+        },
+        Agent {
             name: "openclaw",
             always_write: false,
             detect: || dir_exists(".openclaw") || on_path("openclaw"),
@@ -213,7 +229,7 @@ pub fn run() -> Result<()> {
         eprintln!("  ! {f}");
     }
     if detected == 0 {
-        anyhow::bail!("no agent surfaces found; install one (Claude, Codex, Cursor, Gemini, OpenClaw) and retry");
+        anyhow::bail!("no agent surfaces found; install one (Claude, Codex, Cursor, Gemini, Antigravity, OpenClaw) and retry");
     }
     if !failures.is_empty() {
         anyhow::bail!("{} target(s) failed; see above", failures.len());
@@ -448,4 +464,35 @@ fn claude_desktop_dir_exists() -> bool {
             .parent()
             .is_some_and(Path::is_dir)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Antigravity is wired to its real config surface: native
+    /// SKILL.md under ~/.gemini/skills and MCP under
+    /// ~/.gemini/config/mcp_config.json (JSON `mcpServers`). Guards
+    /// against a regression if the catalog is reordered/edited.
+    #[test]
+    fn antigravity_target_paths() {
+        let home = Path::new("/home/u");
+        let ag = agents()
+            .into_iter()
+            .find(|a| a.name == "antigravity")
+            .expect("antigravity agent present");
+        assert_eq!(
+            (ag.skill_path)(home).unwrap(),
+            home.join(".gemini/skills/vibesurfer/SKILL.md")
+        );
+        assert_eq!(
+            (ag.mcp_path)(home).unwrap(),
+            home.join(".gemini/config/mcp_config.json")
+        );
+        assert!(matches!(ag.mcp_format, McpFormat::Json));
+        assert!(
+            ag.skill_post.is_none(),
+            "no GEMINI manifest for antigravity"
+        );
+    }
 }
