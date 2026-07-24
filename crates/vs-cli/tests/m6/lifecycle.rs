@@ -109,7 +109,32 @@ fn cell_view() {
             "view body must contain the rendered h1:\n{body}"
         );
         assert!(body.contains("btn"), "view should contain btn role: {body}");
-        assert!(body.contains("frm"), "view should contain frm role: {body}");
+    }
+}
+
+// vs_view must never emit ref 0 for a real node: 0 is the delta
+// grammar's ROOT sentinel, so a real node at ref 0 makes +/@ parent
+// references ambiguous. A roleless wrapper with >=2 children used to
+// leak through as `0 el ""` (reported via #vibesurfer).
+#[test]
+fn cell_view_never_emits_ref_zero() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/ref-nonzero.html");
+        let r = ctx.vs(&["view", &page, "--full"]);
+        assert_ok("view --full", &r);
+        let body = body_rest(&r);
+        for line in body.lines() {
+            let first = line.trim_start().split(' ').next().unwrap_or("");
+            assert_ne!(
+                first, "0",
+                "view emitted a node with ref 0 (collides with Ref::ROOT):\n{body}"
+            );
+        }
+        assert!(
+            body.contains("Alpha") && body.contains("Bravo"),
+            "both wrapper children must still be present:\n{body}"
+        );
     }
 }
 

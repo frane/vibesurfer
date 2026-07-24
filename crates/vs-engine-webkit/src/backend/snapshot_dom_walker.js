@@ -174,7 +174,11 @@
         if (!role && children.length === 0) return null;
         if (!role && children.length === 1) return children[0];
         const node = {
-            r: role ? refFor(el) : 0,
+            // Always allocate a real (non-zero) ref, even for roleless
+            // structural wrappers kept only to preserve tree shape.
+            // Ref 0 is the delta grammar's ROOT sentinel, so emitting it
+            // for a real node makes +/@ parent references ambiguous.
+            r: refFor(el),
             role: role || 'el',
             label: labelFor(el, role || 'el'),
             children,
