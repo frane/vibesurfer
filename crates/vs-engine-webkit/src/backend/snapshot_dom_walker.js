@@ -1,5 +1,32 @@
 (function() {
+    // Snapshot caching: a MutationObserver marks the page dirty on any
+    // DOM change. When the page is clean and we have a cached result,
+    // return it without re-walking the tree (the expensive part). The
+    // observer and cache die with the document on navigation, so a
+    // fresh page always walks once.
+    if (!window.__vsDirtyObserver) {
+        window.__vsDirty = true;
+        try {
+            window.__vsDirtyObserver = new MutationObserver(function() {
+                window.__vsDirty = true;
+            });
+            window.__vsDirtyObserver.observe(document.documentElement, {
+                subtree: true, childList: true, attributes: true, characterData: true,
+            });
+            // MutationObserver misses input `.value` changes (a property,
+            // not an attribute). Fills and real typing dispatch input and
+            // change, so mark dirty on those too, in the capture phase.
+            var __vsMark = function() { window.__vsDirty = true; };
+            document.addEventListener('input', __vsMark, true);
+            document.addEventListener('change', __vsMark, true);
+
+        } catch (e) { window.__vsDirty = true; }
+    }
+    if (window.__vsDirty === false && typeof window.__vsLastResult === 'string') {
+        return window.__vsLastResult;
+    }
     const ROLES = {
+
         'A': 'lnk', 'BUTTON': 'btn',
         'TEXTAREA': 'ta', 'SELECT': 'sel',
         'H1': 'hd', 'H2': 'hd', 'H3': 'hd', 'H4': 'hd', 'H5': 'hd', 'H6': 'hd',
@@ -188,5 +215,9 @@
         }
         return walk(document);
     };
-    return JSON.stringify(root);
+    var __vsResult = JSON.stringify(root);
+    window.__vsLastResult = __vsResult;
+    window.__vsDirty = false;
+    return __vsResult;
 })()
+
