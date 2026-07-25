@@ -166,12 +166,10 @@ fn record_inline(
     // that would block behind the still-running move on the main thread.
     let refresh_after = (fps / 8).max(2);
 
-    // Media clock (ms). Motion frames advance it by their *intended*
-    // duration (ignoring snapshot cost); idle frames advance it by real
-    // elapsed time. So moves play at natural speed while real pauses and
-    // page loads keep their true length.
-    let mut media_ms: u128 = 0;
-    let mut last_real = Instant::now();
+    // Real wall-clock start. Every frame is stamped with the actual time
+    // it was captured, so the recording is a faithful capture of what
+    // happened, at true speed. No re-timing.
+    let start = Instant::now();
     let mut caps: Vec<Cap> = Vec::new();
     let mut last_cursor: (f64, f64) = (0.0, 0.0);
     let mut have_cursor = false;
@@ -186,22 +184,17 @@ fn record_inline(
             caps.push(Cap { t_ms: 0, png, cx: last_cursor.0, cy: last_cursor.1, click: 0.0 });
         }
     }
-    last_real = Instant::now();
 
     while !stop.load(Ordering::Relaxed) && caps.len() < cap_limit {
         match rx.recv_timeout(frame_dt) {
             // A real input step captured this frame with the cursor on it.
-            // Advance the media clock by the intended duration, discarding
-            // the snapshot inflation that made the real move take longer.
             Ok(frame) => {
                 misses = 0;
                 idle_ticks = 0;
                 last_cursor = (frame.cx, frame.cy);
                 have_cursor = true;
-                media_ms += u128::from(frame.dt_ms.max(1));
-                last_real = Instant::now();
                 caps.push(Cap {
-                    t_ms: media_ms,
+                    t_ms: start.elapsed().as_millis(),
                     png: frame.png,
                     cx: frame.cx,
                     cy: frame.cy,
@@ -209,9 +202,7 @@ fn record_inline(
                 });
             }
             // Idle: no input running. Snapshot the live page so page loads
-            // and deliberate pauses are captured, cursor at its last spot.
-            // The snapshot itself (~50 ms) throttles this well below `fps`,
-            // which is fine — the resample step fills the gaps on hold.
+            // and pauses are captured too, cursor at its last spot.
             Err(RecvTimeoutError::Timeout) => {
                 idle_ticks += 1;
                 if idle_ticks < refresh_after {
@@ -221,11 +212,14 @@ fn record_inline(
                 match daemon.live_frame(page, max_width) {
                     Ok(png) => {
                         misses = 0;
-                        let now = Instant::now();
-                        media_ms += (now - last_real).as_millis();
-                        last_real = now;
                         let (cx, cy) = if have_cursor { last_cursor } else { (0.0, 0.0) };
-                        caps.push(Cap { t_ms: media_ms, png, cx, cy, click: 0.0 });
+                        caps.push(Cap {
+                            t_ms: start.elapsed().as_millis(),
+                            png,
+                            cx,
+                            cy,
+                            click: 0.0,
+                        });
                     }
                     Err(_) => {
                         misses += 1;
