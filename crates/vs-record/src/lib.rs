@@ -1,18 +1,22 @@
 //! Session video recording for vibesurfer.
 //!
 //! Turns a sequence of RGB frames (captured from a page) into a real
-//! AV1 video, encoded with rav1e in pure Rust so nothing external is
-//! required. Output is wrapped in an IVF container, the simplest
-//! widely-supported wrapper for raw AV1, playable by ffmpeg, VLC, and
-//! dav1d-based players. A later pass can add mp4 or webm muxing and an
-//! optional ffmpeg path for smaller files when ffmpeg is present.
+//! video. Two encoders, both cross-platform:
 //!
-//! The recorder is fed decoded RGB frames (see [`Recorder::push_png`]
-//! for the capture path, which decodes vibesurfer's PNG captures). All
-//! frames in one recording must share dimensions; the first frame
-//! fixes them and later frames of a different size are rejected.
+//! - [`H264Recorder`]: real-time H.264 via openh264 (built from vendored
+//!   source), muxed to MP4 with muxide (pure Rust). Fast enough to keep
+//!   up with capture and produces a file that plays everywhere with no
+//!   remux. This is the default.
+//! - [`Recorder`]: pure-Rust AV1 via rav1e in an IVF container. No build
+//!   tools, but far too slow for real time at screen resolution. Kept as
+//!   a portable fallback.
+//!
+//! Both are fed decoded RGB frames (see [`Recorder::push_png`] for the
+//! capture path, which decodes vibesurfer's PNG captures). All frames in
+//! one recording must share dimensions; the first fixes them.
 
 use std::io::{Seek as _, Write};
+use std::path::Path;
 
 use rav1e::config::SpeedSettings;
 use rav1e::prelude::*;
@@ -483,6 +487,141 @@ fn rgb_to_yuv420(rgb: &[u8], src_w: usize, w: usize, h: usize) -> (Vec<u8>, Vec<
         }
     }
     (y, u, v)
+}
+
+/// Real-time H.264 recorder: encodes RGB frames with openh264 and muxes
+/// them into an MP4 with muxide. Unlike [`Recorder`] (rav1e/AV1, far too
+/// slow for real time), this keeps up with capture and writes a file
+/// that plays natively everywhere without a remux. The MP4 is finalized
+/// on [`finish`](Self::finish); the muxer is built lazily on the first
+/// frame because it needs the SPS/PPS that the encoder emits with it.
+pub struct H264Recorder {
+    enc: openh264::encoder::Encoder,
+    width: usize,
+    height: usize,
+    /// Milliseconds each frame is shown (1000 / fps); the muxer PTS
+    /// advances by this per frame.
+    frame_ms: u32,
+    fps: f64,
+    path: std::path::PathBuf,
+    muxer: Option<muxide::api::Muxer<std::io::BufWriter<std::fs::File>>>,
+}
+
+impl H264Recorder {
+    /// Create a recorder for `width` x `height` at `fps`, writing an MP4
+    /// to `path` when finished. Dimensions are rounded down to even
+    /// (required by 4:2:0 chroma).
+    pub fn create(path: &Path, width: usize, height: usize, fps: u32) -> Result<Self> {
+        use openh264::encoder::{BitRate, EncoderConfig, FrameRate, UsageType};
+        let width = width & !1;
+        let height = height & !1;
+        if width == 0 || height == 0 {
+            return Err(RecordError::Frame("zero-sized recording"));
+        }
+        let fps = fps.max(1);
+        // Generous bitrate ceiling for sharp text; screen content is
+        // mostly static so the encoder spends far less on average.
+        #[allow(clippy::cast_possible_truncation)]
+        let bitrate = ((width as u64 * height as u64 * u64::from(fps)) / 5)
+            .clamp(1_000_000, 12_000_000) as u32;
+        let config = EncoderConfig::new()
+            // Screen-content mode keeps UI text and edges crisp.
+            .usage_type(UsageType::ScreenContentRealTime)
+            .max_frame_rate(FrameRate::from_hz(fps as f32))
+            .bitrate(BitRate::from_bps(bitrate));
+        let enc = openh264::encoder::Encoder::with_api_config(
+            openh264::OpenH264API::from_source(),
+            config,
+        )
+        .map_err(|e| RecordError::Encode(format!("openh264 init: {e:?}")))?;
+        Ok(Self {
+            enc,
+            width,
+            height,
+            frame_ms: 1000 / fps,
+            fps: f64::from(fps),
+            path: path.to_path_buf(),
+            muxer: None,
+        })
+    }
+
+    /// Encode and mux one RGB frame (`w*h*3` bytes). A source a couple
+    /// pixels larger than the recording size (even-rounding) is cropped;
+    /// a smaller one is rejected.
+    pub fn push_rgb(&mut self, w: usize, h: usize, rgb: &[u8]) -> Result<()> {
+        use openh264::formats::{RgbSliceU8, YUVBuffer};
+        if w < self.width || h < self.height {
+            return Err(RecordError::SizeMismatch {
+                got: (w, h),
+                want: (self.width, self.height),
+            });
+        }
+        if rgb.len() < w * h * 3 {
+            return Err(RecordError::Frame("rgb buffer too small"));
+        }
+        // Crop to the exact (even) encoder size if the source is larger.
+        let cropped;
+        let src: &[u8] = if w == self.width && h == self.height {
+            rgb
+        } else {
+            let mut out = Vec::with_capacity(self.width * self.height * 3);
+            for row in 0..self.height {
+                let start = row * w * 3;
+                out.extend_from_slice(&rgb[start..start + self.width * 3]);
+            }
+            cropped = out;
+            &cropped
+        };
+        let yuv = YUVBuffer::from_rgb8_source(RgbSliceU8::new(src, (self.width, self.height)));
+        let bitstream = self
+            .enc
+            .encode(&yuv)
+            .map_err(|e| RecordError::Encode(format!("openh264 encode: {e:?}")))?;
+        let annexb = bitstream.to_vec();
+        // A skipped frame (rate control) yields no bytes; drop it.
+        if annexb.is_empty() {
+            return Ok(());
+        }
+        if self.muxer.is_none() {
+            let cfg = muxide::codec::h264::extract_avc_config(&annexb)
+                .ok_or_else(|| RecordError::Encode("no SPS/PPS in first frame".into()))?;
+            let file = std::io::BufWriter::new(std::fs::File::create(&self.path)?);
+            let muxer = muxide::api::MuxerBuilder::new(file)
+                .video(
+                    muxide::api::VideoCodec::H264,
+                    self.width as u32,
+                    self.height as u32,
+                    self.fps,
+                )
+                .with_sps(cfg.sps)
+                .with_pps(cfg.pps)
+                // moov at the front so the file streams / plays while
+                // downloading (browsers need this for <video>).
+                .with_fast_start(true)
+                .build()
+                .map_err(|e| RecordError::Encode(format!("mp4 mux init: {e}")))?;
+            self.muxer = Some(muxer);
+        }
+        // muxide takes Annex-B and converts to AVCC internally (it also
+        // detects the IDR keyframe by scanning start codes), so pass the
+        // raw bitstream, not a pre-converted one.
+        self.muxer
+            .as_mut()
+            .expect("muxer set above")
+            .encode_video(&annexb, self.frame_ms)
+            .map_err(|e| RecordError::Encode(format!("mp4 write: {e}")))?;
+        Ok(())
+    }
+
+    /// Flush and finalize the MP4. Errors if no frame was ever pushed.
+    pub fn finish(mut self) -> Result<()> {
+        match self.muxer.take() {
+            Some(mut m) => m
+                .finish_in_place()
+                .map_err(|e| RecordError::Encode(format!("mp4 finish: {e}"))),
+            None => Err(RecordError::Frame("no frames encoded")),
+        }
+    }
 }
 
 #[cfg(test)]

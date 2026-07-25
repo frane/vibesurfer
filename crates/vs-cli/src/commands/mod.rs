@@ -439,10 +439,10 @@ pub enum Command {
         #[command(subcommand)]
         sub: PendingSub,
     },
-    /// Record a page to an AV1 video (IVF container, pure-Rust rav1e).
-    /// `start` spawns a background capture at `--fps`; `stop` flushes
-    /// and writes the file. Both print the output path. One recording
-    /// per page.
+    /// Record a page to an H.264 MP4 (real-time openh264, plays
+    /// everywhere). `start` spawns a background capture at `--fps`;
+    /// `stop` flushes and writes the file. Both print the output path.
+    /// One recording per page.
     #[command(visible_alias = "rec")]
     Record {
         #[command(subcommand)]

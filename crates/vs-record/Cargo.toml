@@ -12,9 +12,14 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-# asm disabled on purpose: keeps the encoder pure-Rust so CI needs no
-# nasm and the binary stays self-contained. Slower encode, portable.
+# rav1e: pure-Rust AV1, asm disabled so it needs no nasm. Portable
+# fallback encoder; slow (not real time at 1440p).
 rav1e = { version = "0.8", default-features = false }
+# openh264: real-time H.264, cross-platform. Built from vendored source
+# (needs nasm at build time) so the binary stays self-contained. Output
+# muxed to MP4 (muxide), which plays everywhere without a remux step.
+openh264 = "0.9"
+muxide = "0.2"
 image = { version = "0.25", default-features = false, features = ["png"] }
 thiserror = "2"
 
