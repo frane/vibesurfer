@@ -249,7 +249,7 @@ fn record_plumbing_validates_page_and_dedupes() {
 
     // First start registers the recorder; a second is rejected.
     let out = d.record_start(&s.session_id, &p.page_id, 10, 1280).unwrap();
-    assert!(out.ends_with(format!("rec-{}.ivf", p.page_id).as_str()));
+    assert!(out.ends_with(format!("rec-{}.mp4", p.page_id).as_str()));
     let err = d
         .record_start(&s.session_id, &p.page_id, 10, 1280)
         .unwrap_err();

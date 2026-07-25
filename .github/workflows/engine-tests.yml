@@ -24,6 +24,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - uses: ilammy/setup-nasm@v1  # openh264 (vs-record) builds from source
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build
@@ -41,6 +42,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - uses: ilammy/setup-nasm@v1  # openh264 (vs-record) builds from source
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install WebKitGTK 6 + Xvfb
@@ -73,6 +75,7 @@ jobs:
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
+      - uses: ilammy/setup-nasm@v1  # openh264 (vs-record) builds from source
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: M6 cell suite (sequential, real WebView2; SEH-traced)
