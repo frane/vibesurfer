@@ -108,10 +108,11 @@ fn base_tools() -> Vec<Value> {
         tool("vs_watch", "Mint a read-only live-view URL for a page (~1 fps screenshots while open, 30 min). Relay it so the human can watch the browser work. Returns `url\\t<URL>`.", obj(&[
             ("page", str_prop("Page id.", true)),
         ])),
-        tool("vs_record_start", "Start recording a page to an AV1 video (IVF). Captures frames until vs_record_stop. Returns `path\\t<file>`. One recording per page. Downscaled to 1440px wide by default.", obj(&[
+        tool("vs_record_start", "Start recording a page to an AV1 video (IVF). Captures frames until vs_record_stop. Returns `path\\t<file>`. One recording per page. Downscaled to 960px wide by default.", obj(&[
             ("page", str_prop("Page id.", true)),
             ("fps", uint_prop("Frames per second, clamped 1..=30. Default 24.", false)),
-            ("retina", bool_prop("Record at full device (retina) resolution instead of the 1440px downscale. Much larger and heavier.", false)),
+            ("width", uint_prop("Downscale width in px. Smaller = faster encode, lighter files. Default 960. Ignored with retina.", false)),
+            ("retina", bool_prop("Record at full device (retina) resolution instead of the downscale. Much larger and heavier.", false)),
         ])),
         tool("vs_record_stop", "Stop recording a page, flush the encoder, and return `path\\t<ivf file>`.", obj(&[
             ("page", str_prop("Page id.", true)),
@@ -449,6 +450,7 @@ pub fn build_cli(name: &str, args: &Value) -> Result<(Cli, CallOpts)> {
             sub: crate::commands::RecordSub::Start {
                 page: req_str(args, "page")?,
                 fps: opt_u32(args, "fps").unwrap_or(24),
+                width: opt_u32(args, "width"),
                 retina: opt_bool(args, "retina").unwrap_or(false),
             },
         },

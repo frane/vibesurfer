@@ -216,7 +216,14 @@ fn human_path(start: Point, end: Point, seed: u64) -> Vec<MouseStep> {
     for i in 0..=n_steps {
         #[allow(clippy::cast_precision_loss)]
         let t = (i as f64) / (n_steps as f64);
-        let p = cubic_bezier(start, cp1, cp2, end, t);
+        // Minimum-jerk velocity profile. Sampling the curve at uniform
+        // `t` gives near-constant speed, which reads as robotic; real
+        // pointer motion accelerates from rest, peaks mid-path, and eases
+        // to a stop. Smootherstep on the position parameter (time stays
+        // uniform) produces that bell-shaped velocity. te(0)=0, te(.5)=.5,
+        // te(1)=1, so endpoints and the seed-divergence midpoint hold.
+        let te = t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+        let p = cubic_bezier(start, cp1, cp2, end, te);
         // Overshoot ramp: push slightly past `end` along the direct
         // direction near the tail of the path, then correct. Only
         // applied for paths of meaningful length.
