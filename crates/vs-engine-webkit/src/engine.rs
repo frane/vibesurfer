@@ -300,6 +300,30 @@ pub enum EngineError {
 /// Convenience [`Result`] with [`EngineError`] as the error type.
 pub type EngineResult<T> = std::result::Result<T, EngineError>;
 
+/// One recorded frame streamed from the engine during automation.
+///
+/// `record_begin` sets up a channel; the backend then captures a frame
+/// at each input step (mouse move, keystroke, click settle) and sends
+/// it here without releasing the main thread. `cx`/`cy` are the cursor
+/// position in *frame pixels* (already scaled to the recorded frame's
+/// resolution) so the recorder can composite a pointer, and `click` is
+/// a ripple phase (`1.0` at press, decaying to `0.0`; `0.0` = no ripple).
+/// This is what lets a recording show real, continuous mouse motion
+/// instead of a before/after slideshow: the frames are grabbed *inside*
+/// the move loop, not by a poller that is blocked behind it.
+pub struct RecFrame {
+    pub png: Vec<u8>,
+    pub cx: f64,
+    pub cy: f64,
+    pub click: f32,
+    /// Intended elapsed time (ms) this frame represents on the input
+    /// path, independent of how long the synchronous capture actually
+    /// took. The recorder advances its media clock by this so motion
+    /// plays at natural speed even though each snapshot inflates the real
+    /// wall-clock of the move. `0` = use real elapsed time (idle frames).
+    pub dt_ms: u32,
+}
+
 /// The browser engine, as the daemon sees it.
 ///
 /// All methods are synchronous from the daemon's perspective. The
@@ -355,6 +379,32 @@ pub trait Engine {
     /// override it.
     fn capture_live(&mut self, page: PageHandle, _max_width: u32) -> EngineResult<PathBuf> {
         self.capture(page, CaptureScope::Viewport)
+    }
+
+    /// Begin streaming recording frames for `page`. While active, the
+    /// backend captures a frame at each input step (mouse move,
+    /// keystroke, click) and sends it on `tx` with the cursor position,
+    /// so the recorder composites a pointer and encodes smooth motion
+    /// without a poller racing the automation. `max_width` downscales
+    /// each frame (`0` = full resolution). The default is unsupported so
+    /// the daemon can fall back to time-based polling.
+    fn record_begin(
+        &mut self,
+        _page: PageHandle,
+        _tx: std::sync::mpsc::Sender<RecFrame>,
+        _fps: u32,
+        _max_width: u32,
+    ) -> EngineResult<()> {
+        Err(EngineError::Unsupported {
+            engine: "generic",
+            primitive: "record_begin",
+        })
+    }
+
+    /// Stop streaming recording frames for `page` (drops the sender so
+    /// the recorder's drain loop ends). Idempotent.
+    fn record_end(&mut self, _page: PageHandle) -> EngineResult<()> {
+        Ok(())
     }
 
     /// Compute layout boxes for `refs` at `page`.

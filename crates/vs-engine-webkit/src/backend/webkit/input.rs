@@ -29,6 +29,7 @@
 use std::time::Duration;
 
 use objc2::rc::Retained;
+use objc2::MainThreadMarker;
 use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType, NSWindow};
 use objc2_foundation::NSPoint;
 use objc2_web_kit::WKWebView;
@@ -176,6 +177,7 @@ pub(super) fn click_at_rect(
 /// path. Used by `cursor_op` (MoveTo / HoverAt) and as the drag
 /// trajectory between mouseDown and mouseUp.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub(super) fn move_along_path(
     web_view: &Retained<WKWebView>,
     window: &Retained<NSWindow>,
@@ -185,6 +187,7 @@ pub(super) fn move_along_path(
     mode: vs_humanize::InputMode,
     seed: u64,
     button_down: bool,
+    rec: Option<(&super::record::RecSink, MainThreadMarker)>,
 ) -> EngineResult<vs_humanize::Point> {
     let window_number = window.windowNumber();
     let make_event = |ty: NSEventType, p: vs_humanize::Point| -> EngineResult<Retained<NSEvent>> {
@@ -219,6 +222,9 @@ pub(super) fn move_along_path(
             }
             let now_ms = step.at.as_millis();
             let delta = now_ms.saturating_sub(prev_ms);
+            if let Some((sink, mtm)) = rec {
+                sink.step(web_view, mtm, step.point.x, step.point.y, delta as f64);
+            }
             if delta > 0 {
                 let _ = run_loop_until(
                     || false,
@@ -235,12 +241,16 @@ pub(super) fn move_along_path(
     } else {
         web_view.mouseMoved(&final_mv);
     }
+    if let Some((sink, mtm)) = rec {
+        sink.frame(web_view, mtm, end.x, end.y, 0.0, 16);
+    }
     Ok(end)
 }
 
 /// Trusted click at exact coordinates. Routes through `move_along_path`
 /// for the humanized lead-in, then dispatches the down/up pair at
 /// `target`.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn click_at_xy(
     web_view: &Retained<WKWebView>,
     window: &Retained<NSWindow>,
@@ -249,6 +259,7 @@ pub(super) fn click_at_xy(
     target: vs_humanize::Point,
     mode: vs_humanize::InputMode,
     seed: u64,
+    rec: Option<(&super::record::RecSink, MainThreadMarker)>,
 ) -> EngineResult<vs_humanize::Point> {
     let landed = move_along_path(
         web_view,
@@ -259,6 +270,7 @@ pub(super) fn click_at_xy(
         mode,
         seed,
         false,
+        rec,
     )?;
     let window_number = window.windowNumber();
     let loc = NSPoint::new(target.x, webview_height - target.y);
@@ -269,16 +281,26 @@ pub(super) fn click_at_xy(
     };
     let (down_ms, up_ms) = click_settle(mode);
     let down = make(NSEventType::LeftMouseDown)?;
+    if let Some((sink, mtm)) = rec {
+        sink.frame(web_view, mtm, target.x, target.y, 1.0, 60);
+    }
     web_view.mouseDown(&down);
     let _ = run_loop_until(|| false, Duration::from_millis(down_ms));
+    if let Some((sink, mtm)) = rec {
+        sink.frame(web_view, mtm, target.x, target.y, 0.55, down_ms as u32);
+    }
     let up = make(NSEventType::LeftMouseUp)?;
     web_view.mouseUp(&up);
     let _ = run_loop_until(|| false, Duration::from_millis(up_ms));
+    if let Some((sink, mtm)) = rec {
+        sink.frame(web_view, mtm, target.x, target.y, 0.2, up_ms as u32);
+    }
     Ok(landed)
 }
 
 /// Trusted drag from `start` to `target`: mouseDown at `start`, a
 /// humanized dragged path to `target`, mouseUp at `target`.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn drag_xy(
     web_view: &Retained<WKWebView>,
     window: &Retained<NSWindow>,
@@ -287,6 +309,7 @@ pub(super) fn drag_xy(
     target: vs_humanize::Point,
     mode: vs_humanize::InputMode,
     seed: u64,
+    rec: Option<(&super::record::RecSink, MainThreadMarker)>,
 ) -> EngineResult<vs_humanize::Point> {
     let window_number = window.windowNumber();
     let make = |ty: NSEventType, p: vs_humanize::Point| -> EngineResult<Retained<NSEvent>> {
@@ -307,6 +330,7 @@ pub(super) fn drag_xy(
         mode,
         seed,
         true,
+        rec,
     )?;
     let up = make(NSEventType::LeftMouseUp, target)?;
     web_view.mouseUp(&up);
@@ -330,6 +354,8 @@ pub(super) fn type_text(
     text: &str,
     mode: vs_humanize::InputMode,
     seed: u64,
+    rec: Option<(&super::record::RecSink, MainThreadMarker)>,
+    cursor: vs_humanize::Point,
 ) -> EngineResult<()> {
     let make_key = |ty: NSEventType, ch: &str| -> EngineResult<Retained<NSEvent>> {
         let chars = objc2_foundation::NSString::from_str(ch);
@@ -385,6 +411,9 @@ pub(super) fn type_text(
             };
             let wait = base_delay.saturating_sub(span).saturating_add(extra);
             let _ = run_loop_until(|| false, Duration::from_millis(wait.max(1)));
+            if let Some((sink, mtm)) = rec {
+                sink.frame(web_view, mtm, cursor.x, cursor.y, 0.0, (hold + wait) as u32);
+            }
         } else if i % 8 == 0 {
             // Robotic: still yield occasionally so a long string
             // doesn't starve the main thread.

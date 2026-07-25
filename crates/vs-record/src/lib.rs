@@ -62,6 +62,150 @@ pub fn png_to_scaled_rgb(png: &[u8], max_width: u32) -> Result<(usize, usize, Ve
     Ok((rgb.width() as usize, rgb.height() as usize, rgb.into_raw()))
 }
 
+/// macOS-style arrow pointer as a polygon, tip at the origin, in a
+/// nominal ~16 px tall unit space (scaled per frame). A headless snapshot
+/// never contains the OS pointer, so the recorder draws it from the
+/// position the engine reported for each frame — anti-aliased with a fill,
+/// a dark border, and a soft drop shadow so it reads like a real cursor
+/// rather than a blocky sprite.
+const ARROW: [(f64, f64); 7] = [
+    (0.0, 0.0),
+    (0.0, 15.6),
+    (3.6, 12.1),
+    (5.7, 17.4),
+    (7.7, 16.6),
+    (5.6, 11.2),
+    (10.2, 11.0),
+];
+/// Nominal arrow height in unit space (for border-width scaling).
+const ARROW_H: f64 = 15.6;
+
+/// Blend `(r,g,b)` at `alpha` (0..1) into the RGB frame at `(px,py)`.
+fn blend_px(rgb: &mut [u8], w: usize, h: usize, px: i64, py: i64, r: u8, g: u8, b: u8, alpha: f64) {
+    if px < 0 || py < 0 || px as usize >= w || py as usize >= h || alpha <= 0.0 {
+        return;
+    }
+    let a = alpha.clamp(0.0, 1.0);
+    let i = (py as usize * w + px as usize) * 3;
+    rgb[i] = (f64::from(r) * a + f64::from(rgb[i]) * (1.0 - a)) as u8;
+    rgb[i + 1] = (f64::from(g) * a + f64::from(rgb[i + 1]) * (1.0 - a)) as u8;
+    rgb[i + 2] = (f64::from(b) * a + f64::from(rgb[i + 2]) * (1.0 - a)) as u8;
+}
+
+/// Even-odd point-in-polygon test.
+fn in_poly(px: f64, py: f64, pts: &[(f64, f64)]) -> bool {
+    let mut inside = false;
+    let n = pts.len();
+    let mut j = n - 1;
+    for i in 0..n {
+        let (xi, yi) = pts[i];
+        let (xj, yj) = pts[j];
+        if (yi > py) != (yj > py) && px < (xj - xi) * (py - yi) / (yj - yi) + xi {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
+/// Coverage of pixel `(px,py)` by `pts`, via a 4x4 sub-sample grid, for
+/// anti-aliased edges.
+fn coverage(px: i64, py: i64, pts: &[(f64, f64)]) -> f64 {
+    let mut hit = 0u32;
+    for sy in 0..4 {
+        for sx in 0..4 {
+            let x = px as f64 + (sx as f64 + 0.5) / 4.0;
+            let y = py as f64 + (sy as f64 + 0.5) / 4.0;
+            if in_poly(x, y, pts) {
+                hit += 1;
+            }
+        }
+    }
+    f64::from(hit) / 16.0
+}
+
+/// Draw an expanding click ripple centred at `(cx,cy)`. `phase` runs
+/// `1.0` (just pressed, tight bright ring) down to `0.0` (gone).
+fn draw_click_ring(rgb: &mut [u8], w: usize, h: usize, cx: f64, cy: f64, phase: f32, scale: f64) {
+    let phase = f64::from(phase);
+    let base = 13.0 * scale;
+    let radius = base * (1.7 - phase);
+    let thickness = 2.2 * scale;
+    let alpha = phase * 0.6;
+    let lo = radius - thickness;
+    let hi = radius + thickness;
+    let x0 = (cx - hi).floor() as i64;
+    let x1 = (cx + hi).ceil() as i64;
+    let y0 = (cy - hi).floor() as i64;
+    let y1 = (cy + hi).ceil() as i64;
+    for py in y0..=y1 {
+        for px in x0..=x1 {
+            let dx = px as f64 + 0.5 - cx;
+            let dy = py as f64 + 0.5 - cy;
+            let d = (dx * dx + dy * dy).sqrt();
+            if d >= lo && d <= hi {
+                let edge = 1.0 - ((d - radius).abs() / thickness);
+                blend_px(rgb, w, h, px, py, 66, 133, 244, alpha * edge.max(0.0));
+            }
+        }
+    }
+}
+
+/// Anti-aliased arrow pointer with tip at `(cx,cy)`, scaled by `scale`.
+/// Draws a soft shadow, a dark border, then the white fill.
+fn draw_arrow(rgb: &mut [u8], w: usize, h: usize, cx: f64, cy: f64, scale: f64) {
+    // Fill polygon in frame space.
+    let fill: Vec<(f64, f64)> = ARROW.iter().map(|&(x, y)| (cx + x * scale, cy + y * scale)).collect();
+    // Centroid, to grow a slightly larger border polygon around the fill.
+    let (mut mx, mut my) = (0.0, 0.0);
+    for &(x, y) in &fill {
+        mx += x;
+        my += y;
+    }
+    mx /= fill.len() as f64;
+    my /= fill.len() as f64;
+    let grow = 1.05 / (ARROW_H * scale); // ~1 px of border
+    let border: Vec<(f64, f64)> = fill
+        .iter()
+        .map(|&(x, y)| (x + (x - mx) * grow, y + (y - my) * grow))
+        .collect();
+    let shadow: Vec<(f64, f64)> = border.iter().map(|&(x, y)| (x + 0.9, y + 1.2)).collect();
+
+    let pad = 3.0 * scale + 3.0;
+    let x0 = (cx - pad).floor() as i64;
+    let x1 = (cx + 13.0 * scale + pad).ceil() as i64;
+    let y0 = (cy - pad).floor() as i64;
+    let y1 = (cy + 20.0 * scale + pad).ceil() as i64;
+    for py in y0..=y1 {
+        for px in x0..=x1 {
+            let cs = coverage(px, py, &shadow);
+            if cs > 0.0 {
+                blend_px(rgb, w, h, px, py, 0, 0, 0, cs * 0.22);
+            }
+            let cb = coverage(px, py, &border);
+            if cb > 0.0 {
+                blend_px(rgb, w, h, px, py, 30, 30, 32, cb);
+            }
+            let cf = coverage(px, py, &fill);
+            if cf > 0.0 {
+                blend_px(rgb, w, h, px, py, 252, 252, 252, cf);
+            }
+        }
+    }
+}
+
+/// Composite the cursor (and any click ripple) onto an RGB frame at
+/// `(x,y)` frame pixels. The pointer scale tracks the frame width so it
+/// looks the same size across recording resolutions.
+pub fn composite_cursor(rgb: &mut [u8], w: usize, h: usize, x: f64, y: f64, click: f32) {
+    // ~20 px tall at 1440 wide, matching a real macOS pointer.
+    let scale = (w as f64 / 1440.0 * 1.15).max(1.0);
+    if click > 0.0 {
+        draw_click_ring(rgb, w, h, x, y, click, scale);
+    }
+    draw_arrow(rgb, w, h, x, y, scale);
+}
+
 /// Where encoded frames go. A file-backed recorder streams each frame
 /// straight to disk so memory stays at ~one frame regardless of how long
 /// the recording runs; the in-memory sink is only for tests.
@@ -124,16 +268,31 @@ impl Recorder {
         // lookahead anyway.
         let mut speed_settings = SpeedSettings::from_preset(speed.min(10));
         speed_settings.rdo_lookahead_frames = 1;
+        // Tile the frame so rav1e can encode it across threads. A screen
+        // recording at 1440p is far too heavy for the single-threaded
+        // encoder to keep up with real-time capture (~1 s/frame); tiling
+        // into a 2x2 grid and giving it real threads brings that down by
+        // roughly the tile count. Tiles cost a little quality and memory,
+        // both of which a headless screen recording can spare.
         let enc = EncoderConfig {
             width,
             height,
             time_base: Rational::new(1, u64::from(fps.max(1))),
             chroma_sampling: ChromaSampling::Cs420,
             low_latency: true,
+            tile_cols: 2,
+            tile_rows: 2,
+            // Lower base quantizer = higher quality. A screen recording of
+            // text needs sharp edges; the default (100) smears them. The
+            // encode is offline (after `stop`), so we can afford it.
+            quantizer: 70,
             speed_settings,
             ..Default::default()
         };
-        let cfg = Config::new().with_encoder_config(enc).with_threads(1);
+        let threads = std::thread::available_parallelism()
+            .map(|n| n.get().saturating_sub(1).clamp(2, 8))
+            .unwrap_or(4);
+        let cfg = Config::new().with_encoder_config(enc).with_threads(threads);
         let ctx: Context<u8> = cfg
             .new_context()
             .map_err(|e| RecordError::Encode(format!("{e:?}")))?;

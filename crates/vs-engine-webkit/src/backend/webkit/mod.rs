@@ -22,6 +22,7 @@ mod headless_window;
 mod input;
 mod inspector_handler;
 mod nav_delegate;
+mod record;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -99,6 +100,9 @@ pub struct WkBackend {
     pages: HashMap<PageHandle, WkPage>,
     next_handle: u64,
     captures_dir: Option<PathBuf>,
+    /// Active recording sinks by page. Present only while a `record`
+    /// session is running; the input primitives grab frames through it.
+    recording: HashMap<PageHandle, record::RecSink>,
 }
 
 impl WkBackend {
@@ -109,6 +113,7 @@ impl WkBackend {
             pages: HashMap::new(),
             next_handle: 1,
             captures_dir: None,
+            recording: HashMap::new(),
         }
     }
 
@@ -575,6 +580,25 @@ impl Engine for WkBackend {
         capture::capture_to_png(&web_view, page, captures_dir.as_deref(), mtm, width)
     }
 
+    fn record_begin(
+        &mut self,
+        page: PageHandle,
+        tx: std::sync::mpsc::Sender<crate::engine::RecFrame>,
+        fps: u32,
+        max_width: u32,
+    ) -> EngineResult<()> {
+        let p = self.page_mut(page)?;
+        let logical_width = p.web_view.frame().size.width;
+        self.recording
+            .insert(page, record::RecSink::new(tx, logical_width, max_width, fps));
+        Ok(())
+    }
+
+    fn record_end(&mut self, page: PageHandle) -> EngineResult<()> {
+        self.recording.remove(&page);
+        Ok(())
+    }
+
     fn layout(&mut self, page: PageHandle, refs: &[Ref]) -> EngineResult<Vec<LayoutBox>> {
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
@@ -749,9 +773,11 @@ impl Engine for WkBackend {
     }
 
     fn type_text(&mut self, page: PageHandle, text: &str, mode: InputMode) -> EngineResult<()> {
+        let mtm = self.mtm;
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
         let web_view_flush = p.web_view.clone();
+        let cursor = p.last_mouse.get();
         // Vary cadence per call so repeated typing is not identical.
         let seed = text
             .chars()
@@ -762,7 +788,8 @@ impl Engine for WkBackend {
             InputMode::Careful => vs_humanize::InputMode::Careful,
             InputMode::Robotic => vs_humanize::InputMode::Robotic,
         };
-        input::type_text(&web_view, text, humanize_mode, seed)?;
+        let rec = self.recording.get(&page).map(|s| (s, mtm));
+        input::type_text(&web_view, text, humanize_mode, seed, rec, cursor)?;
         // Drain rAF-deferred work (headless macOS pauses the frame
         // clock) so React state settles before the next primitive.
         let _ = eval_js_string(
@@ -774,17 +801,23 @@ impl Engine for WkBackend {
     }
 
     fn cursor_op(&mut self, page: PageHandle, op: CursorOp, mode: InputMode) -> EngineResult<()> {
-        let p = self.page_mut(page)?;
-        let web_view = p.web_view.clone();
-        let window = p.window.clone();
-        let webview_height = web_view.frame().size.height;
-        let start = p.last_mouse.get();
+        let mtm = self.mtm;
+        let (web_view, window, webview_height, start) = {
+            let p = self.page_mut(page)?;
+            (
+                p.web_view.clone(),
+                p.window.clone(),
+                p.web_view.frame().size.height,
+                p.last_mouse.get(),
+            )
+        };
         let humanize_mode = match mode {
             InputMode::Human => vs_humanize::InputMode::Human,
             InputMode::Careful => vs_humanize::InputMode::Careful,
             InputMode::Robotic => vs_humanize::InputMode::Robotic,
         };
         let seed = vs_humanize_seed_for_xy(op);
+        let rec = self.recording.get(&page).map(|s| (s, mtm));
         let landed = match op {
             CursorOp::MoveTo { x, y } | CursorOp::HoverAt { x, y } => input::move_along_path(
                 &web_view,
@@ -795,6 +828,7 @@ impl Engine for WkBackend {
                 humanize_mode,
                 seed,
                 false,
+                rec,
             )?,
             CursorOp::ClickAt { x, y } => input::click_at_xy(
                 &web_view,
@@ -804,6 +838,7 @@ impl Engine for WkBackend {
                 vs_humanize::Point { x, y },
                 humanize_mode,
                 seed,
+                rec,
             )?,
             CursorOp::Drag { x1, y1, x2, y2 } => {
                 let landed = input::drag_xy(
@@ -814,6 +849,7 @@ impl Engine for WkBackend {
                     vs_humanize::Point { x: x2, y: y2 },
                     humanize_mode,
                     seed,
+                    rec,
                 )?;
                 // After the OS-level drag completes, fire the HTML5
                 // DragEvent chain via JS so react-dnd / native HTML5 /
@@ -823,7 +859,9 @@ impl Engine for WkBackend {
                 landed
             }
         };
-        p.last_mouse.set(landed);
+        if let Some(p) = self.pages.get(&page) {
+            p.last_mouse.set(landed);
+        }
         Ok(())
     }
     fn capabilities(&self) -> EngineCapabilities {

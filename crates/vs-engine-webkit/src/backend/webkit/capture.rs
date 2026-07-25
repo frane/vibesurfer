@@ -24,6 +24,31 @@ pub(super) fn capture_to_png(
     mtm: MainThreadMarker,
     snapshot_width: Option<f64>,
 ) -> EngineResult<PathBuf> {
+    let bytes = snapshot_to_png_bytes(web_view, mtm, snapshot_width)?;
+    let dir = captures_dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| std::env::temp_dir().join("vibesurfer-webkit-captures"));
+    std::fs::create_dir_all(&dir).map_err(|e| EngineError::Other(e.to_string()))?;
+    let path = dir.join(format!(
+        "wk-{}-{}.png",
+        page.0,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    ));
+    std::fs::write(&path, &bytes).map_err(|e| EngineError::Other(e.to_string()))?;
+    Ok(path)
+}
+
+/// Snapshot the web view to in-memory PNG bytes. Shared by the on-disk
+/// `capture_to_png` and the recorder's inline frame grab (which runs
+/// many times per move and must not touch the filesystem per frame).
+pub(super) fn snapshot_to_png_bytes(
+    web_view: &WKWebView,
+    mtm: MainThreadMarker,
+    snapshot_width: Option<f64>,
+) -> EngineResult<Vec<u8>> {
     // Wrap the whole capture in a dedicated autorelease pool. Each
     // snapshot builds a large *uncompressed* TIFF (`TIFFRepresentation`,
     // ~w*h*4 bytes, tens of MB at retina) plus a PNG NSData, both
@@ -31,18 +56,14 @@ pub(super) fn capture_to_png(
     // serve loop's per-iteration pool doesn't drain between captures, so
     // those buffers piled up (~100 MB/s leak, measured). Draining per
     // capture keeps recording memory flat.
-    objc2::rc::autoreleasepool(|_| {
-        capture_to_png_inner(web_view, page, captures_dir, mtm, snapshot_width)
-    })
+    objc2::rc::autoreleasepool(|_| snapshot_to_png_bytes_inner(web_view, mtm, snapshot_width))
 }
 
-fn capture_to_png_inner(
+fn snapshot_to_png_bytes_inner(
     web_view: &WKWebView,
-    page: PageHandle,
-    captures_dir: Option<&Path>,
     mtm: MainThreadMarker,
     snapshot_width: Option<f64>,
-) -> EngineResult<PathBuf> {
+) -> EngineResult<Vec<u8>> {
     let slot: Rc<RefCell<Option<Result<Retained<NSImage>, String>>>> = Rc::new(RefCell::new(None));
     let slot_for_block = slot.clone();
     let block = RcBlock::new(move |image: *mut NSImage, error: *mut NSError| {
@@ -115,19 +136,6 @@ fn capture_to_png_inner(
         unsafe { bitmap.representationUsingType_properties(NSBitmapImageFileType::PNG, &empty) }
             .ok_or_else(|| EngineError::Other("PNG encoding returned nil".into()))?;
 
-    let dir = captures_dir
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| std::env::temp_dir().join("vibesurfer-webkit-captures"));
-    std::fs::create_dir_all(&dir).map_err(|e| EngineError::Other(e.to_string()))?;
-    let path = dir.join(format!(
-        "wk-{}-{}.png",
-        page.0,
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0)
-    ));
     let bytes: &[u8] = unsafe { png_data.as_bytes_unchecked() };
-    std::fs::write(&path, bytes).map_err(|e| EngineError::Other(e.to_string()))?;
-    Ok(path)
+    Ok(bytes.to_vec())
 }

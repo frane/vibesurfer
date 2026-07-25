@@ -251,6 +251,20 @@ impl EngineRuntime {
         self.dispatch(move |e| e.capture_live(page, max_width))
     }
 
+    pub fn record_begin(
+        &self,
+        page: PageHandle,
+        tx: std::sync::mpsc::Sender<crate::engine::RecFrame>,
+        fps: u32,
+        max_width: u32,
+    ) -> EngineResult<()> {
+        self.dispatch(move |e| e.record_begin(page, tx, fps, max_width))
+    }
+
+    pub fn record_end(&self, page: PageHandle) -> EngineResult<()> {
+        self.dispatch(move |e| e.record_end(page))
+    }
+
     pub fn layout(&self, page: PageHandle, refs: Vec<Ref>) -> EngineResult<Vec<LayoutBox>> {
         self.dispatch(move |e| e.layout(page, &refs))
     }

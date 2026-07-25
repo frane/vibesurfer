@@ -510,8 +510,8 @@ pub enum RecordSub {
     /// Start recording a page. Captures until `vs record stop <page>`.
     Start {
         page: String,
-        /// Frames per second (clamped 1..=30). Default 4.
-        #[arg(long, default_value_t = 4)]
+        /// Frames per second (clamped 1..=30). Default 24.
+        #[arg(long, default_value_t = 24)]
         fps: u32,
         /// Record at full device (retina) resolution instead of the
         /// default 1440px-wide downscale. Much larger and heavier.

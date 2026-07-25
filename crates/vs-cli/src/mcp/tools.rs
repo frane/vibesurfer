@@ -110,7 +110,7 @@ fn base_tools() -> Vec<Value> {
         ])),
         tool("vs_record_start", "Start recording a page to an AV1 video (IVF). Captures frames until vs_record_stop. Returns `path\\t<file>`. One recording per page. Downscaled to 1440px wide by default.", obj(&[
             ("page", str_prop("Page id.", true)),
-            ("fps", uint_prop("Frames per second, clamped 1..=30. Default 4.", false)),
+            ("fps", uint_prop("Frames per second, clamped 1..=30. Default 24.", false)),
             ("retina", bool_prop("Record at full device (retina) resolution instead of the 1440px downscale. Much larger and heavier.", false)),
         ])),
         tool("vs_record_stop", "Stop recording a page, flush the encoder, and return `path\\t<ivf file>`.", obj(&[
@@ -448,7 +448,7 @@ pub fn build_cli(name: &str, args: &Value) -> Result<(Cli, CallOpts)> {
         "vs_record_start" => Command::Record {
             sub: crate::commands::RecordSub::Start {
                 page: req_str(args, "page")?,
-                fps: opt_u32(args, "fps").unwrap_or(4),
+                fps: opt_u32(args, "fps").unwrap_or(24),
                 retina: opt_bool(args, "retina").unwrap_or(false),
             },
         },

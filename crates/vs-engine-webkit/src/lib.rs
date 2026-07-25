@@ -49,7 +49,7 @@ pub mod test_support;
 pub use backend::auth::normalize as normalize_auth_blob;
 pub use engine::{
     ActTarget, Action, AuthBlob, CaptureScope, Engine, EngineCapabilities, EngineError,
-    EngineResult, LayoutBox, PageHandle, Viewport, WaitCondition,
+    EngineResult, LayoutBox, PageHandle, RecFrame, Viewport, WaitCondition,
 };
 pub use inspector::{
     ConsoleEntry, ConsoleLevel, Header, NetworkEntry, NetworkStatus, RequestDetail, RingBuffer,
