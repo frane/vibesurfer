@@ -84,7 +84,14 @@ impl RecSink {
     /// accumulated to hit the target frame rate; the emitted frame's
     /// `dt_ms` is that accumulated intended time, so playback ignores the
     /// snapshot cost and moves at natural speed.
-    pub(super) fn step(&self, web_view: &WKWebView, mtm: MainThreadMarker, x: f64, y: f64, dt_ms: f64) {
+    pub(super) fn step(
+        &self,
+        web_view: &WKWebView,
+        mtm: MainThreadMarker,
+        x: f64,
+        y: f64,
+        dt_ms: f64,
+    ) {
         let a = self.accum.get() + dt_ms;
         if a >= self.frame_ms {
             self.accum.set(0.0);

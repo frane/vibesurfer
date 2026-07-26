@@ -26,6 +26,13 @@
 //! `getBoundingClientRect()` in client (top-left origin). We flip Y
 //! against the webview's height to bridge the two.
 
+// Event timing casts (ms deltas to f64/u32) are deliberate and bounded.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+
 use std::time::Duration;
 
 use objc2::rc::Retained;
@@ -176,7 +183,6 @@ pub(super) fn click_at_rect(
 /// Trusted MouseMoved sequence from `start` to `end` along a Bezier
 /// path. Used by `cursor_op` (MoveTo / HoverAt) and as the drag
 /// trajectory between mouseDown and mouseUp.
-#[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn move_along_path(
     web_view: &Retained<WKWebView>,

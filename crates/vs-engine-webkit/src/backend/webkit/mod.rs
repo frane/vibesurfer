@@ -589,8 +589,10 @@ impl Engine for WkBackend {
     ) -> EngineResult<()> {
         let p = self.page_mut(page)?;
         let logical_width = p.web_view.frame().size.width;
-        self.recording
-            .insert(page, record::RecSink::new(tx, logical_width, max_width, fps));
+        self.recording.insert(
+            page,
+            record::RecSink::new(tx, logical_width, max_width, fps),
+        );
         Ok(())
     }
 

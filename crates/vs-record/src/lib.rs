@@ -15,6 +15,20 @@
 //! capture path, which decodes vibesurfer's PNG captures). All frames in
 //! one recording must share dimensions; the first fixes them.
 
+// This crate is pixel and signal math: cursor rasterization, RGB<->YUV,
+// bitrate/dimension arithmetic. The numeric casts are deliberate and
+// range-checked by construction, so the pedantic cast lints are noise
+// here.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless,
+    clippy::too_many_arguments,
+    clippy::many_single_char_names,
+    clippy::map_unwrap_or
+)]
+
 use std::io::{Seek as _, Write};
 use std::path::Path;
 
@@ -159,7 +173,10 @@ fn draw_click_ring(rgb: &mut [u8], w: usize, h: usize, cx: f64, cy: f64, phase: 
 /// Draws a soft shadow, a dark border, then the white fill.
 fn draw_arrow(rgb: &mut [u8], w: usize, h: usize, cx: f64, cy: f64, scale: f64) {
     // Fill polygon in frame space.
-    let fill: Vec<(f64, f64)> = ARROW.iter().map(|&(x, y)| (cx + x * scale, cy + y * scale)).collect();
+    let fill: Vec<(f64, f64)> = ARROW
+        .iter()
+        .map(|&(x, y)| (cx + x * scale, cy + y * scale))
+        .collect();
     // Centroid, to grow a slightly larger border polygon around the fill.
     let (mut mx, mut my) = (0.0, 0.0);
     for &(x, y) in &fill {

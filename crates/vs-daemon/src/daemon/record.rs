@@ -9,6 +9,16 @@
 //! support fall back to the original time-based polling capture. One
 //! recording per page.
 
+// Timing/geometry arithmetic (ms clocks, frame counts, cursor rests).
+// The casts are deliberate and bounded; the pedantic lints are noise.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::too_many_lines,
+    clippy::ptr_arg
+)]
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
@@ -181,7 +191,13 @@ fn record_inline(
         if let Ok((w, h, _)) = vs_record::png_to_scaled_rgb(&png, max_width) {
             last_cursor = rest_cursor(w, h);
             have_cursor = true;
-            caps.push(Cap { t_ms: 0, png, cx: last_cursor.0, cy: last_cursor.1, click: 0.0 });
+            caps.push(Cap {
+                t_ms: 0,
+                png,
+                cx: last_cursor.0,
+                cy: last_cursor.1,
+                click: 0.0,
+            });
         }
     }
 
@@ -209,23 +225,20 @@ fn record_inline(
                     continue;
                 }
                 idle_ticks = 0;
-                match daemon.live_frame(page, max_width) {
-                    Ok(png) => {
-                        misses = 0;
-                        let (cx, cy) = if have_cursor { last_cursor } else { (0.0, 0.0) };
-                        caps.push(Cap {
-                            t_ms: start.elapsed().as_millis(),
-                            png,
-                            cx,
-                            cy,
-                            click: 0.0,
-                        });
-                    }
-                    Err(_) => {
-                        misses += 1;
-                        if misses > give_up_after {
-                            break;
-                        }
+                if let Ok(png) = daemon.live_frame(page, max_width) {
+                    misses = 0;
+                    let (cx, cy) = if have_cursor { last_cursor } else { (0.0, 0.0) };
+                    caps.push(Cap {
+                        t_ms: start.elapsed().as_millis(),
+                        png,
+                        cx,
+                        cy,
+                        click: 0.0,
+                    });
+                } else {
+                    misses += 1;
+                    if misses > give_up_after {
+                        break;
                     }
                 }
             }
@@ -240,7 +253,7 @@ fn record_inline(
     // Resample the captured timeline to an exact `fps` and encode once.
     // Decoding/compositing is cached per source frame so a held frame
     // (e.g. a 2 s pause) isn't decoded on every output tick.
-    let step_ms = (1000 / u64::from(fps.max(1))) as u128;
+    let step_ms = u128::from(1000 / u64::from(fps.max(1)));
     let end_ms = caps.last().map_or(0, |c| c.t_ms);
     let mut rec: Option<vs_record::H264Recorder> = None;
     let mut src = 0usize;
@@ -262,7 +275,14 @@ fn record_inline(
             cached_i = Some(src);
         }
         let mut rgb = base.clone();
-        vs_record::composite_cursor(&mut rgb, bw, bh, caps[src].cx, caps[src].cy, caps[src].click);
+        vs_record::composite_cursor(
+            &mut rgb,
+            bw,
+            bh,
+            caps[src].cx,
+            caps[src].cy,
+            caps[src].click,
+        );
         if rec.is_none() {
             rec = Some(
                 // Offline encode: a slower preset for sharper text/edges.
