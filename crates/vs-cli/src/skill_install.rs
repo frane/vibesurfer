@@ -2,7 +2,7 @@
 //!
 //! Each agent is targeted on two surfaces (when supported):
 //!
-//!   1. **Skill** — SKILL.md at the agent's conventional skills\n//!      location. The legacy Gemini CLI is the one exception: it reads\n//!      GEMINI.md inside an extension dir plus a `gemini-extension.json`\n//!      manifest. Its successor, Google Antigravity, reads native\n//!      SKILL.md from `~/.gemini/skills/`.
+//!   1. **Skill** — SKILL.md at the agent's conventional skills\n//!      location. Google Antigravity reads native SKILL.md from\n//!      `~/.gemini/skills/`.
 //!   2. **MCP** — an `mcpServers.vibesurfer = {command: "vs",
 //!      args: ["mcp"]}` entry in the agent's MCP config file. Most
 //!      agents share a JSON shape; Codex stores `[mcp_servers.<name>]`
@@ -39,10 +39,10 @@ struct Agent {
     /// not an installed binary).
     always_write: bool,
     detect: fn() -> bool,
-    /// Where the SKILL.md (or GEMINI.md) goes. None if the agent
+    /// Where the SKILL.md goes. None if the agent
     /// has no skill surface.
     skill_path: fn(home: &Path) -> Option<PathBuf>,
-    /// Optional sibling-manifest writer (Gemini extension manifest).
+    /// Optional post-write hook to emit a sibling manifest, if needed.
     /// Called after the skill file is written.
     skill_post: Option<fn(skill_path: &Path) -> Result<()>>,
     /// Where the MCP config file lives. None if the agent has no MCP
@@ -119,24 +119,13 @@ fn agents() -> Vec<Agent> {
             mcp_format: McpFormat::Json,
         },
         Agent {
-            name: "gemini",
-            always_write: false,
-            detect: || dir_exists(".gemini") || on_path("gemini"),
-            // Gemini reads agent context from GEMINI.md inside an
-            // extension dir, not SKILL.md.
-            skill_path: |h| Some(h.join(".gemini/extensions/vibesurfer/GEMINI.md")),
-            skill_post: Some(write_gemini_manifest),
-            mcp_path: |h| Some(h.join(".gemini/settings.json")),
-            mcp_format: McpFormat::Json,
-        },
-        Agent {
             name: "antigravity",
             always_write: false,
-            // Google Antigravity (the successor to the Gemini CLI) shares
-            // the ~/.gemini home but keeps its own dirs. Reads native
-            // SKILL.md (frontmatter + body) from ~/.gemini/skills/ and
-            // its MCP servers from ~/.gemini/config/mcp_config.json — no
-            // GEMINI.md/manifest hack the legacy Gemini CLI needs.
+            // Google Antigravity supersedes the Gemini CLI as Google's
+            // agent surface. It shares the ~/.gemini home but keeps its
+            // own dirs: native SKILL.md (frontmatter + body) from
+            // ~/.gemini/skills/ and MCP servers from
+            // ~/.gemini/config/mcp_config.json.
             detect: || {
                 dir_exists(".gemini/antigravity")
                     || dir_exists(".gemini/antigravity-cli")
@@ -229,7 +218,7 @@ pub fn run() -> Result<()> {
         eprintln!("  ! {f}");
     }
     if detected == 0 {
-        anyhow::bail!("no agent surfaces found; install one (Claude, Codex, Cursor, Gemini, Antigravity, OpenClaw) and retry");
+        anyhow::bail!("no agent surfaces found; install one (Claude, Codex, Cursor, Antigravity, OpenClaw) and retry");
     }
     if !failures.is_empty() {
         anyhow::bail!("{} target(s) failed; see above", failures.len());
@@ -250,30 +239,8 @@ fn write_skill(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn write_gemini_manifest(skill_path: &Path) -> Result<()> {
-    let dir = skill_path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("no parent for {}", skill_path.display()))?;
-    let manifest = dir.join("gemini-extension.json");
-    let body = format!(
-        r#"{{
-  "name": "vibesurfer",
-  "version": "{ver}",
-  "contextFileName": "{ctx}"
-}}
-"#,
-        ver = env!("CARGO_PKG_VERSION"),
-        ctx = skill_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("GEMINI.md"),
-    );
-    std::fs::write(&manifest, body).with_context(|| format!("write {}", manifest.display()))?;
-    Ok(())
-}
-
 // ============================================================================
-// MCP — JSON apply (Claude Code / Desktop, Cursor, Gemini)
+// MCP — JSON apply (Claude Code / Desktop, Cursor, Antigravity)
 // ============================================================================
 
 fn mcp_server_value() -> Value {

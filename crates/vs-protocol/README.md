@@ -80,7 +80,7 @@ The auto-installer does both where supported. After `vs` is on your PATH:
 vs skill install
 ```
 
-It detects Claude Desktop, Claude Code, Cursor, Codex CLI, Gemini CLI, Google Antigravity, and OpenClaw, then writes the SKILL.md plus the MCP entry into each one. Agents that only support one of the two get only the relevant piece. Re-run after upgrading.
+It detects Claude Desktop, Claude Code, Cursor, Codex CLI, Google Antigravity, and OpenClaw, then writes the SKILL.md plus the MCP entry into each one. Agents that only support one of the two get only the relevant piece. Re-run after upgrading.
 
 ### Doing it by hand
 
@@ -110,14 +110,6 @@ Codex uses TOML with the same shape under `[mcp_servers.vibesurfer]`. The JSON f
 ```
 
 Resolves `.claude-plugin/marketplace.json` at the repo root and `plugin/.claude-plugin/plugin.json`.
-
-**Gemini extension** wires the MCP server plus the GEMINI.md context file:
-
-```
-gemini extensions install https://github.com/frane/vibesurfer
-```
-
-Reads `gemini-extension.json` at the repo root.
 
 
 ## Not detected as automated
