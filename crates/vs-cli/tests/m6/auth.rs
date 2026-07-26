@@ -199,6 +199,10 @@ fn cell_auth_import_and_load() {
 // credential, authenticates, and verifies the assertion signature
 // against the registered public key with WebCrypto; VERIFIED proves the
 // authenticator is cryptographically correct.
+// The virtual WebAuthn authenticator is installed via the Cocoa
+// backend's document-start user script; wpe/webview2 don't yet, so this
+// cell is macOS-only for now.
+#[cfg(target_os = "macos")]
 #[test]
 fn cell_auth_webauthn_virtual_authenticator() {
     for _ in each_available_backend() {

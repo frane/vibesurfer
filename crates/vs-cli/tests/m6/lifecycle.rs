@@ -181,6 +181,9 @@ fn cell_status() {
 
 // vs_goto navigates a page in place: same page id, new document,
 // fresh refs. Much cheaper than open (reuses the web view).
+// goto is implemented on the Cocoa backend; wpe/webview2 return
+// ENGINE_UNSUPPORTED, so this cell is macOS-only for now.
+#[cfg(target_os = "macos")]
 #[test]
 fn cell_goto_navigates_in_place() {
     for _ in each_available_backend() {
@@ -213,6 +216,9 @@ fn cell_goto_navigates_in_place() {
 
 // vs flow run executes a JSON step list in one session, threading
 //  and  so scripted flows need no manual id/token plumbing.
+// This flow exercises goto, which is macOS-only for now (wpe/webview2
+// return ENGINE_UNSUPPORTED).
+#[cfg(target_os = "macos")]
 #[test]
 fn cell_flow_run_executes_steps() {
     for _ in each_available_backend() {
