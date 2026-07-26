@@ -10,7 +10,6 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
-cp skills/vibesurfer/SKILL.md plugin/GEMINI.md
 cp skills/vibesurfer/SKILL.md crates/vs-cli/SKILL.md
 cp skills/vibesurfer/SKILL.md plugin/skills/vibesurfer/SKILL.md
 cp skills/debug-failed-action/SKILL.md plugin/skills/debug-failed-action/SKILL.md

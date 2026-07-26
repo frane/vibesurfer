@@ -64,4 +64,10 @@ impl NavDelegate {
         let this = Self::alloc(mtm).set_ivars(NavDelegateIvars { slot });
         unsafe { msg_send![super(this), init] }
     }
+
+    /// Shared navigation-result slot. Reused by `navigate` to await an
+    /// in-place navigation on the same delegate.
+    pub(super) fn slot(&self) -> NavSlot {
+        self.ivars().slot.clone()
+    }
 }

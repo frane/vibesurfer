@@ -22,7 +22,7 @@ impl Daemon {
             .with_args(String::new(), tokens::args_hash("vs_view", &[]));
         self.audit_call(ctx, |ctx| {
             let engine_handle = self.engine_handle_for(session_id, page_id)?;
-            let tree = self.inner.engine.snapshot(engine_handle)?;
+            let (tree, console) = self.inner.engine.snapshot_with_console(engine_handle)?;
             let (token, form) = {
                 let mut sessions = self.inner.sessions.lock().expect("poisoned");
                 let page = sessions
@@ -44,6 +44,7 @@ impl Daemon {
                 token,
                 form,
                 warnings: Vec::new(),
+                console,
             })
         })
     }
@@ -86,6 +87,7 @@ impl Daemon {
             args_hash,
             args_redacted,
             group_label,
+            mode,
         } = call;
         let ctx = AuditCtx::new("vs_act", &session_id)
             .with_page(&page_id)
@@ -129,6 +131,7 @@ impl Daemon {
                 ctx.result_summary = Some("idem".into());
                 return Ok(ActResponse {
                     token,
+                    form: crate::page_state::ViewForm::NoChange,
                     warnings: vec![Warning::new(WarningCode::IdempotentHit)],
                 });
             }
@@ -154,9 +157,11 @@ impl Daemon {
                     ));
                 }
             }
-            self.inner.engine.act(engine_handle, target, action)?;
-            let tree = self.inner.engine.snapshot(engine_handle)?;
-            let (token, _form) = {
+            let tree = self
+                .inner
+                .engine
+                .act_and_snapshot(engine_handle, target, action, mode)?;
+            let (token, form) = {
                 let mut sessions = self.inner.sessions.lock().expect("poisoned");
                 let page = sessions
                     .get_mut(&session_id)
@@ -172,7 +177,11 @@ impl Daemon {
             store.update_page_token(&page_id, &token.to_string(), "engine", None)?;
             drop(store);
 
-            Ok(ActResponse { token, warnings })
+            Ok(ActResponse {
+                token,
+                form,
+                warnings,
+            })
         })
     }
 
@@ -204,6 +213,33 @@ impl Daemon {
             }
             Ok(FindResponse { hits })
         })
+    }
+
+    /// Apply a fresh engine snapshot to the page, advance its delta
+    /// baseline, persist the new token, and return (token, delta).
+    /// Every returned token is therefore a valid pre-image and every
+    /// caller advances the baseline. Shared by wait; act and cursor_op
+    /// inline the same steps.
+    fn advance_baseline(
+        &self,
+        session_id: &str,
+        page_id: &str,
+        tree: vs_protocol::Tree,
+    ) -> Result<(StateToken, crate::page_state::ViewForm)> {
+        let (token, form) = {
+            let mut sessions = self.inner.sessions.lock().expect("poisoned");
+            let page = sessions
+                .get_mut(session_id)
+                .ok_or_else(|| DaemonError::UnknownSession(session_id.to_string()))?
+                .pages
+                .get_mut(page_id)
+                .ok_or_else(|| DaemonError::UnknownPage(page_id.to_string()))?;
+            page.apply_snapshot(tree)
+        };
+        let mut store = self.inner.store.lock().expect("poisoned");
+        store.update_page_token(page_id, &token.to_string(), "engine", None)?;
+        drop(store);
+        Ok((token, form))
     }
 
     pub fn wait(
@@ -242,9 +278,11 @@ impl Daemon {
                     let tree = self.inner.engine.snapshot(engine_handle)?;
                     let token = tokens::compute(&tree, &url, page_id);
                     if baseline != Some(token) {
+                        let (token, _form) = self.advance_baseline(session_id, page_id, tree)?;
                         ctx.after_token = Some(token);
                         return Ok(WaitResponse { token });
                     }
+
                     if std::time::Instant::now() + poll > deadline {
                         return Err(DaemonError::Engine(
                             vs_engine_webkit::EngineError::Timeout {
@@ -257,9 +295,8 @@ impl Daemon {
                 }
             }
             self.inner.engine.wait(engine_handle, cond, budget)?;
-            let token = self
-                .current_token(session_id, page_id)
-                .unwrap_or(StateToken::ZERO);
+            let tree = self.inner.engine.snapshot(engine_handle)?;
+            let (token, _form) = self.advance_baseline(session_id, page_id, tree)?;
             ctx.after_token = Some(token);
             Ok(WaitResponse { token })
         })
@@ -279,6 +316,16 @@ impl Daemon {
     fn render_status(&self, session_id_opt: Option<&str>) -> Result<String> {
         use std::fmt::Write as _;
         let mut out = String::new();
+        // Daemon identity line: version + protocol level + the
+        // capability flags a client can auto-negotiate (so testsurfer
+        // et al. can enable actDeltas / clickVia without pinning to a
+        // hardcoded daemon version). Always first, both modes.
+        writeln!(
+            out,
+            "daemon\tversion={}\tproto=1\tflags=actDeltas,clickVia",
+            env!("CARGO_PKG_VERSION")
+        )
+        .ok();
         let sessions = self.inner.sessions.lock().expect("poisoned");
         if let Some(sid) = session_id_opt {
             let s = sessions

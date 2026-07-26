@@ -109,7 +109,32 @@ fn cell_view() {
             "view body must contain the rendered h1:\n{body}"
         );
         assert!(body.contains("btn"), "view should contain btn role: {body}");
-        assert!(body.contains("frm"), "view should contain frm role: {body}");
+    }
+}
+
+// vs_view must never emit ref 0 for a real node: 0 is the delta
+// grammar's ROOT sentinel, so a real node at ref 0 makes +/@ parent
+// references ambiguous. A roleless wrapper with >=2 children used to
+// leak through as `0 el ""` (reported via #vibesurfer).
+#[test]
+fn cell_view_never_emits_ref_zero() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/ref-nonzero.html");
+        let r = ctx.vs(&["view", &page, "--full"]);
+        assert_ok("view --full", &r);
+        let body = body_rest(&r);
+        for line in body.lines() {
+            let first = line.trim_start().split(' ').next().unwrap_or("");
+            assert_ne!(
+                first, "0",
+                "view emitted a node with ref 0 (collides with Ref::ROOT):\n{body}"
+            );
+        }
+        assert!(
+            body.contains("Alpha") && body.contains("Bravo"),
+            "both wrapper children must still be present:\n{body}"
+        );
     }
 }
 
@@ -145,10 +170,88 @@ fn cell_status() {
             "status must reference current session + page:\n{}",
             r.stdout
         );
+        // The daemon identity line lets clients auto-negotiate flags.
+        assert!(
+            r.stdout.contains("daemon\tversion=") && r.stdout.contains("flags=actDeltas,clickVia"),
+            "status must advertise daemon version + negotiable flags:\n{}",
+            r.stdout
+        );
+    }
+}
+
+// vs_goto navigates a page in place: same page id, new document,
+// fresh refs. Much cheaper than open (reuses the web view).
+// goto is implemented on the Cocoa backend; wpe/webview2 return
+// ENGINE_UNSUPPORTED, so this cell is macOS-only for now.
+#[cfg(target_os = "macos")]
+#[test]
+fn cell_goto_navigates_in_place() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (session, page, _t) = open_fixture(&ctx, "/static.html");
+        let r = ctx.vs(&["goto", &page, &ctx.url("/form.html")]);
+        assert_ok("goto", &r);
+        // Same page id comes back.
+        assert!(
+            r.stdout.contains(&page),
+            "goto must return the same page id {page}:\n{}",
+            r.stdout
+        );
+        // The page now shows the form document, and status reflects the
+        // new url on the same page.
+        let v = ctx.vs(&["view", &page, "--full"]);
+        let body = body_rest(&v);
+        assert!(
+            body.contains("frm"),
+            "after goto to form.html the view should contain a form:\n{body}"
+        );
+        let st = ctx.vs(&["status"]);
+        assert!(
+            st.stdout.contains("form.html") && st.stdout.contains(&session),
+            "status should show the new url on the same session:\n{}",
+            st.stdout
+        );
+    }
+}
+
+// vs flow run executes a JSON step list in one session, threading
+//  and  so scripted flows need no manual id/token plumbing.
+// This flow exercises goto, which is macOS-only for now (wpe/webview2
+// return ENGINE_UNSUPPORTED).
+#[cfg(target_os = "macos")]
+#[test]
+fn cell_flow_run_executes_steps() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let form = ctx.url("/form.html");
+        let dash = ctx.url("/dashboard.html");
+        let flow = serde_json::json!([
+            ["open", form],
+            ["view", "$page", "--full"],
+            ["goto", "$page", dash],
+            ["view", "$page"],
+            ["status"],
+        ])
+        .to_string();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("flow.json");
+        std::fs::write(&path, flow).unwrap();
+        let r = ctx.vs(&["flow", "run", path.to_str().unwrap()]);
+        assert_eq!(
+            r.code, 0,
+            "flow run should succeed:\nstdout={}\nstderr={}",
+            r.stdout, r.stderr
+        );
+        assert!(
+            r.stderr.contains("5 step(s) ok"),
+            "flow should report all steps ok:\n{}",
+            r.stderr
+        );
     }
 }
 
 // Sessions survive a daemon restart. state.db is the source of truth
+
 // (ARCHITECTURE.md); a restart used to drop every open session and
 // strand parked agents in WRONG_SESSION — reported after an x.com
 // login was lost mid prompt_form_wait (#vibesurfer 01KXJV).

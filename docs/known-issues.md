@@ -29,7 +29,11 @@ Honest list of behaviors that aren't yet what they should be. Each entry has a s
 
 ## Daemon shutdown ordering
 
-- On macOS, `vs serve` ctrl-c is handled on the tokio worker thread; the main thread's `NSRunLoop` loop only exits when the engine channel closes (i.e., when the daemon and runtime are dropped). In practice this is one extra runloop slice (~50ms). Acceptable; flagged here so it isn't surprising in a profiling trace.
+- On macOS, `vs serve` ctrl-c is handled on the tokio worker thread; the main thread's `NSRunLoop` loop only exits when the engine channel closes (i.e., when the daemon and runtime are dropped). In practice this is one extra runloop slice (~4ms). Acceptable; flagged here so it isn't surprising in a profiling trace.
+
+## WebAuthn / passkeys (virtual authenticator)
+
+- `vs auth webauthn <page>` installs a virtual authenticator on macOS (WKWebView) and any WebKit backend that can inject a document-start script. It is a pure-JS software authenticator (`webauthn_virtual.js`) that overrides `navigator.credentials.create`/`.get` with an ES256 (P-256) authenticator built on WebCrypto — no CDP, no WebDriver, `navigator.webdriver` stays undefined, so it is the same "injected script, no automation surface" model as the snapshot walker. Registration and login round-trip against a real relying party. Limits: ES256 only (the common passkey algorithm); "none" attestation, so a relying party that demands direct/packed attestation with a trusted AAGUID will reject it; credentials live in-page (per document, shared across a create/get in the same session). For sites where those limits bite, `vs auth import` remains the fallback (log in with a passkey elsewhere, import the session). Linux WPE / Windows WebView2 return `ENGINE_UNSUPPORTED` for `enable_webauthn` until their document-start injection is wired.
 
 ## Caller-key sessions vs command substitution
 

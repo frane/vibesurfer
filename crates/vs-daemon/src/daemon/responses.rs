@@ -33,6 +33,9 @@ pub struct ViewResponse {
     pub token: StateToken,
     pub form: ViewForm,
     pub warnings: Vec<Warning>,
+    /// Console entries read in the same engine hop as the snapshot, so
+    /// the `? console_error` warning costs no extra dispatch.
+    pub console: Vec<vs_engine_webkit::inspector::ConsoleEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,12 +56,14 @@ pub struct ActCall {
     pub before_token: StateToken,
     pub args_hash: String,
     pub args_redacted: String,
+    pub mode: vs_engine_webkit::engine::InputMode,
     pub group_label: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActResponse {
     pub token: StateToken,
+    pub form: ViewForm,
     pub warnings: Vec<Warning>,
 }
 

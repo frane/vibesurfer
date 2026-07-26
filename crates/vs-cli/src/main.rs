@@ -43,6 +43,14 @@ fn main() -> std::process::ExitCode {
         return std::process::ExitCode::SUCCESS;
     }
 
+    if matches!(cli.command, Command::Flow { .. }) {
+        if let Err(e) = vs_cli::flow::run_flow(&cli) {
+            eprintln!("error: {e:#}");
+            return std::process::ExitCode::from(1);
+        }
+        return std::process::ExitCode::SUCCESS;
+    }
+
     if let Command::Skill { sub, .. } = &cli.command {
         if sub.as_deref() == Some("install") {
             if let Err(e) = vs_cli::skill_install::run() {

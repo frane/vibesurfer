@@ -16,12 +16,14 @@ workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-vs-protocol = { path = "../vs-protocol", version = "0.1.28" }
-vs-store = { path = "../vs-store", version = "0.1.28" }
-vs-engine-webkit = { path = "../vs-engine-webkit", version = "0.1.28" }
+vs-protocol = { path = "../vs-protocol", version = "0.2.0" }
+vs-store = { path = "../vs-store", version = "0.2.0" }
+vs-record = { path = "../vs-record", version = "0.2.0" }
+vs-engine-webkit = { path = "../vs-engine-webkit", version = "0.2.0" }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "io-util", "macros", "signal", "time"] }
 blake3 = "1"
 thiserror = "2"
+base64 = "0.22.1"
 ring = "0.17"
 anyhow = "1"
 tracing = "0.1"
@@ -33,4 +35,4 @@ interprocess = { version = "2.4.2", features = ["tokio"] }
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "io-util", "macros", "time", "test-util"] }
-vs-engine-webkit = { path = "../vs-engine-webkit", version = "0.1.28", features = ["test-support"] }
+vs-engine-webkit = { path = "../vs-engine-webkit", version = "0.2.0", features = ["test-support"] }

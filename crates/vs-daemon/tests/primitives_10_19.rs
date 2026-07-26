@@ -14,8 +14,15 @@ use vs_store::{AnnotationTarget, MasterKey, Store};
 fn make_daemon() -> (Daemon, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path().join("state.db")).unwrap();
-    let runtime =
-        EngineRuntime::spawn(|| Ok(Box::new(TestEngine::new()) as Box<dyn Engine>)).unwrap();
+    // Isolate the TestEngine's capture files per test. Without this the
+    // engine writes `test-engine-<page>-<seq>.png` into the shared
+    // system temp dir, and parallel tests (page handle 1, seq 1) race
+    // the same path — a flaky corrupt-PNG read.
+    let cap_dir = dir.path().join("engine-captures");
+    let runtime = EngineRuntime::spawn(move || {
+        Ok(Box::new(TestEngine::new().with_capture_dir(&cap_dir)) as Box<dyn Engine>)
+    })
+    .unwrap();
     let daemon = Daemon::new(store, Arc::new(runtime))
         .with_captures_dir(dir.path().join("captures"))
         .with_skills_dir(dir.path().join("skills"))
@@ -104,6 +111,7 @@ fn log_filters_by_group() {
         before_token: v.token,
         args_hash: h,
         args_redacted: "click 4".into(),
+        mode: vs_engine_webkit::engine::InputMode::Careful,
         group_label: Some("login-flow".into()),
     })
     .unwrap();
@@ -219,4 +227,38 @@ fn auth_save_without_master_key_errors() {
     let _v = d.view(&s.session_id, &p.page_id, false).unwrap();
     let err = d.auth_save(&s.session_id, &p.page_id, "x").unwrap_err();
     assert!(matches!(err, vs_daemon::DaemonError::BadRequest(_)));
+}
+
+#[test]
+fn record_plumbing_validates_page_and_dedupes() {
+    // Frame encoding is covered by vs-record's own unit tests (it needs
+    // real page-sized frames; TestEngine only stubs a 1x1 PNG). Here we
+    // pin the daemon plumbing: page validation, one-recording-per-page,
+    // and teardown so a page can be recorded again after stop.
+    let (d, _dir) = make_daemon();
+    let s = d.session_open(None).unwrap();
+    let p = d.open(&s.session_id, "https://x").unwrap();
+
+    // An unaddressable page cannot be recorded.
+    assert!(d
+        .record_start(&s.session_id, "no-such-page", 10, 1280)
+        .is_err());
+    // Stopping a page that is not recording is a BadRequest.
+    let err = d.record_stop(&p.page_id).unwrap_err();
+    assert!(matches!(err, vs_daemon::DaemonError::BadRequest(_)));
+
+    // First start registers the recorder; a second is rejected.
+    let out = d.record_start(&s.session_id, &p.page_id, 10, 1280).unwrap();
+    assert!(out.ends_with(format!("rec-{}.mp4", p.page_id).as_str()));
+    let err = d
+        .record_start(&s.session_id, &p.page_id, 10, 1280)
+        .unwrap_err();
+    assert!(matches!(err, vs_daemon::DaemonError::BadRequest(_)));
+
+    // Stop tears the recorder down (the stub-frame encode may error;
+    // we only assert the handle is released).
+    let _ = d.record_stop(&p.page_id);
+    // Which means the page can be recorded again.
+    let _ = d.record_start(&s.session_id, &p.page_id, 10, 1280).unwrap();
+    let _ = d.record_stop(&p.page_id);
 }

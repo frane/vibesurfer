@@ -513,3 +513,34 @@ fn cell_type_trusted_into_contenteditable() {
         );
     }
 }
+
+// The robotic click fast path (reduced settle, no path synthesis)
+// still registers a real trusted click. Guards the perf change from
+// making clicks so fast they do not deliver. macOS native path only.
+#[cfg(target_os = "macos")]
+#[test]
+fn cell_act_click_robotic_still_trusted() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/click-trust.html");
+        let r = ctx.vs(&["view", &page, "--full"]);
+        let body = body_rest(&r);
+        let token = token_of(&r);
+        let n = ref_for(&body, "btn", "Click me");
+        let r = ctx.vs(&[
+            "act",
+            &page,
+            &n.to_string(),
+            "click",
+            "--mode=robotic",
+            &format!("--token={token}"),
+        ]);
+        assert_ok("robotic click", &r);
+        let trusted = eval_js(&ctx, &page, "String(window.__vsLastClickTrusted)");
+        assert_eq!(
+            trusted.trim(),
+            "true",
+            "robotic fast-path click must still register and be trusted; got {trusted:?}",
+        );
+    }
+}

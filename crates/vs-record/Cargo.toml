@@ -1,0 +1,27 @@
+[package]
+name = "vs-record"
+description = "AV1 session-video encoding for vibesurfer (pure-Rust, rav1e)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# rav1e: pure-Rust AV1, asm disabled so it needs no nasm. Portable
+# fallback encoder; slow (not real time at 1440p).
+rav1e = { version = "0.8", default-features = false }
+# openh264: real-time H.264, cross-platform. Built from vendored source
+# (needs nasm at build time) so the binary stays self-contained. Output
+# muxed to MP4 (muxide), which plays everywhere without a remux step.
+openh264 = "0.9"
+muxide = "0.2"
+image = { version = "0.25", default-features = false, features = ["png"] }
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

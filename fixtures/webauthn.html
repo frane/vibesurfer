@@ -1,0 +1,38 @@
+<!doctype html><html><head><meta charset=utf-8><title>webauthn test</title></head>
+<body><h1 id=status>idle</h1>
+<script>
+function bufToB64url(buf){const b=new Uint8Array(buf);let s='';for(let i=0;i<b.length;i++)s+=String.fromCharCode(b[i]);return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
+async function run(){
+  try{
+    const chal = crypto.getRandomValues(new Uint8Array(32));
+    const cred = await navigator.credentials.create({publicKey:{
+      rp:{id:location.hostname,name:'test'}, user:{id:new Uint8Array([1,2,3,4]),name:'u',displayName:'U'},
+      challenge: chal, pubKeyCredParams:[{type:'public-key',alg:-7}]
+    }});
+    if(!cred || cred.type!=='public-key'){ document.getElementById('status').textContent='FAIL:create'; return; }
+    // authenticate
+    const chal2 = crypto.getRandomValues(new Uint8Array(32));
+    const assertion = await navigator.credentials.get({publicKey:{
+      challenge: chal2, rpId:location.hostname,
+      allowCredentials:[{type:'public-key',id:cred.rawId}]
+    }});
+    if(!assertion || !assertion.response.signature){ document.getElementById('status').textContent='FAIL:get'; return; }
+    // Verify the assertion signature against the registered public key.
+    // Reconstruct the signed bytes: authenticatorData || SHA-256(clientDataJSON).
+    const ad = new Uint8Array(assertion.response.authenticatorData);
+    const cdHash = new Uint8Array(await crypto.subtle.digest('SHA-256', assertion.response.clientDataJSON));
+    const signed = new Uint8Array(ad.length + cdHash.length); signed.set(ad,0); signed.set(cdHash,ad.length);
+    // Pull the public key out of the attestationObject we stored at create time via the shim keystore.
+    const kp = window.__vsWebAuthn.creds[0].publicKey;
+    // Convert DER signature back to raw r||s for WebCrypto verify.
+    const der = new Uint8Array(assertion.response.signature);
+    function derToRaw(der){let o=2; if(der[1]&0x80)o+=der[1]&0x7f; o++; let rlen=der[o++]; let r=der.slice(o,o+rlen); o+=rlen; o++; let slen=der[o++]; let s=der.slice(o,o+slen);
+      function pad(x){ if(x.length>32)x=x.slice(x.length-32); const p=new Uint8Array(32); p.set(x,32-x.length); return p;} 
+      const out=new Uint8Array(64); out.set(pad(r),0); out.set(pad(s),32); return out;}
+    const raw = derToRaw(der);
+    const ok = await crypto.subtle.verify({name:'ECDSA',hash:'SHA-256'}, kp, raw, signed);
+    document.getElementById('status').textContent = ok ? 'VERIFIED' : 'FAIL:verify';
+  }catch(e){ document.getElementById('status').textContent='ERR:'+e.message; }
+}
+run();
+</script></body></html>

@@ -39,6 +39,8 @@ Wire form is `vs_<name>` (over the socket); CLI subcommand is `<name>` with hyph
 | 1 | `vs session-open [--policy=NAME]` | Create a session. Writes `~/.vibesurfer/active-session`. |
 | 2 | `vs session-close` | Close the active session. |
 | 3 | `vs open <URL>` | Open a page in the session. |
+| - | `vs goto <PAGE> <URL>` (`g`) | Navigate an existing page in place. Reuses the web view, so it skips browser spin-up and is much faster than open for successive navigations. Refs are fresh afterward. |
+| - | `vs flow run <FILE>` | Run a declarative flow: a JSON array of steps, each an array of `vs` args. Runs in one session; `$page` expands to the last opened/navigated page, `$token` to its current token (fetched as needed). Stops at the first failing step. |
 | 4 | `vs close <PAGE>` | Close a page. |
 
 ### Read (5–6, 13–14)
@@ -95,6 +97,8 @@ But a credential YOU own is not a secret to protect from yourself: a test user y
 
 **No tty — MCP or non-interactive CLI (v0.1.12+ MCP, v0.1.20+ CLI):** without a controlling tty (`vs mcp`, or `vs prompt-input` from an agent's shell), the call enqueues a pending entry on the daemon and parks waiting for the value. The local user runs `vs pending list` (alias `pe ls`) to see what's queued and `vs pending fulfill [<id>]` (`pe f`) to type the value at their local tty — `vs pending fulfill` with no id auto-picks the single pending entry. `vs pending cancel <id>` (`pe c`) aborts. Once fulfilled, the agent's MCP tool call returns the new state token exactly as it would have for the local-CLI path.
 
+`vs prompt-scan <PAGE> [--open]` (alias `ps`) shows the human a live view of the headless page (a QR code, a 2FA screen) and blocks until they press Enter, so out-of-band steps like scanning a TOTP enrollment QR work. Over MCP, compose the existing tools instead: call `vs_watch` for the live URL, relay it, then `vs_prompt_confirm` to wait.
+
 **Browser entry (v0.1.23+):** the human alternative to the tty. `vs pending url` (`pe u`) mints a single-use loopback URL; the page lists every pending entry as one form (secret fields masked, password managers can autofill), and one submit fulfills them all. `vs prompt-form` prints such a URL automatically. Whole-login flow over MCP: call `vs_prompt_form` with all fields (`[{ref, label, secret}]`) — it returns `form` + `url` immediately; relay the URL to the user verbatim; then call `vs_prompt_form_wait` with the form id, which parks until submit and fills every ref in order. Values go browser → daemon → page; the agent never sees them. URLs are 127.0.0.1-only, 256-bit-nonce capability links, valid 10 minutes, consumed on submit.
 ### Search / extract (8, 10, 18)
 
@@ -115,8 +119,14 @@ In MCP Apps hosts (Claude Desktop, ChatGPT, VS Code Copilot), calling `vs_watch`
 
 `vs watch <PAGE> [--open]` prints a read-only live-view URL (`http://127.0.0.1:…/live/<nonce>`, 30 min): an HTML page showing ~1 fps screenshots of the page while open. Relay it so the human can watch the browser work; MCP tool `vs_watch` returns the same `url` line. Frames are transient — no capture files, no audit rows.
 
+`vs record start <PAGE> [--fps N] [--width PX] [--retina]` records the page to an H.264 MP4 while the agent works, capturing a frame at every mouse move, keystroke, and click so the video shows continuous motion (the cursor is composited on, since a headless snapshot carries no OS pointer). Frames are downscaled to 960px wide by default; `--width` picks another size, `--retina` keeps full device resolution. `vs record stop <PAGE>` (alias `rec`) flushes and prints the path (`~/.vibesurfer/captures/rec-<PAGE>.mp4`). `--fps` is 1..=30 (default 24). Encoded in real time with openh264 and muxed by pure-Rust muxide, so the MP4 plays natively everywhere with no ffmpeg. One recording per page. MCP: `vs_record_start` (`{page, fps?, width?}`) and `vs_record_stop` (`{page}`), both returning `path\t<file>`.
+
+
 Over MCP, `vs_act` and `vs_open` take `capture: true` to attach a ~400px JPEG thumbnail image block to the result (~100 vision tokens) — visual confirmation without a separate capture round-trip. `VS_THUMBS=1` on the `vs mcp` process forces it on for every act/open (set it in the MCP server config for a visual transcript; costs tokens per action). CLI equivalent: chain `vs capture` when needed.
 | 19 | `vs auth save\|load\|list\|clear <PAGE> <NAME>` | Per-origin cookie+storage blob, AES-256-GCM at rest. |
+| - | `vs auth import <NAME> <FILE>` | Import a session captured elsewhere (passkey fallback): log in with a passkey in a real browser, export cookies + local/session storage as a v2 auth-blob JSON, import it, then `auth load` injects it into a headless page. |
+| - | `vs auth webauthn <PAGE>` | Install a virtual WebAuthn authenticator on the page: a pure-JS ES256 software authenticator (no CDP) so passkey registration and login work headlessly. Enable it, then navigate/act as normal; the site's own create()/get() succeed. |
+
 
 ## Optimistic concurrency
 

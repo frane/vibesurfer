@@ -18,6 +18,7 @@ mod engine_ops;
 mod lifecycle;
 mod page_ops;
 pub mod pending;
+mod record;
 mod store_ops;
 pub mod webentry;
 
@@ -71,6 +72,7 @@ pub(crate) struct Inner {
     pub(crate) master_key: Option<vs_store::MasterKey>,
     pub(crate) pending: Arc<pending::PendingQueue>,
     pub(crate) webentry: Mutex<Option<Arc<webentry::WebEntry>>>,
+    pub(crate) recorders: Mutex<HashMap<String, record::RecorderHandle>>,
 }
 
 impl Daemon {
@@ -88,6 +90,7 @@ impl Daemon {
                 master_key: None,
                 pending: pending::PendingQueue::new(),
                 webentry: Mutex::new(None),
+                recorders: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -434,7 +437,7 @@ impl Daemon {
         page_id: &str,
         op: vs_engine_webkit::engine::CursorOp,
         mode: vs_engine_webkit::engine::InputMode,
-    ) -> Result<vs_protocol::StateToken> {
+    ) -> Result<(vs_protocol::StateToken, crate::page_state::ViewForm)> {
         let ctx = AuditCtx::new("vs_cursor_op", session_id)
             .with_page(page_id)
             .with_args(
@@ -448,9 +451,22 @@ impl Daemon {
             self.require_session(session_id)?;
             let handle = self.engine_handle_for(session_id, page_id)?;
             self.inner.engine.cursor_op(handle, op, mode)?;
-            let token = self.current_token(session_id, page_id)?;
+            let tree = self.inner.engine.snapshot(handle)?;
+            let (token, form) = {
+                let mut sessions = self.inner.sessions.lock().expect("poisoned");
+                let page = sessions
+                    .get_mut(session_id)
+                    .ok_or_else(|| DaemonError::UnknownSession(session_id.to_string()))?
+                    .pages
+                    .get_mut(page_id)
+                    .ok_or_else(|| DaemonError::UnknownPage(page_id.to_string()))?;
+                page.apply_snapshot(tree)
+            };
             ctx.after_token = Some(token);
-            Ok(token)
+            let mut store = self.inner.store.lock().expect("poisoned");
+            store.update_page_token(page_id, &token.to_string(), "engine", None)?;
+            drop(store);
+            Ok((token, form))
         })
     }
 
@@ -645,6 +661,7 @@ impl Daemon {
             before_token,
             args_hash: crate::tokens::args_hash("vs_act", &["fill".into(), "***".into()]),
             args_redacted: "fill ***".into(),
+            mode: vs_engine_webkit::engine::InputMode::Careful,
             group_label: group,
         };
         let resp = self.act(call)?;
@@ -670,7 +687,9 @@ impl Daemon {
         let weak = Arc::downgrade(&self.inner);
         let frame: webentry::FrameFn = Arc::new(move |page: &str| {
             let inner = weak.upgrade().ok_or_else(|| "daemon gone".to_string())?;
-            Daemon { inner }.live_frame(page).map_err(|e| e.to_string())
+            Daemon { inner }
+                .live_frame(page, 1440)
+                .map_err(|e| e.to_string())
         });
         let s = webentry::WebEntry::start(self.inner.pending.clone(), frame)?;
         *guard = Some(s.clone());
@@ -703,7 +722,7 @@ impl Daemon {
     /// NOT retained by the captures-dir policy: the caller must
     /// delete it after reading. Serves `/live/<nonce>/frame` and the
     /// wire op `vs_frame` (MCP panel frames and action thumbnails).
-    pub fn live_frame_path(&self, page_id: &str) -> Result<std::path::PathBuf> {
+    pub fn live_frame_path(&self, page_id: &str, max_width: u32) -> Result<std::path::PathBuf> {
         let session_id = {
             let sessions = self.inner.sessions.lock().expect("poisoned");
             sessions
@@ -713,15 +732,12 @@ impl Daemon {
         };
         let handle = self.engine_handle_for(&session_id, page_id)?;
         std::fs::create_dir_all(&self.inner.captures_dir).map_err(DaemonError::Io)?;
-        Ok(self
-            .inner
-            .engine
-            .capture(handle, vs_engine_webkit::CaptureScope::Viewport)?)
+        Ok(self.inner.engine.capture_live(handle, max_width)?)
     }
 
     /// [`Self::live_frame_path`], read and deleted: PNG bytes.
-    pub(crate) fn live_frame(&self, page_id: &str) -> Result<Vec<u8>> {
-        let path = self.live_frame_path(page_id)?;
+    pub(crate) fn live_frame(&self, page_id: &str, max_width: u32) -> Result<Vec<u8>> {
+        let path = self.live_frame_path(page_id, max_width)?;
         let bytes = std::fs::read(&path).map_err(DaemonError::Io)?;
         let _ = std::fs::remove_file(&path);
         Ok(bytes)
@@ -796,6 +812,7 @@ impl Daemon {
                 before_token,
                 args_hash: crate::tokens::args_hash("vs_act", &["fill".into(), "***".into()]),
                 args_redacted: "fill ***".into(),
+                mode: vs_engine_webkit::engine::InputMode::Careful,
                 group_label: entry.group.clone(),
             })?;
             token = Some(resp.token);

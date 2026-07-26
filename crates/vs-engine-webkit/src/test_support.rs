@@ -130,6 +130,20 @@ impl Engine for TestEngine {
         Ok(handle)
     }
 
+    fn navigate(&mut self, page: PageHandle, url: &str) -> EngineResult<()> {
+        let p = self.pages.get_mut(&page).ok_or(EngineError::NotFound {
+            kind: "page",
+            id: page.0.to_string(),
+        })?;
+        p.url = url.to_string();
+        Ok(())
+    }
+
+    fn enable_webauthn(&mut self, page: PageHandle) -> EngineResult<()> {
+        let _ = self.page(page)?;
+        Ok(())
+    }
+
     fn close(&mut self, page: PageHandle) -> EngineResult<()> {
         self.pages.remove(&page);
         Ok(())
@@ -140,7 +154,13 @@ impl Engine for TestEngine {
         Ok(Self::canned_tree(&p.url))
     }
 
-    fn act(&mut self, page: PageHandle, target: ActTarget, action: Action) -> EngineResult<()> {
+    fn act(
+        &mut self,
+        page: PageHandle,
+        target: ActTarget,
+        action: Action,
+        _mode: crate::engine::InputMode,
+    ) -> EngineResult<()> {
         // Verify the page exists and the target is plausible.
         let _ = self.page(page)?;
         match target {
@@ -617,11 +637,18 @@ mod tests {
     fn act_known_ref_succeeds() {
         let mut e = TestEngine::new();
         let p = e.open("about:blank").unwrap();
-        e.act(p, ActTarget::Ref(Ref(4)), Action::Click).unwrap();
+        e.act(
+            p,
+            ActTarget::Ref(Ref(4)),
+            Action::Click,
+            crate::engine::InputMode::Careful,
+        )
+        .unwrap();
         e.act(
             p,
             ActTarget::Ref(Ref(3)),
             Action::Fill { value: "hi".into() },
+            crate::engine::InputMode::Careful,
         )
         .unwrap();
     }
@@ -631,7 +658,12 @@ mod tests {
         let mut e = TestEngine::new();
         let p = e.open("about:blank").unwrap();
         let err = e
-            .act(p, ActTarget::Ref(Ref(99)), Action::Click)
+            .act(
+                p,
+                ActTarget::Ref(Ref(99)),
+                Action::Click,
+                crate::engine::InputMode::Careful,
+            )
             .unwrap_err();
         assert!(matches!(err, EngineError::NotFound { kind: "ref", .. }));
     }

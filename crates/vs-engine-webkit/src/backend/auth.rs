@@ -78,6 +78,18 @@ struct AuthBlobV1Raw {
     origin: String,
 }
 
+/// Validate and canonicalize an externally-supplied auth blob (the
+/// `vs auth import` path). Parses it — accepting a v1 or v2 JSON body —
+/// and re-encodes as a canonical v2 blob, so an imported session from a
+/// human's real browser is stored in exactly the shape `load_auth`
+/// expects. Errors if the bytes are not a valid auth blob.
+pub fn normalize(bytes: &[u8]) -> EngineResult<Vec<u8>> {
+    let blob = decode(&AuthBlob {
+        bytes: bytes.to_vec(),
+    })?;
+    Ok(encode(&blob)?.bytes)
+}
+
 /// Serialize a v2 blob to bytes for at-rest storage.
 pub fn encode(blob: &AuthBlobV2) -> EngineResult<AuthBlob> {
     let json = serde_json::to_string(blob)

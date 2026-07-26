@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>ref-nonzero</title>
+</head>
+<body>
+  <!-- A roleless wrapper div holding two role-bearing children. The
+       walker used to emit this wrapper as `0 el ""`, and ref 0 is the
+       delta grammar's ROOT sentinel, so +/@ parent references became
+       ambiguous. Found via #vibesurfer; guards the fix. -->
+  <div id="wrap">
+    <button id="a">Alpha</button>
+    <button id="b">Bravo</button>
+  </div>
+</body>
+</html>

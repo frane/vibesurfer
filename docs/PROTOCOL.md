@@ -5,8 +5,11 @@ follows, the implementation is wrong.
 
 ## Status
 
-Drafted at M0 from the bootstrap design. Encoder/decoder lands in M1
-(`vs-protocol` crate); semantics are wired into the daemon in M4.
+**Frozen at `proto=1`.** Drafted at M0, encoder/decoder landed in M1
+(`vs-protocol` crate), semantics wired into the daemon in M4, and the
+framing + token/delta semantics + [invariants](#invariants-proto1) are
+now a stable contract (see Versioning). Additions (new flags, new
+primitives) are allowed within `proto=1`; the frozen surface is not.
 
 ## Scope
 
@@ -244,9 +247,47 @@ caps at 60000ms.
 
 ## Versioning
 
-Protocol version is the daemon version. Compatibility is informally
-guaranteed within a minor release; major releases are free to break the
-wire. The CLI prints the daemon version in its `vs_status` output.
+`vs_status` opens with a daemon identity line:
+
+```
+daemon	version=<x.y.z>	proto=<n>	flags=<csv>
+```
+
+- `version` is the daemon's semver.
+- `proto` is the wire-protocol level. `proto=1` is the frozen contract
+  described here; the invariants below hold for any `proto=1` daemon.
+- `flags` is a comma-separated list of negotiable capabilities a client
+  may switch on when present. Current flags: `actDeltas` (writes return
+  the post-write tree delta inline, see below) and `clickVia` (robotic
+  ref-click fast path). Clients read this line instead of pinning a
+  hardcoded daemon version.
+
+Compatibility within `proto=1` is guaranteed: new daemons may add flags
+and primitives, but the framing, token semantics, delta grammar, and the
+invariants below do not change without a `proto` bump.
+
+## Invariants (proto=1)
+
+These hold for every `proto=1` daemon and clients may rely on them:
+
+1. **Every returned token is a valid pre-image.** Any primitive that
+   returns a `state_token` returns one you can pass as the `--token` of
+   the very next `vs_act` on that page without a `STALE_TOKEN`, provided
+   nothing else mutates the page in between. Writes (`vs_act`), cursor
+   ops (`vs_click_at`, `vs_drag`), and `vs_wait` all advance the page's
+   delta baseline to the tree behind the token they return.
+2. **Writes return their own delta (`actDeltas`).** `vs_act` returns the
+   post-action tree delta in the response body (same grammar as
+   `vs_view`), plus the new token, so a client never needs a follow-up
+   `vs_view` just to see what an action changed. An idempotent replay
+   returns `? idempotent_hit` with an empty (`NoChange`) body.
+3. **Ref 0 is reserved.** It is the delta grammar's root-level parent
+   sentinel (`+<ref>@0`), so no real node is ever emitted with ref 0.
+   Refs are positive integers, monotonic per session.
+4. **`NoChange` is an empty body.** When a read finds the page identical
+   to the last token handed out for `(page, agent)`, the body is empty —
+   only the envelope. This is distinct from a full tree that happens to
+   be small.
 
 ## Open questions deferred to later milestones
 

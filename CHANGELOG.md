@@ -4,7 +4,33 @@ All notable changes to vibesurfer are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-07-26
+
+### Added (0.2)
+- `vs auth import <NAME> <FILE>` (MCP `vs_auth` sub `import`): import a session captured outside vibesurfer. This is the passkey/WebAuthn fallback. When an origin requires a passkey login the headless engine cannot drive, the human logs in in their own browser, exports the session (cookies + local/session storage) as a v2 auth-blob JSON, and imports it; `vs auth load` then injects it into a headless page. The blob is validated (v1 or v2 accepted, normalized to v2) and stored AES-256-GCM at rest like a saved blob. The CLI reads the file and ships it base64-encoded so the JSON body cannot break the line protocol.
+
+- `vs flow run <FILE>`: run a declarative flow. The file is a JSON array of steps; each step is an array of `vs` arguments. Steps run in order in one session, reusing the normal command dispatch. `` expands to the last page an `open`/`goto` step produced, and `` to that page's current state token (fetched with a `vs_view` right before the step), so scripted login-and-drive flows need no manual id/token threading. Stops at the first step that returns an error.
+
+- `vs goto <PAGE> <URL>` (alias `g`, MCP `vs_goto`): navigate an existing page in place. It reuses the page's web view (and web-content process) instead of opening a new page, so it skips the ~90ms browser spin-up; a goto costs ~15ms vs ~90ms for open on the same content. The page id is unchanged and refs are re-baselined (the next view is a full tree). `--view` appends a fresh view, like `vs open --view`.
+
+- `vs record start <PAGE> [--fps N] [--width PX] [--retina]` and `vs record stop <PAGE>` (alias `rec`) capture a page to an H.264 MP4 while the agent works. Frames are grabbed at every input step (mouse move, keystroke, click) *during* automation rather than by a poller, so the video shows continuous motion instead of a before/after slideshow; the cursor is composited on (a headless snapshot carries no OS pointer) and follows the real `vs_humanize` path. Downscaled to 960px wide by default (`--width` sets another size, `--retina` keeps full device resolution); `--fps` 1..=30, default 24. Encoding is real-time H.264 via openh264 (new `vs-record` crate) muxed to MP4 with pure-Rust muxide, so the file plays natively everywhere with no ffmpeg. rav1e/AV1 stays as a portable fallback. One recording per page; `stop` prints the path (`~/.vibesurfer/captures/rec-<page>.mp4`). MCP: `vs_record_start` / `vs_record_stop`.
+- `vs_humanize` mouse paths now use a minimum-jerk (smootherstep) velocity profile: pointer motion accelerates from rest, peaks mid-path, and eases to a stop instead of gliding at near-constant speed. More human, and it makes recordings look natural.
+- `vs prompt-scan <PAGE>` (alias `ps`): show the human a live view of the headless page and block until they confirm, so QR-based 2FA and other visual out-of-band steps work. Mints a live-view URL and waits. Over MCP, compose `vs_watch` + `vs_prompt_confirm`.
+- `vs status` now opens with a `daemon` line carrying the daemon version, protocol level, and the capability flags a client can auto-negotiate (`flags=actDeltas,clickVia`), so tools like testsurfer enable those paths from the running daemon instead of pinning a hardcoded version.
+
+### Changed (0.2)
+- Recording is memory-bounded and light. Three fixes stop it from being a memory hog: the screen-capture path rendered a full uncompressed retina bitmap per frame via `TIFFRepresentation` that AppKit never freed (~100 MB/s leak), now it renders to a CGImage once; the encoder no longer buffers an unbounded window of uncompressed frames; and render (`WebContent`/`GPU`) processes are reaped on daemon shutdown instead of leaking. Combined with the 960px default downscale, a recording that grew without bound now stays flat.
+- Legacy Gemini CLI install channel removed. Google Antigravity supersedes it and already reads native `SKILL.md` from `~/.gemini/skills/` with its own MCP config, so the `GEMINI.md` + `gemini-extension.json` manifest hack is gone.
+- Building now requires `nasm` and a C compiler (openh264 compiles from vendored source). CI installs nasm on all three platforms; `cargo install` and Homebrew-from-source users need `nasm` on PATH. This is the one build-tool cost of moving recording off the pure-Rust-but-slow rav1e path.
+
+- `vs act` folds its post-action snapshot into the same engine main-thread hop as the input dispatch (new `EngineRuntime::act_and_snapshot`). Every action snapshots right after acting; doing both in one dispatch removes a full engine round trip (~10ms) per action. Robotic click dropped from ~47ms to ~35ms. The remaining cost is native trusted input (NSEvent through the responder chain, settle, rAF flush, snapshot) — the mechanism behind `isTrusted=true`.
+
+- `vs view` folds the console-error check into the snapshot's own engine hop. It used to fire a separate `inspect_console` engine dispatch (and write a `vs_inspect` audit row) on every view once armed, which dominated view latency; steady-state view dropped from ~157ms to ~50ms on a warm daemon. The `? console_error` warning behaves the same.
+
+### Fixed (0.2)
+- The snapshot walker no longer emits ref 0 for a roleless structural wrapper. Ref 0 is the tree-delta grammar's ROOT sentinel, so a real node at ref 0 made `+`/`@` parent references ambiguous. Every emitted node now gets a real ref. (Reported via `#vibesurfer`.)
+
+
 
 
 

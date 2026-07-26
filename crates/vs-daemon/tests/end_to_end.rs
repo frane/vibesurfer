@@ -55,6 +55,7 @@ fn full_primitive_sequence() {
             before_token: v3.token,
             args_hash,
             args_redacted: "click 4".into(),
+            mode: vs_engine_webkit::engine::InputMode::Careful,
             group_label: Some("login-flow".into()),
         })
         .unwrap();
@@ -92,6 +93,7 @@ fn stale_token_rejected() {
             before_token: stale,
             args_hash: "h".into(),
             args_redacted: "click 4".into(),
+            mode: vs_engine_webkit::engine::InputMode::Careful,
             group_label: None,
         })
         .unwrap_err();
@@ -115,6 +117,7 @@ fn idempotent_replay() {
             before_token: v.token,
             args_hash: h.clone(),
             args_redacted: "click 4".into(),
+            mode: vs_engine_webkit::engine::InputMode::Careful,
             group_label: None,
         })
         .unwrap();
@@ -127,6 +130,7 @@ fn idempotent_replay() {
             before_token: v.token,
             args_hash: h,
             args_redacted: "click 4".into(),
+            mode: vs_engine_webkit::engine::InputMode::Careful,
             group_label: None,
         })
         .unwrap();
@@ -856,6 +860,7 @@ fn concurrent_acts_on_same_page_serialize_without_deadlock() {
         before_token: v.token,
         args_hash: hash.into(),
         args_redacted: "click 4".into(),
+        mode: vs_engine_webkit::engine::InputMode::Careful,
         group_label: None,
     };
 

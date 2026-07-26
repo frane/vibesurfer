@@ -569,6 +569,20 @@ impl Engine for Webview2Backend {
         Ok(handle)
     }
 
+    fn navigate(&mut self, _page: PageHandle, _url: &str) -> EngineResult<()> {
+        Err(EngineError::NotImplemented {
+            engine: "webview2",
+            primitive: "navigate",
+        })
+    }
+
+    fn enable_webauthn(&mut self, _page: PageHandle) -> EngineResult<()> {
+        Err(EngineError::NotImplemented {
+            engine: "webview2",
+            primitive: "enable_webauthn",
+        })
+    }
+
     fn close(&mut self, page: PageHandle) -> EngineResult<()> {
         if let Some(p) = self.pages.remove(&page) {
             // Closing the controller releases the WebView2 process
@@ -584,7 +598,13 @@ impl Engine for Webview2Backend {
         super::common::parse_snapshot(&json).map_err(EngineError::Other)
     }
 
-    fn act(&mut self, page: PageHandle, target: ActTarget, action: Action) -> EngineResult<()> {
+    fn act(
+        &mut self,
+        page: PageHandle,
+        target: ActTarget,
+        action: Action,
+        _mode: InputMode,
+    ) -> EngineResult<()> {
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
         super::common::run_act(

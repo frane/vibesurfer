@@ -18,6 +18,8 @@
 use std::path::PathBuf;
 
 use anyhow::{Context as _, Result};
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 
 use super::{Cli, Command};
 use crate::caller;
@@ -156,6 +158,28 @@ pub fn run(cli: &Cli) -> Result<Response> {
     // is collected by the CLI in the user's terminal; the agent that
     // invoked vs prompt-input never sees the bytes.
     match &cli.command {
+        // `vs auth import <name> <file>`: read the session blob file
+        // here (CLI-side) and ship it base64-encoded so the JSON body,
+        // which contains newlines, can't break the line protocol.
+        Command::Auth { sub, rest } if sub == "import" => {
+            let name = rest
+                .first()
+                .context("vs auth import: missing <name>")?
+                .clone();
+            let file = rest.get(1).context("vs auth import: missing <file>")?;
+            let bytes =
+                std::fs::read(file).with_context(|| format!("read auth blob file {file}"))?;
+            let b64 = STANDARD.encode(&bytes);
+            let s = session_id
+                .clone()
+                .context("vs auth import: no active session")?;
+            let req = vs_protocol::Request::new("vs_auth")
+                .arg("import")
+                .arg(name)
+                .arg(b64)
+                .flag_value("session", s);
+            return client.call(&req).context("daemon call (auth import)");
+        }
         Command::PromptInput {
             page,
             r,
@@ -203,6 +227,36 @@ pub fn run(cli: &Cli) -> Result<Response> {
                 *no_wait,
                 *timeout_ms,
             );
+        }
+        Command::PromptScan {
+            page,
+            message,
+            open,
+        } => {
+            // Mint a live-view URL so the human can see the QR or 2FA
+            // screen of the headless page, then wait for them to
+            // finish the step out of band.
+            let session = session_id.as_deref().unwrap_or_default();
+            let req = vs_protocol::Request::new("vs_watch")
+                .arg(page.clone())
+                .flag_value("session", session);
+            let resp = client
+                .call(&req)
+                .context("daemon call (prompt-scan watch)")?;
+            if let vs_protocol::Envelope::Error { .. } = &resp.envelope {
+                return Ok(resp);
+            }
+            let url = body_value(&resp, "url").context("prompt-scan: no url in response")?;
+            eprintln!("vs prompt-scan: open {url} to view the page. {message}");
+            if *open {
+                open_in_browser(&url);
+            }
+            read_user_confirm(message)?;
+            return Ok(Response {
+                envelope: vs_protocol::Envelope::Success(vs_protocol::StateToken([0u8; 8])),
+                body: Vec::new(),
+                warnings: Vec::new(),
+            });
         }
         Command::Pending {
             sub: super::PendingSub::Fulfill { id },

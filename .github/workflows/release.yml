@@ -52,6 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: ilammy/setup-nasm@v1  # openh264 (vs-record) builds from source
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}

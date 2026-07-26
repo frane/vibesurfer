@@ -7,10 +7,11 @@ members = [
     "crates/vs-protocol",
     "crates/vs-store",
     "crates/vs-engine-webkit",
+    "crates/vs-record",
 ]
 
 [workspace.package]
-version = "0.1.28"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.85"
 license = "Apache-2.0"

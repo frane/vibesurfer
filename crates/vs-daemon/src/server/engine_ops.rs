@@ -1,6 +1,8 @@
 //! Wire handlers for engine-backed primitives: skill, capture,
 //! viewport, layout, auth.
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 use vs_engine_webkit::{CaptureScope, Viewport};
 use vs_protocol::{ErrorCode, Ref, Request, ResponseHead, StateToken};
 
@@ -9,6 +11,7 @@ use crate::daemon::{
     AuthListResponse, AuthLoadResponse, AuthSaveResponse, CaptureResponse, Daemon, LayoutResponse,
     SkillListResponse, SkillShowResponse, ViewportResponse,
 };
+use crate::page_state::ViewForm;
 
 /// Default body truncation for `vs_inspect request` output. Override
 /// with `--full`.
@@ -239,9 +242,14 @@ pub(super) fn handle_cursor(daemon: &Daemon, req: &Request, kind: &str) -> Strin
         };
     }
     match daemon.cursor_op(&session_id, &page_id, op, mode) {
-        Ok(token) => {
+        Ok((token, form)) => {
             let head = vs_protocol::ResponseHead::ok(token).encode();
-            format!("{head}\n")
+            let body = match form {
+                ViewForm::Full(tree) => tree.encode(),
+                ViewForm::Delta(ops) => vs_protocol::delta::encode(&ops),
+                ViewForm::NoChange => String::new(),
+            };
+            format!("{head}{body}")
         }
         Err(e) => format_daemon_error(&e),
     }
@@ -292,6 +300,7 @@ pub(super) fn handle_layout(daemon: &Daemon, req: &Request) -> String {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub(super) fn handle_auth(daemon: &Daemon, req: &Request) -> String {
     let session_id = match require_session(req) {
         Ok(s) => s,
@@ -315,6 +324,49 @@ pub(super) fn handle_auth(daemon: &Daemon, req: &Request) -> String {
             }
             Err(e) => format_daemon_error(&e),
         },
+        "webauthn" => {
+            let Some(page_id) = req.args.get(1).cloned() else {
+                return format_error(
+                    ErrorCode::BadRequest,
+                    vec!["vs_auth webauthn: missing page id".into()],
+                );
+            };
+            match daemon.enable_webauthn(&session_id, &page_id) {
+                Ok(AuthSaveResponse { name }) => {
+                    format!("{}{name}\n", ResponseHead::ok(StateToken::ZERO).encode())
+                }
+                Err(e) => format_daemon_error(&e),
+            }
+        }
+        "import" => {
+            let Some(name) = req.args.get(1).cloned() else {
+                return format_error(
+                    ErrorCode::BadRequest,
+                    vec!["vs_auth import: missing name".into()],
+                );
+            };
+            let Some(b64) = req.args.get(2).cloned() else {
+                return format_error(
+                    ErrorCode::BadRequest,
+                    vec!["vs_auth import: missing base64 blob".into()],
+                );
+            };
+            let blob = match STANDARD.decode(b64.as_bytes()) {
+                Ok(b) => b,
+                Err(e) => {
+                    return format_error(
+                        ErrorCode::BadRequest,
+                        vec![format!("vs_auth import: bad base64: {e}")],
+                    )
+                }
+            };
+            match daemon.auth_import(&session_id, &name, &blob) {
+                Ok(AuthSaveResponse { name }) => {
+                    format!("{}{name}\n", ResponseHead::ok(StateToken::ZERO).encode())
+                }
+                Err(e) => format_daemon_error(&e),
+            }
+        }
         "save" => {
             let Some(page_id) = req.args.get(1).cloned() else {
                 return format_error(
@@ -1050,6 +1102,56 @@ pub(super) fn handle_pending_url(daemon: &Daemon, _req: &Request) -> String {
 }
 
 /// `vs_watch` — mint a live-view URL for a page. Body: `url\t<url>`.
+/// `vs_record` start|stop. Args: `<action> <page>`. `--fps` on start.
+/// Body: `path\t<ivf path>`.
+pub(super) fn handle_record(daemon: &Daemon, req: &Request) -> String {
+    let session_id = match require_session(req) {
+        Ok(s) => s,
+        Err(msg) => return format_error(ErrorCode::BadRequest, vec![msg]),
+    };
+    let action = req.args.first().map_or("", String::as_str);
+    let Some(page_id) = req.args.get(1).cloned() else {
+        return format_error(
+            ErrorCode::BadRequest,
+            vec!["vs_record: missing page id".into()],
+        );
+    };
+    let result = match action {
+        "start" => {
+            let fps = flag_value(req, "fps")
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(24);
+            // Downscale to `--width` px (default 960), keeping recordings
+            // fast to encode and light on disk; `--retina` keeps the full
+            // device resolution (bigger + heavier).
+            let max_width = if req.flags.contains_key("retina") {
+                0
+            } else {
+                flag_value(req, "width")
+                    .and_then(|s| s.parse::<u32>().ok())
+                    .filter(|w| *w > 0)
+                    .unwrap_or(960)
+            };
+            daemon.record_start(&session_id, &page_id, fps, max_width)
+        }
+        "stop" => daemon.record_stop(&page_id),
+        other => {
+            return format_error(
+                ErrorCode::BadRequest,
+                vec![format!("vs_record: unknown action {other:?} (start|stop)")],
+            )
+        }
+    };
+    match result {
+        Ok(path) => format!(
+            "{}path\t{}\n",
+            ResponseHead::ok(StateToken([0u8; 8])).encode(),
+            path.display()
+        ),
+        Err(e) => format_daemon_error(&e),
+    }
+}
+
 pub(super) fn handle_watch(daemon: &Daemon, req: &Request) -> String {
     let session_id = match require_session(req) {
         Ok(s) => s,
@@ -1080,7 +1182,7 @@ pub(super) fn handle_frame(daemon: &Daemon, req: &Request) -> String {
             vec!["vs_frame: missing page id".into()],
         );
     };
-    match daemon.live_frame_path(&page_id) {
+    match daemon.live_frame_path(&page_id, 1440) {
         Ok(path) => format!(
             "{}{}\n",
             ResponseHead::ok(StateToken([0u8; 8])).encode(),

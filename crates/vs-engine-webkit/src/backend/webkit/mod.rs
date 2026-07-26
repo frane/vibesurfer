@@ -22,6 +22,7 @@ mod headless_window;
 mod input;
 mod inspector_handler;
 mod nav_delegate;
+mod record;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -33,8 +34,8 @@ use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{NSBackingStoreType, NSWindow, NSWindowStyleMask};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSURLRequest, NSURL};
 use objc2_web_kit::{
-    WKNavigationDelegate, WKUserScript, WKUserScriptInjectionTime, WKWebView,
-    WKWebViewConfiguration,
+    WKNavigationDelegate, WKUserContentController, WKUserScript, WKUserScriptInjectionTime,
+    WKWebView, WKWebViewConfiguration,
 };
 use vs_protocol::{Ref, Tree};
 
@@ -60,8 +61,13 @@ struct WkPage {
     /// no responder chain for the event to traverse.
     window: Retained<NSWindow>,
     /// Owned so the webview keeps a strong reference (the delegate
-    /// property on `WKWebView` is `weak`).
-    _nav_delegate: Retained<NavDelegate>,
+    /// property on `WKWebView` is `weak`). Its nav slot is reused by
+    /// `navigate` to wait for in-place navigations.
+    nav_delegate: Retained<NavDelegate>,
+    /// The page's user-content controller, kept so `enable_webauthn`
+    /// can install a document-start user script that survives
+    /// navigation (adding to a live UCC applies to subsequent loads).
+    ucc: Retained<WKUserContentController>,
     /// Console / network ring buffers + request-detail map. Populated
     /// by the JS bridge installed at construction time.
     inspector: super::inspector_bridge::InspectorSlots,
@@ -94,6 +100,9 @@ pub struct WkBackend {
     pages: HashMap<PageHandle, WkPage>,
     next_handle: u64,
     captures_dir: Option<PathBuf>,
+    /// Active recording sinks by page. Present only while a `record`
+    /// session is running; the input primitives grab frames through it.
+    recording: HashMap<PageHandle, record::RecSink>,
 }
 
 impl WkBackend {
@@ -104,6 +113,7 @@ impl WkBackend {
             pages: HashMap::new(),
             next_handle: 1,
             captures_dir: None,
+            recording: HashMap::new(),
         }
     }
 
@@ -129,6 +139,26 @@ impl WkBackend {
     }
 }
 
+impl Drop for WkBackend {
+    fn drop(&mut self) {
+        // On daemon shutdown, tear every open page down and pump the run
+        // loop so WebKit actually terminates its web-content processes
+        // (~90 MB each) instead of orphaning them to launchd. `close`
+        // detaches the message handlers / delegate and closes the host
+        // window; the pump gives WebKit the main-thread turns it needs to
+        // reap the process before the daemon exits. This only runs if the
+        // backend is genuinely dropped — see the ordering in
+        // `vs-cli::serve` that lets the engine channel close on shutdown.
+        let handles: Vec<PageHandle> = self.pages.keys().copied().collect();
+        for h in handles {
+            let _ = self.close(h);
+        }
+        for _ in 0..20 {
+            let _ = run_loop_until(|| false, Duration::from_millis(25));
+        }
+    }
+}
+
 // =============================================================================
 // Shared payloads + parsers
 // =============================================================================
@@ -137,6 +167,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::common::{parse_snapshot, SNAPSHOT_DOM_WALKER_JS as SNAPSHOT_JS};
+
+/// Virtual WebAuthn authenticator shim (see `webauthn_virtual.js`).
+const WEBAUTHN_JS: &str = include_str!("../webauthn_virtual.js");
 
 // =============================================================================
 // Engine impl
@@ -240,7 +273,10 @@ impl Engine for WkBackend {
             ucc.addUserScript(&shim);
         }
         let inspector_installed = inspector_handler::install(mtm, &ucc, &inspector);
-        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1280.0, 800.0));
+        // Default browser window: a natural 1440x900 (MacBook-class),
+        // the logical size pages render at. Retina still doubles the
+        // pixel density for screenshots; recordings capture at this size.
+        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1440.0, 900.0));
         let web_view: Retained<WKWebView> = unsafe {
             WKWebView::initWithFrame_configuration(WKWebView::alloc(mtm), frame, &config)
         };
@@ -314,7 +350,8 @@ impl Engine for WkBackend {
             WkPage {
                 web_view,
                 window,
-                _nav_delegate: delegate,
+                nav_delegate: delegate,
+                ucc,
                 inspector,
                 inspector_installed,
                 cookie_baseline: std::cell::RefCell::new(None),
@@ -323,6 +360,63 @@ impl Engine for WkBackend {
             },
         );
         Ok(handle)
+    }
+
+    fn navigate(&mut self, page: PageHandle, url: &str) -> EngineResult<()> {
+        // Reuse the existing web view, host window, and web-content
+        // process: just reset the shared nav slot and load the new URL.
+        // This skips the whole WKWebView / NSWindow / process spin-up
+        // that dominates `open` (~90ms), leaving only nav + load.
+        let (web_view, slot) = {
+            let p = self.page_mut(page)?;
+            (p.web_view.clone(), p.nav_delegate.slot())
+        };
+        *slot.borrow_mut() = None;
+        let ns_url_str = NSString::from_str(url);
+        let ns_url = NSURL::URLWithString(&ns_url_str)
+            .ok_or_else(|| EngineError::Other(format!("invalid url: {url}")))?;
+        let request = NSURLRequest::requestWithURL(&ns_url);
+        let _ = unsafe { web_view.loadRequest(&request) };
+        let slot_check = slot.clone();
+        let ok = run_loop_until(
+            move || slot_check.borrow().is_some(),
+            Duration::from_secs(15),
+        );
+        if !ok {
+            return Err(EngineError::Timeout {
+                budget: Duration::from_secs(15),
+                primitive: "navigate",
+            });
+        }
+        let result = slot.borrow_mut().take();
+        match result {
+            Some(Ok(())) => Ok(()),
+            Some(Err(msg)) => Err(EngineError::Other(format!("navigation failed: {msg}"))),
+            None => Err(EngineError::Other(
+                "navigation completed without a result".into(),
+            )),
+        }
+    }
+
+    fn enable_webauthn(&mut self, page: PageHandle) -> EngineResult<()> {
+        let mtm = self.mtm;
+        let p = self.page_mut(page)?;
+        let web_view = p.web_view.clone();
+        // Persist across navigations: add the shim as a document-start
+        // user script on the live UCC (applies to subsequent loads).
+        unsafe {
+            let src = NSString::from_str(WEBAUTHN_JS);
+            let shim = WKUserScript::initWithSource_injectionTime_forMainFrameOnly(
+                WKUserScript::alloc(mtm),
+                &src,
+                WKUserScriptInjectionTime::AtDocumentStart,
+                false,
+            );
+            p.ucc.addUserScript(&shim);
+        }
+        // Apply to the document already loaded, too.
+        eval_js_string(&web_view, WEBAUTHN_JS, Duration::from_secs(5))?;
+        Ok(())
     }
 
     fn close(&mut self, page: PageHandle) -> EngineResult<()> {
@@ -337,6 +431,16 @@ impl Engine for WkBackend {
             // (`could not connect to the server`); prompt teardown keeps
             // the process-pool footprint flat.
             unsafe {
+                // Break the WKWebView retain cycle. A
+                // WKUserContentController strongly retains its script
+                // message handlers and user scripts, and the web view
+                // retains the controller through its configuration — so
+                // leaving them attached keeps the whole web view (and its
+                // web-content process, ~90 MB) alive forever after close.
+                // Apple documents removing them explicitly; without this,
+                // every open/close leaked a render process.
+                p.ucc.removeAllScriptMessageHandlers();
+                p.ucc.removeAllUserScripts();
                 p.web_view.stopLoading();
                 p.web_view.setNavigationDelegate(None);
                 p.window.setContentView(None);
@@ -352,8 +456,15 @@ impl Engine for WkBackend {
         parse_snapshot(&json).map_err(EngineError::Other)
     }
 
-    fn act(&mut self, page: PageHandle, target: ActTarget, action: Action) -> EngineResult<()> {
+    fn act(
+        &mut self,
+        page: PageHandle,
+        target: ActTarget,
+        action: Action,
+        mode: InputMode,
+    ) -> EngineResult<()> {
         let p = self.page_mut(page)?;
+
         let web_view = p.web_view.clone();
         let web_view_flush = p.web_view.clone();
         let window = p.window.clone();
@@ -396,9 +507,16 @@ impl Engine for WkBackend {
             if rect.width > 0.5 && rect.height > 0.5 {
                 let frame = web_view.frame();
                 let start = p.last_mouse.get();
-                // Default to Human mode for now; v0.1.8 follow-up surfaces a
-                // `--mode={human,careful,robotic}` flag on the wire.
-                let mode = vs_humanize::InputMode::Human;
+                // Mode comes from the wire (-M/--mode). Ref-click
+                // defaults to careful, a single-shot trusted move:
+                // fast and still isTrusted. human is opt-in for
+                // detector-scored flows, robotic teleports.
+                let mode = match mode {
+                    InputMode::Human => vs_humanize::InputMode::Human,
+                    InputMode::Careful => vs_humanize::InputMode::Careful,
+                    InputMode::Robotic => vs_humanize::InputMode::Robotic,
+                };
+
                 let seed = vs_humanize_seed_for_ref(r);
                 let landed = input::click_at_rect(
                     &web_view,
@@ -447,7 +565,40 @@ impl Engine for WkBackend {
         let mtm = self.mtm;
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
-        capture::capture_to_png(&web_view, page, captures_dir.as_deref(), mtm)
+        // Screenshots keep full device resolution.
+        capture::capture_to_png(&web_view, page, captures_dir.as_deref(), mtm, None)
+    }
+
+    fn capture_live(&mut self, page: PageHandle, max_width: u32) -> EngineResult<PathBuf> {
+        let captures_dir = self.captures_dir.clone();
+        let mtm = self.mtm;
+        let p = self.page_mut(page)?;
+        let web_view = p.web_view.clone();
+        // Live frames (watch / record) render smaller: faster to capture
+        // and encode. `0` means full resolution.
+        let width = (max_width > 0).then(|| f64::from(max_width));
+        capture::capture_to_png(&web_view, page, captures_dir.as_deref(), mtm, width)
+    }
+
+    fn record_begin(
+        &mut self,
+        page: PageHandle,
+        tx: std::sync::mpsc::Sender<crate::engine::RecFrame>,
+        fps: u32,
+        max_width: u32,
+    ) -> EngineResult<()> {
+        let p = self.page_mut(page)?;
+        let logical_width = p.web_view.frame().size.width;
+        self.recording.insert(
+            page,
+            record::RecSink::new(tx, logical_width, max_width, fps),
+        );
+        Ok(())
+    }
+
+    fn record_end(&mut self, page: PageHandle) -> EngineResult<()> {
+        self.recording.remove(&page);
+        Ok(())
     }
 
     fn layout(&mut self, page: PageHandle, refs: &[Ref]) -> EngineResult<Vec<LayoutBox>> {
@@ -624,9 +775,11 @@ impl Engine for WkBackend {
     }
 
     fn type_text(&mut self, page: PageHandle, text: &str, mode: InputMode) -> EngineResult<()> {
+        let mtm = self.mtm;
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
         let web_view_flush = p.web_view.clone();
+        let cursor = p.last_mouse.get();
         // Vary cadence per call so repeated typing is not identical.
         let seed = text
             .chars()
@@ -637,7 +790,8 @@ impl Engine for WkBackend {
             InputMode::Careful => vs_humanize::InputMode::Careful,
             InputMode::Robotic => vs_humanize::InputMode::Robotic,
         };
-        input::type_text(&web_view, text, humanize_mode, seed)?;
+        let rec = self.recording.get(&page).map(|s| (s, mtm));
+        input::type_text(&web_view, text, humanize_mode, seed, rec, cursor)?;
         // Drain rAF-deferred work (headless macOS pauses the frame
         // clock) so React state settles before the next primitive.
         let _ = eval_js_string(
@@ -649,17 +803,23 @@ impl Engine for WkBackend {
     }
 
     fn cursor_op(&mut self, page: PageHandle, op: CursorOp, mode: InputMode) -> EngineResult<()> {
-        let p = self.page_mut(page)?;
-        let web_view = p.web_view.clone();
-        let window = p.window.clone();
-        let webview_height = web_view.frame().size.height;
-        let start = p.last_mouse.get();
+        let mtm = self.mtm;
+        let (web_view, window, webview_height, start) = {
+            let p = self.page_mut(page)?;
+            (
+                p.web_view.clone(),
+                p.window.clone(),
+                p.web_view.frame().size.height,
+                p.last_mouse.get(),
+            )
+        };
         let humanize_mode = match mode {
             InputMode::Human => vs_humanize::InputMode::Human,
             InputMode::Careful => vs_humanize::InputMode::Careful,
             InputMode::Robotic => vs_humanize::InputMode::Robotic,
         };
         let seed = vs_humanize_seed_for_xy(op);
+        let rec = self.recording.get(&page).map(|s| (s, mtm));
         let landed = match op {
             CursorOp::MoveTo { x, y } | CursorOp::HoverAt { x, y } => input::move_along_path(
                 &web_view,
@@ -670,6 +830,7 @@ impl Engine for WkBackend {
                 humanize_mode,
                 seed,
                 false,
+                rec,
             )?,
             CursorOp::ClickAt { x, y } => input::click_at_xy(
                 &web_view,
@@ -679,6 +840,7 @@ impl Engine for WkBackend {
                 vs_humanize::Point { x, y },
                 humanize_mode,
                 seed,
+                rec,
             )?,
             CursorOp::Drag { x1, y1, x2, y2 } => {
                 let landed = input::drag_xy(
@@ -689,6 +851,7 @@ impl Engine for WkBackend {
                     vs_humanize::Point { x: x2, y: y2 },
                     humanize_mode,
                     seed,
+                    rec,
                 )?;
                 // After the OS-level drag completes, fire the HTML5
                 // DragEvent chain via JS so react-dnd / native HTML5 /
@@ -698,7 +861,9 @@ impl Engine for WkBackend {
                 landed
             }
         };
-        p.last_mouse.set(landed);
+        if let Some(p) = self.pages.get(&page) {
+            p.last_mouse.set(landed);
+        }
         Ok(())
     }
     fn capabilities(&self) -> EngineCapabilities {

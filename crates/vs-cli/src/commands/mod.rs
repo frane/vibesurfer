@@ -66,6 +66,13 @@ pub enum Command {
     /// 3. Open a page navigated to URL.
     #[command(visible_alias = "o")]
     Open { url: String },
+    /// Navigate an existing page to URL in place. Reuses the page's
+    /// web view instead of opening a new one, so it skips the
+    /// browser-process spin-up and is much faster for successive
+    /// navigations. Refs are fresh afterward (re-baselined).
+    #[command(visible_alias = "g")]
+    Goto { page: String, url: String },
+
     /// 4. Close a page.
     #[command(visible_alias = "c")]
     Close { page: String },
@@ -95,7 +102,14 @@ pub enum Command {
         token: String,
         #[arg(long)]
         group: Option<String>,
+        /// Cursor motion for a ref click: careful (default, fast,
+        /// trusted single move), human (slow humanized path for
+        /// detector-scored flows), robotic (teleport). Only the
+        /// macOS native ref-click path uses this.
+        #[arg(long, short = 'M', default_value = "careful")]
+        mode: String,
     },
+
     /// 8. Search across pages in the session.
     #[command(visible_alias = "f")]
     Find { query: String },
@@ -198,7 +212,15 @@ pub enum Command {
         refs: Vec<u32>,
     },
     /// 19. Auth blob management. Subcommand: `save <page> <name>`,
-    ///     `load <page> <name>`, `list`, or `clear <name>`.
+    ///     `load <page> <name>`, `list`, `clear <name>`,
+    ///     `import <name> <file>`, or `webauthn <page>`. `webauthn`
+    ///     installs a virtual WebAuthn authenticator (a pure-JS ES256
+    ///     software authenticator, no CDP) so passkey registration and
+    ///     login work headlessly. `import` brings a session captured
+    ///     elsewhere (the passkey fallback): log in with a passkey in a
+    ///     real browser, export cookies + local/session storage as a v2
+    ///     auth-blob JSON, and import it so `load` can inject it into a
+    ///     headless page.
     #[command(visible_alias = "au")]
     Auth {
         sub: String,
@@ -354,6 +376,22 @@ pub enum Command {
         #[arg(long)]
         message: String,
     },
+    /// Show the human a live view of the page (a QR code, a 2FA
+    /// screen, anything visual) and block until they press Enter.
+    /// Mints a read-only live-view URL and waits, so out-of-band
+    /// steps like scanning a TOTP enrollment QR work headlessly.
+    /// `--open` launches the browser at the live view.
+    #[command(visible_alias = "ps")]
+    PromptScan {
+        page: String,
+        #[arg(
+            long,
+            default_value = "Scan the code or complete the step shown, then press Enter."
+        )]
+        message: String,
+        #[arg(long)]
+        open: bool,
+    },
     /// Wire-only `vs_prompt_input` variant — does NOT read from the
     /// local tty. Used by `vs mcp` so an MCP-driven agent can enqueue
     /// a prompt the local user fulfills via `vs pending fulfill`.
@@ -401,7 +439,17 @@ pub enum Command {
         #[command(subcommand)]
         sub: PendingSub,
     },
+    /// Record a page to an H.264 MP4 (real-time openh264, plays
+    /// everywhere). `start` spawns a background capture at `--fps`;
+    /// `stop` flushes and writes the file. Both print the output path.
+    /// One recording per page.
+    #[command(visible_alias = "rec")]
+    Record {
+        #[command(subcommand)]
+        sub: RecordSub,
+    },
     /// Run the daemon in this process. The `vs` binary doubles as the
+
     /// daemon — `vs serve` is what auto-spawn re-execs when the socket
     /// is missing. SIGINT shuts down cleanly.
     Serve {
@@ -411,7 +459,19 @@ pub enum Command {
         #[arg(long)]
         stop: bool,
     },
+    /// Run a declarative flow: a JSON file that is an array of steps,
+    /// each step an array of `vs` arguments. Steps run in order in one
+    /// session; `$page` expands to the last opened/navigated page and
+    /// `$token` to that page's current state token (fetched as needed),
+    /// so login-and-drive scripts need no manual id/token threading.
+    /// Stops at the first failing step. Example file contents:
+    /// `[["open","https://x"],["act","$page","5","fill","hi","--token","$token"]]`
+    Flow {
+        #[command(subcommand)]
+        sub: FlowSub,
+    },
     /// Run the MCP (Model Context Protocol) server over stdio.
+
     /// Speaks JSON-RPC 2.0; each of the 19 vibesurfer primitives is
     /// exposed as one MCP tool. Wire to Claude Desktop / Claude Code
     /// by configuring `vs mcp` as the server command.
@@ -437,6 +497,33 @@ pub enum CaptureSub {
         #[arg(long, value_name = "N")]
         keep: Option<usize>,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum FlowSub {
+    /// Execute the flow file at PATH.
+    Run { file: PathBuf },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum RecordSub {
+    /// Start recording a page. Captures until `vs record stop <page>`.
+    Start {
+        page: String,
+        /// Frames per second (clamped 1..=30). Default 24.
+        #[arg(long, default_value_t = 24)]
+        fps: u32,
+        /// Downscale width in px. Smaller is faster to encode and lighter
+        /// on disk; larger is sharper. Default 960. Ignored with --retina.
+        #[arg(long)]
+        width: Option<u32>,
+        /// Record at full device (retina) resolution instead of the
+        /// default downscale. Much larger and heavier.
+        #[arg(long)]
+        retina: bool,
+    },
+    /// Stop recording a page, flush the encoder, print the file path.
+    Stop { page: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -489,6 +576,14 @@ impl Command {
                     .arg(url.clone())
                     .flag_value("session", s)
             }
+            Self::Goto { page, url } => {
+                let s = require_session(session_id)?;
+                Request::new("vs_goto")
+                    .arg(page.clone())
+                    .arg(url.clone())
+                    .flag_value("session", s)
+            }
+
             Self::Close { page } => {
                 let s = require_session(session_id)?;
                 Request::new("vs_close")
@@ -519,6 +614,7 @@ impl Command {
                 value,
                 token,
                 group,
+                mode,
             } => {
                 let s = require_session(session_id)?;
                 let mut req = Request::new("vs_act")
@@ -534,6 +630,7 @@ impl Command {
                 if let Some(g) = group {
                     req = req.flag_value("group", g.clone());
                 }
+                req = req.flag_value("mode", mode.clone());
                 req
             }
             Self::Find { query } => {
@@ -796,7 +893,10 @@ impl Command {
                     .flag_value("token", token.clone())
                     .flag_value("mode", mode.clone())
             }
-            Self::PromptInput { .. } | Self::PromptConfirm { .. } | Self::PromptForm { .. } => {
+            Self::PromptInput { .. }
+            | Self::PromptConfirm { .. }
+            | Self::PromptForm { .. }
+            | Self::PromptScan { .. } => {
                 anyhow::bail!("vs_prompt_* is local; route via main, not the wire dispatcher");
             }
             Self::PromptInputQueue {
@@ -853,8 +953,39 @@ impl Command {
                 PendingSub::Cancel { id } => Request::new("vs_pending_cancel").arg(id.clone()),
                 PendingSub::Url => Request::new("vs_pending_url"),
             },
+            Self::Record { sub } => {
+                let s = require_session(session_id)?;
+                match sub {
+                    RecordSub::Start {
+                        page,
+                        fps,
+                        width,
+                        retina,
+                    } => {
+                        let mut r = Request::new("vs_record")
+                            .arg("start")
+                            .arg(page.clone())
+                            .flag_value("session", s)
+                            .flag_value("fps", fps.to_string());
+                        if let Some(w) = width {
+                            r = r.flag_value("width", w.to_string());
+                        }
+                        if *retina {
+                            r = r.flag("retina");
+                        }
+                        r
+                    }
+                    RecordSub::Stop { page } => Request::new("vs_record")
+                        .arg("stop")
+                        .arg(page.clone())
+                        .flag_value("session", s),
+                }
+            }
             Self::Serve { .. } => {
                 anyhow::bail!("vs_serve is local; route via main, not the wire dispatcher");
+            }
+            Self::Flow { .. } => {
+                anyhow::bail!("vs_flow is local; route via main, not the wire dispatcher");
             }
             Self::Mcp => {
                 anyhow::bail!("vs_mcp is local; route via main, not the wire dispatcher");
@@ -871,6 +1002,7 @@ impl Command {
                 | Self::Status
                 | Self::Serve { .. }
                 | Self::Mcp
+                | Self::Flow { .. }
                 | Self::Pending { .. }
                 | Self::Frame { .. }
         )

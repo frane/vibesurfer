@@ -49,6 +49,10 @@ fn base_tools() -> Vec<Value> {
             ("url", str_prop("URL to navigate to.", true)),
             ("capture", bool_prop("Attach a screenshot image block to the result. Default false; VS_THUMBS=1 forces on.", false)),
         ])),
+        tool("vs_goto", "Navigate an existing page to a URL in place, reusing its web view (much faster than vs_open for successive navigations). Refs are fresh afterward. Returns the page id + new token.", obj(&[
+            ("page", str_prop("Page id to navigate.", true)),
+            ("url", str_prop("URL to navigate to.", true)),
+        ])),
         tool("vs_close", "Close a page.", obj(&[
             ("page", str_prop("Page id (e.g. p_xxxxxx).", true)),
         ])),
@@ -67,6 +71,7 @@ fn base_tools() -> Vec<Value> {
             ("value", str_prop("Optional value (text for fill, key chord for key, etc.).", false)),
             ("token", str_prop("State token from the most recent read.", true)),
             ("group", str_prop("Optional audit-group label (e.g. \"login-flow\").", false)),
+            ("mode", str_prop("Ref-click cursor motion: careful (default, fast, trusted), human (slow humanized path for detector-scored flows), robotic (teleport). macOS native click only.", false)),
             ("capture", bool_prop("Attach a screenshot image block to the result. Default false; VS_THUMBS=1 forces on.", false)),
         ])),
         tool("vs_prompt_input", "Prompt the human at the local terminal for a value, then fill it into a ref. The agent that invokes this never sees the value the user types — vs reads from /dev/tty itself and ships the bytes to the daemon, which writes them into the field via the trusted prototype-setter fill path. Use --secret for passwords, TANs, credit-card numbers, and anything else the agent should not see.", obj(&[
@@ -103,7 +108,17 @@ fn base_tools() -> Vec<Value> {
         tool("vs_watch", "Mint a read-only live-view URL for a page (~1 fps screenshots while open, 30 min). Relay it so the human can watch the browser work. Returns `url\\t<URL>`.", obj(&[
             ("page", str_prop("Page id.", true)),
         ])),
+        tool("vs_record_start", "Start recording a page to an H.264 MP4 (plays natively everywhere). Captures frames until vs_record_stop. Returns `path\\t<file>`. One recording per page. Downscaled to 960px wide by default.", obj(&[
+            ("page", str_prop("Page id.", true)),
+            ("fps", uint_prop("Frames per second, clamped 1..=30. Default 24.", false)),
+            ("width", uint_prop("Downscale width in px. Smaller = faster encode, lighter files. Default 960. Ignored with retina.", false)),
+            ("retina", bool_prop("Record at full device (retina) resolution instead of the downscale. Much larger and heavier.", false)),
+        ])),
+        tool("vs_record_stop", "Stop recording a page, flush the encoder, and return `path\\t<mp4 file>`.", obj(&[
+            ("page", str_prop("Page id.", true)),
+        ])),
         tool("vs_pending_url", "Mint a single-use localhost URL where the human can fulfill every pending prompt entry as one browser form. Returns `url\\t<URL>`.", obj(&[])),
+
         tool("vs_prompt_confirm", "Block until the human at the local terminal presses Enter. Returns `ok` on confirm or aborts on EOF / Ctrl-C. Use as a human-in-loop gate before a sensitive vs_act click (e.g. \"about to transfer $5000 — Enter to confirm\"). No state change; the next call after this still uses whatever state token the agent already had.", obj(&[
             ("page", str_prop("Page id (passed for audit context; the primitive itself does not touch the page).", true)),
             ("message", str_prop("Prompt text shown to the human. State what they are confirming.", true)),
@@ -197,7 +212,7 @@ tool("vs_type", "Type text into the FOCUSED element with trusted keystrokes (rea
                 "description": "Ref numbers."
             })),
         ])),
-        tool("vs_auth", "Persist or restore per-origin auth (cookies + storage). Sub: save | load | list | clear.", obj(&[
+        tool("vs_auth", "Persist or restore per-origin auth (cookies + storage). Sub: save | load | list | clear | import | webauthn. `import` (rest: name, path-to-json) brings a session captured elsewhere — the passkey fallback: a human logs in with a passkey in a real browser, exports cookies + storage as a v2 auth-blob JSON, and imports it so `load` injects it into a headless page. `webauthn` (rest: page) installs a virtual WebAuthn authenticator (pure-JS ES256, no CDP) so passkey registration and login work headlessly.", obj(&[
             ("sub", str_prop("save | load | list | clear.", true)),
             ("rest", json!({
                 "type": "array",
@@ -237,6 +252,10 @@ pub fn build_cli(name: &str, args: &Value) -> Result<(Cli, CallOpts)> {
         "vs_open" => Command::Open {
             url: req_str(args, "url")?,
         },
+        "vs_goto" => Command::Goto {
+            page: req_str(args, "page")?,
+            url: req_str(args, "url")?,
+        },
         "vs_close" => Command::Close {
             page: req_str(args, "page")?,
         },
@@ -255,6 +274,7 @@ pub fn build_cli(name: &str, args: &Value) -> Result<(Cli, CallOpts)> {
             value: opt_str(args, "value"),
             token: req_str(args, "token")?,
             group: opt_str(args, "group"),
+            mode: opt_str(args, "mode").unwrap_or_else(|| "careful".into()),
         },
         "vs_find" => Command::Find {
             query: req_str(args, "query")?,
@@ -425,6 +445,19 @@ pub fn build_cli(name: &str, args: &Value) -> Result<(Cli, CallOpts)> {
         "vs_watch" => Command::Watch {
             page: req_str(args, "page")?,
             open: false,
+        },
+        "vs_record_start" => Command::Record {
+            sub: crate::commands::RecordSub::Start {
+                page: req_str(args, "page")?,
+                fps: opt_u32(args, "fps").unwrap_or(24),
+                width: opt_u32(args, "width"),
+                retina: opt_bool(args, "retina").unwrap_or(false),
+            },
+        },
+        "vs_record_stop" => Command::Record {
+            sub: crate::commands::RecordSub::Stop {
+                page: req_str(args, "page")?,
+            },
         },
         "vs_pending_url" => Command::Pending {
             sub: crate::commands::PendingSub::Url,

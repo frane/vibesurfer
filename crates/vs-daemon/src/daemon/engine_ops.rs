@@ -216,6 +216,58 @@ impl Daemon {
         })
     }
 
+    /// Install a virtual WebAuthn authenticator on a page
+    /// (`vs auth webauthn`): a JS software authenticator that overrides
+    /// `navigator.credentials` so passkey registration and login work
+    /// headlessly. This is the primary passkey path — no platform
+    /// authenticator, no CDP; `vs auth import` remains the fallback for
+    /// sessions captured out of band.
+    pub fn enable_webauthn(&self, session_id: &str, page_id: &str) -> Result<AuthSaveResponse> {
+        let ctx = AuditCtx::new("vs_auth", session_id)
+            .with_page(page_id)
+            .with_args(
+                "webauthn".into(),
+                tokens::args_hash("vs_auth", &["webauthn".into()]),
+            );
+        self.audit_call(ctx, |_ctx| {
+            let engine_handle = self.engine_handle_for(session_id, page_id)?;
+            self.inner.engine.enable_webauthn(engine_handle)?;
+            Ok(AuthSaveResponse {
+                name: "webauthn".to_string(),
+            })
+        })
+    }
+
+    /// Import an externally-captured session (`vs auth import`): store a
+    /// human-supplied cookies+storage blob under `name` so a later
+    /// `vs auth load` injects it. This is the passkey fallback — when an
+    /// origin requires a WebAuthn/passkey login the headless engine
+    /// cannot drive, the human logs in in their own browser, exports the
+    /// session (cookies + local/session storage as a v2 auth-blob JSON),
+    /// and imports it here. No page is touched; it is a pure store write.
+    pub fn auth_import(
+        &self,
+        session_id: &str,
+        name: &str,
+        blob_json: &[u8],
+    ) -> Result<AuthSaveResponse> {
+        let ctx = AuditCtx::new("vs_auth", session_id).with_args(
+            format!("import {name}"),
+            tokens::args_hash("vs_auth", &["import".into(), name.to_string()]),
+        );
+        self.audit_call(ctx, |_ctx| {
+            self.require_session(session_id)?;
+            let key = self.require_master_key()?;
+            let bytes = vs_engine_webkit::normalize_auth_blob(blob_json)
+                .map_err(|e| DaemonError::BadRequest(format!("invalid auth blob: {e}")))?;
+            let mut store = self.inner.store.lock().expect("poisoned");
+            store.save_auth(name, key, &bytes)?;
+            Ok(AuthSaveResponse {
+                name: name.to_string(),
+            })
+        })
+    }
+
     pub fn auth_load(
         &self,
         session_id: &str,

@@ -171,16 +171,67 @@ impl EngineRuntime {
         self.dispatch(move |e| e.open(&url))
     }
 
+    pub fn navigate(&self, page: PageHandle, url: &str) -> EngineResult<()> {
+        let url = url.to_string();
+        self.dispatch(move |e| e.navigate(page, &url))
+    }
+
     pub fn close(&self, page: PageHandle) -> EngineResult<()> {
         self.dispatch(move |e| e.close(page))
+    }
+
+    pub fn enable_webauthn(&self, page: PageHandle) -> EngineResult<()> {
+        self.dispatch(move |e| e.enable_webauthn(page))
     }
 
     pub fn snapshot(&self, page: PageHandle) -> EngineResult<Tree> {
         self.dispatch(move |e| e.snapshot(page))
     }
 
-    pub fn act(&self, page: PageHandle, target: ActTarget, action: Action) -> EngineResult<()> {
-        self.dispatch(move |e| e.act(page, target, action))
+    /// Snapshot the tree and read the console buffer in a single
+    /// main-thread hop. `vs_view` needs both (the tree, plus the
+    /// console entries behind its `? console_error` warning); folding
+    /// the cheap native console read into the snapshot dispatch avoids
+    /// a second round trip on every view. The console read is a buffer
+    /// borrow, so it adds no measurable cost.
+    pub fn snapshot_with_console(
+        &self,
+        page: PageHandle,
+    ) -> EngineResult<(Tree, Vec<crate::inspector::ConsoleEntry>)> {
+        self.dispatch(move |e| {
+            let tree = e.snapshot(page)?;
+            let console = e.console_entries(page)?;
+            Ok((tree, console))
+        })
+    }
+
+    pub fn act(
+        &self,
+        page: PageHandle,
+        target: ActTarget,
+        action: Action,
+        mode: crate::engine::InputMode,
+    ) -> EngineResult<()> {
+        self.dispatch(move |e| e.act(page, target, action, mode))
+    }
+
+    /// Perform an action and snapshot the resulting tree in a single
+    /// main-thread hop. `vs_act` always snapshots right after acting, so
+    /// folding the two into one dispatch removes a full engine round
+    /// trip (~10ms) from every action. The backend's `act` already
+    /// settles input + flushes rAF before returning, so the snapshot
+    /// sees the post-action DOM exactly as the two-call form did.
+    pub fn act_and_snapshot(
+        &self,
+        page: PageHandle,
+        target: ActTarget,
+        action: Action,
+        mode: crate::engine::InputMode,
+    ) -> EngineResult<Tree> {
+        self.dispatch(move |e| {
+            e.act(page, target, action, mode)?;
+            e.snapshot(page)
+        })
     }
 
     pub fn wait(
@@ -194,6 +245,24 @@ impl EngineRuntime {
 
     pub fn capture(&self, page: PageHandle, scope: CaptureScope) -> EngineResult<PathBuf> {
         self.dispatch(move |e| e.capture(page, scope))
+    }
+
+    pub fn capture_live(&self, page: PageHandle, max_width: u32) -> EngineResult<PathBuf> {
+        self.dispatch(move |e| e.capture_live(page, max_width))
+    }
+
+    pub fn record_begin(
+        &self,
+        page: PageHandle,
+        tx: std::sync::mpsc::Sender<crate::engine::RecFrame>,
+        fps: u32,
+        max_width: u32,
+    ) -> EngineResult<()> {
+        self.dispatch(move |e| e.record_begin(page, tx, fps, max_width))
+    }
+
+    pub fn record_end(&self, page: PageHandle) -> EngineResult<()> {
+        self.dispatch(move |e| e.record_end(page))
     }
 
     pub fn layout(&self, page: PageHandle, refs: Vec<Ref>) -> EngineResult<Vec<LayoutBox>> {
@@ -383,6 +452,13 @@ mod tests {
             self.last_url = url.to_string();
             Ok(PageHandle(self.next_handle))
         }
+        fn navigate(&mut self, _page: PageHandle, url: &str) -> EngineResult<()> {
+            self.last_url = url.to_string();
+            Ok(())
+        }
+        fn enable_webauthn(&mut self, _page: PageHandle) -> EngineResult<()> {
+            Ok(())
+        }
         fn close(&mut self, _page: PageHandle) -> EngineResult<()> {
             Ok(())
         }
@@ -393,7 +469,13 @@ mod tests {
                 &self.last_url,
             )))
         }
-        fn act(&mut self, _: PageHandle, _: ActTarget, _: Action) -> EngineResult<()> {
+        fn act(
+            &mut self,
+            _: PageHandle,
+            _: ActTarget,
+            _: Action,
+            _: crate::engine::InputMode,
+        ) -> EngineResult<()> {
             Ok(())
         }
         fn wait(&mut self, _: PageHandle, _: WaitCondition, _: Duration) -> EngineResult<()> {
@@ -493,6 +575,7 @@ mod tests {
             page,
             ActTarget::Ref(Ref(3)),
             Action::Fill { value: "x".into() },
+            crate::engine::InputMode::Careful,
         )
         .unwrap();
         let auth = rt.save_auth(page).unwrap();

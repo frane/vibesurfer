@@ -121,6 +121,57 @@ impl Daemon {
         })
     }
 
+    /// Navigate an existing page to `url` in place (`vs_goto`). Reuses
+    /// the page's web view instead of creating a new page, then
+    /// re-baselines: the document is replaced, so all refs are fresh
+    /// and the next view is a full tree.
+    pub fn navigate(&self, session_id: &str, page_id: &str, url: &str) -> Result<OpenResponse> {
+        let url_owned = url.to_string();
+        let ctx = AuditCtx::new("vs_goto", session_id)
+            .with_page(page_id)
+            .with_args(
+                url_owned.clone(),
+                tokens::args_hash("vs_goto", std::slice::from_ref(&url_owned)),
+            );
+        self.audit_call(ctx, |ctx| {
+            let engine_handle = self.engine_handle_for(session_id, page_id)?;
+            self.inner.engine.navigate(engine_handle, url)?;
+
+            let tree = self.inner.engine.snapshot(engine_handle)?;
+            let token = tokens::compute(&tree, &url_owned, page_id);
+            ctx.after_token = Some(token);
+
+            {
+                let mut sessions = self.inner.sessions.lock().expect("poisoned");
+                let page = sessions
+                    .get_mut(session_id)
+                    .ok_or_else(|| DaemonError::UnknownSession(session_id.to_string()))?
+                    .pages
+                    .get_mut(page_id)
+                    .ok_or_else(|| DaemonError::UnknownPage(page_id.to_string()))?;
+                page.url.clone_from(&url_owned);
+                page.last_tree = Some(tree.clone());
+                page.last_token = Some(token);
+                page.force_full = true;
+                page.seen_refs.clear();
+                for n in &tree {
+                    page.seen_refs.insert(n.r);
+                }
+            }
+
+            let mut store = self.inner.store.lock().expect("poisoned");
+            store.update_page_url(page_id, &url_owned)?;
+            store.update_page_token(page_id, &token.to_string(), "engine", None)?;
+            drop(store);
+
+            Ok(OpenResponse {
+                page_id: page_id.to_string(),
+                token,
+                warnings: Vec::new(),
+            })
+        })
+    }
+
     pub fn close(&self, session_id: &str, page_id: &str) -> Result<CloseResponse> {
         let ctx = AuditCtx::new("vs_close", session_id)
             .with_page(page_id)

@@ -105,6 +105,15 @@ For Linux runs on a non-Linux host, the `vs-test-linux` Docker
 container in the repo wraps the same setup (needs `--privileged`
 for the namespace bit).
 
+## Known CI-only gaps
+
+- **WebAuthn cell on the GitHub macOS runner.** The virtual authenticator
+  passes locally on a real Mac (VERIFIED in ~5s) but the hosted
+  `macos-latest` runner's WebKit never completes the `crypto.subtle`
+  sign/verify, so `cell_auth_webauthn_virtual_authenticator` is skipped
+  when `CI` is set (pending-manual-verification). Run it locally to
+  verify the feature.
+
 ## Verification — Windows column
 
 Same 48 tests pass on GitHub Actions `windows-latest` against the

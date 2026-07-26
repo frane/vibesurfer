@@ -300,6 +300,30 @@ pub enum EngineError {
 /// Convenience [`Result`] with [`EngineError`] as the error type.
 pub type EngineResult<T> = std::result::Result<T, EngineError>;
 
+/// One recorded frame streamed from the engine during automation.
+///
+/// `record_begin` sets up a channel; the backend then captures a frame
+/// at each input step (mouse move, keystroke, click settle) and sends
+/// it here without releasing the main thread. `cx`/`cy` are the cursor
+/// position in *frame pixels* (already scaled to the recorded frame's
+/// resolution) so the recorder can composite a pointer, and `click` is
+/// a ripple phase (`1.0` at press, decaying to `0.0`; `0.0` = no ripple).
+/// This is what lets a recording show real, continuous mouse motion
+/// instead of a before/after slideshow: the frames are grabbed *inside*
+/// the move loop, not by a poller that is blocked behind it.
+pub struct RecFrame {
+    pub png: Vec<u8>,
+    pub cx: f64,
+    pub cy: f64,
+    pub click: f32,
+    /// Intended elapsed time (ms) this frame represents on the input
+    /// path, independent of how long the synchronous capture actually
+    /// took. The recorder advances its media clock by this so motion
+    /// plays at natural speed even though each snapshot inflates the real
+    /// wall-clock of the move. `0` = use real elapsed time (idle frames).
+    pub dt_ms: u32,
+}
+
 /// The browser engine, as the daemon sees it.
 ///
 /// All methods are synchronous from the daemon's perspective. The
@@ -310,6 +334,21 @@ pub trait Engine {
     /// Open a fresh page navigated to `url`.
     fn open(&mut self, url: &str) -> EngineResult<PageHandle>;
 
+    /// Navigate an existing page to `url` in place, reusing its
+    /// web view (and web-content process) instead of creating a new
+    /// one. The page handle is unchanged; the document is replaced, so
+    /// callers must re-baseline (all refs are fresh). Much cheaper than
+    /// `open` for successive navigations.
+    fn navigate(&mut self, page: PageHandle, url: &str) -> EngineResult<()>;
+
+    /// Install a virtual WebAuthn authenticator on `page`: a pure-JS
+    /// software authenticator that overrides `navigator.credentials`
+    /// so passkey registration and login work headlessly, with no
+    /// platform authenticator and no automation protocol. Applies to
+    /// the current document and (where the backend supports it) to
+    /// subsequent navigations in the same page.
+    fn enable_webauthn(&mut self, page: PageHandle) -> EngineResult<()>;
+
     /// Close a page. Idempotent — closing a closed page is a no-op.
     fn close(&mut self, page: PageHandle) -> EngineResult<()>;
 
@@ -317,7 +356,13 @@ pub trait Engine {
     fn snapshot(&mut self, page: PageHandle) -> EngineResult<Tree>;
 
     /// Perform `action` on `target` at `page`.
-    fn act(&mut self, page: PageHandle, target: ActTarget, action: Action) -> EngineResult<()>;
+    fn act(
+        &mut self,
+        page: PageHandle,
+        target: ActTarget,
+        action: Action,
+        mode: InputMode,
+    ) -> EngineResult<()>;
 
     /// Wait for `cond` at `page` until satisfied or `budget` elapses.
     fn wait(&mut self, page: PageHandle, cond: WaitCondition, budget: Duration)
@@ -326,6 +371,41 @@ pub trait Engine {
     /// Take a screenshot. Returns the path on disk where the image was
     /// written.
     fn capture(&mut self, page: PageHandle, scope: CaptureScope) -> EngineResult<PathBuf>;
+
+    /// Capture a live frame (watch / record) at a reduced width
+    /// (`max_width` px, `0` = full resolution). Cheaper to produce and
+    /// encode than a full-resolution screenshot. The default delegates
+    /// to [`Self::capture`]; backends that can render a smaller snapshot
+    /// override it.
+    fn capture_live(&mut self, page: PageHandle, _max_width: u32) -> EngineResult<PathBuf> {
+        self.capture(page, CaptureScope::Viewport)
+    }
+
+    /// Begin streaming recording frames for `page`. While active, the
+    /// backend captures a frame at each input step (mouse move,
+    /// keystroke, click) and sends it on `tx` with the cursor position,
+    /// so the recorder composites a pointer and encodes smooth motion
+    /// without a poller racing the automation. `max_width` downscales
+    /// each frame (`0` = full resolution). The default is unsupported so
+    /// the daemon can fall back to time-based polling.
+    fn record_begin(
+        &mut self,
+        _page: PageHandle,
+        _tx: std::sync::mpsc::Sender<RecFrame>,
+        _fps: u32,
+        _max_width: u32,
+    ) -> EngineResult<()> {
+        Err(EngineError::Unsupported {
+            engine: "generic",
+            primitive: "record_begin",
+        })
+    }
+
+    /// Stop streaming recording frames for `page` (drops the sender so
+    /// the recorder's drain loop ends). Idempotent.
+    fn record_end(&mut self, _page: PageHandle) -> EngineResult<()> {
+        Ok(())
+    }
 
     /// Compute layout boxes for `refs` at `page`.
     fn layout(&mut self, page: PageHandle, refs: &[Ref]) -> EngineResult<Vec<LayoutBox>>;

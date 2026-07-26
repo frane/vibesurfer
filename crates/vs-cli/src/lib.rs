@@ -12,6 +12,7 @@ pub mod active_session;
 pub mod caller;
 pub mod client;
 pub mod commands;
+pub mod flow;
 pub mod mcp;
 pub mod paths;
 pub mod serve;

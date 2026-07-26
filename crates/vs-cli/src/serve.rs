@@ -269,26 +269,52 @@ pub fn run(args: &ServeArgs) -> Result<()> {
         })
         .context("spawn vs-daemon-tokio thread")?;
 
+    // Release the main thread's engine-runtime handle now that the daemon
+    // (on the tokio worker) holds the only other reference. On shutdown
+    // the daemon drops, taking the last EngineRuntime Arc with it and
+    // closing the engine channel — so the loop below exits, drops
+    // `dispatcher`, and runs WkBackend::drop to reap the web-content
+    // processes. Holding this handle here kept the channel open forever
+    // and deadlocked the shutdown: the backend never dropped, so every
+    // open page's ~90 MB render process orphaned to launchd on exit.
+    drop(engine_runtime);
+
     // Main run-loop: drain engine jobs, then pump NSRunLoop briefly.
     // Exit when the channel closes (the worker dropped the daemon).
     let runloop = NSRunLoop::currentRunLoop();
     'main: loop {
-        // Drain all queued jobs.
-        loop {
+        // Drain all queued jobs inside an autorelease pool. The engine
+        // runs on this thread with a hand-rolled run loop that never
+        // returns to Cocoa's own pool-draining point, so without an
+        // explicit pool every autoreleased Obj-C temporary (crucially, a
+        // closed page's WKWebView and its ~90 MB web-content process)
+        // stays alive until the daemon exits. Draining per iteration
+        // reclaims them right after `close`.
+        let keep_going = objc2::rc::autoreleasepool(|_| loop {
             match dispatcher.tick() {
                 Ok(true) => {}
-                Ok(false) => break,
-                Err(()) => break 'main,
+                Ok(false) => return true,
+                Err(()) => return false,
             }
+        });
+        if !keep_going {
+            break 'main;
         }
         // Pump the runloop briefly so WKWebView delegates / JS
-        // completion handlers fire on this thread.
-        let slice = NSDate::dateWithTimeIntervalSinceNow(0.05);
+        // completion handlers fire on this thread. The slice also
+        // bounds how long a freshly-queued engine job waits to be
+        // picked up: an mpsc send from a daemon worker is not a
+        // run-loop source, so it can't cut this wait short, and the
+        // loop only returns to `tick()` when the slice elapses. At
+        // 50ms that was a ~50ms floor on *every* engine hop (measured:
+        // a trivial layout eval cost ~50ms). 4ms drops per-hop latency
+        // to ~10ms while keeping idle wakeups cheap (runMode sleeps
+        // efficiently between them).
+        let slice = NSDate::dateWithTimeIntervalSinceNow(0.004);
         unsafe { runloop.runMode_beforeDate(NSDefaultRunLoopMode, &slice) };
     }
 
     let _ = server_thread.join();
-    drop(engine_runtime); // explicit, even though it's already dead
     Ok(())
 }
 
@@ -389,6 +415,12 @@ pub fn run(args: &ServeArgs) -> Result<()> {
         })
         .context("spawn vs-daemon-tokio thread")?;
 
+    // Drop the main thread's engine-runtime handle so the engine channel
+    // can close when the daemon drops on shutdown (see the macOS run for
+    // the full rationale — holding it here deadlocked shutdown and
+    // orphaned render processes).
+    drop(engine_runtime);
+
     // Pump the GLib main context on the main thread, draining engine
     // jobs between iterations. Exit when the channel closes.
     let main_ctx = glib::MainContext::default();
@@ -408,7 +440,6 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     }
 
     let _ = server_thread.join();
-    drop(engine_runtime);
     Ok(())
 }
 
@@ -516,6 +547,12 @@ pub fn run(args: &ServeArgs) -> Result<()> {
         })
         .context("spawn vs-daemon-tokio thread")?;
 
+    // Drop the main thread's engine-runtime handle so the engine channel
+    // can close when the daemon drops on shutdown (see the macOS run for
+    // the full rationale — holding it here deadlocked shutdown and
+    // orphaned render processes).
+    drop(engine_runtime);
+
     // Pump Win32 messages on the main thread, draining engine jobs
     // between iterations. Exit when the channel closes.
     let mut shutdown = false;
@@ -543,7 +580,6 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     }
 
     let _ = server_thread.join();
-    drop(engine_runtime);
     Ok(())
 }
 
