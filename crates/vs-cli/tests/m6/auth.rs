@@ -215,7 +215,9 @@ fn cell_auth_webauthn_virtual_authenticator() {
         assert_ok("auth webauthn", &r);
         let r = ctx.vs(&["goto", &page, &ctx.url("/webauthn.html")]);
         assert_ok("goto webauthn fixture", &r);
-        let r = ctx.vs(&["wait", &page, "text", "VERIFIED", "--timeout=8000"]);
+        // 20s: WebCrypto ES256 sign+verify plus the wait poll is slower
+        // on CI runners than locally; 8s flaked on the macOS runner.
+        let r = ctx.vs(&["wait", &page, "text", "VERIFIED", "--timeout=20000"]);
         assert_ok("wait for VERIFIED", &r);
         let status = eval_js(&ctx, &page, "document.getElementById('status').textContent");
         assert!(
