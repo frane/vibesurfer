@@ -14,13 +14,15 @@
 class Vibesurfer < Formula
   desc "A browser for LLMs, not humans."
   homepage "https://github.com/frane/vibesurfer"
-  url "https://github.com/frane/vibesurfer/archive/refs/tags/v0.1.27.tar.gz"
+  url "https://github.com/frane/vibesurfer/archive/refs/tags/v0.2.0.tar.gz"
   # Update on each release: `shasum -a 256 <tarball>`.
-  sha256 "8937c17002892d8820940a93104482f13d7c48f83a51cd37fb0be0c0418cb40e"
+  sha256 "bfc9667eb98ec41d7b07f2cb3416516a0fd090c529942b29d7bedb7189f36a90"
   license "Apache-2.0"
   head "https://github.com/frane/vibesurfer.git", branch: "main"
 
   depends_on "rust" => :build
+  # openh264 (recording encoder) compiles from vendored source via nasm.
+  depends_on "nasm" => :build
 
   on_linux do
     depends_on "gtk4"
