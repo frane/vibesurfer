@@ -392,9 +392,7 @@ fn file_exists(rel: &str) -> bool {
 }
 
 fn project_dir_exists(rel: &str) -> bool {
-    std::env::current_dir()
-        .ok()
-        .is_some_and(|cwd| cwd.join(rel).is_dir())
+    std::env::current_dir().is_ok_and(|cwd| cwd.join(rel).is_dir())
 }
 
 fn on_path(bin: &str) -> bool {
