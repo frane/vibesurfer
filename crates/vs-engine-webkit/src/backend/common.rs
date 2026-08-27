@@ -415,9 +415,15 @@ fn build_wait_predicate(cond: &WaitCondition) -> String {
     }
 }
 
-/// Run a `wait` primitive: poll a JS predicate every 150ms until it
-/// returns `"1"` or `budget` elapses. The `tick` closure is called
-/// between polls so the caller can pump its platform run loop.
+/// Ceiling for a single wait-predicate eval. Generous on purpose: it
+/// bounds a wedged eval without turning a merely-slow one into a
+/// failed wait. The pacing between polls comes from `tick`, and the
+/// wait's own `budget` is what actually ends the loop.
+const POLL_EVAL_BUDGET: Duration = Duration::from_secs(5);
+
+/// Run a `wait` primitive: poll a JS predicate until it returns `"1"`
+/// or `budget` elapses. The `tick` closure is called between polls so
+/// the caller can pump its platform run loop.
 pub(crate) fn run_wait<F, T>(
     eval: F,
     cond: &WaitCondition,
@@ -430,7 +436,6 @@ where
 {
     let predicate = build_wait_predicate(cond);
     let deadline = std::time::Instant::now() + budget;
-    let slice = Duration::from_millis(150);
     loop {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         if remaining.is_zero() {
@@ -439,11 +444,26 @@ where
                 primitive: "wait",
             });
         }
-        let one = if remaining < slice { remaining } else { slice };
-        let result = eval(&predicate, one)?;
-        let unwrapped = serde_json::from_str::<String>(&result).unwrap_or(result);
-        if unwrapped == "1" {
-            return Ok(());
+        // Budget for *this* poll's eval, distinct from how often we
+        // poll. These used to be the same 150ms value, which made a
+        // single slow eval fatal: `eval` returned
+        // `Timeout { primitive: "eval" }`, `?` propagated it, and the
+        // caller saw `! TIMEOUT 150ms eval` — a failed wait on a page
+        // that was merely busy. On a loaded CI runner that was the
+        // whole of `cell_wait_gone`'s flakiness.
+        let one = POLL_EVAL_BUDGET.min(remaining);
+        match eval(&predicate, one) {
+            Ok(result) => {
+                let unwrapped = serde_json::from_str::<String>(&result).unwrap_or(result);
+                if unwrapped == "1" {
+                    return Ok(());
+                }
+            }
+            // A poll that timed out is "not satisfied yet", not a
+            // failure. Keep polling; the wait's own deadline above is
+            // what bounds this loop.
+            Err(EngineError::Timeout { .. }) => {}
+            Err(e) => return Err(e),
         }
         tick();
     }
