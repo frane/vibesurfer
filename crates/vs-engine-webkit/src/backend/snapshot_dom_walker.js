@@ -34,6 +34,11 @@
         'IMG': 'img', 'UL': 'lst', 'OL': 'lst', 'LI': 'li',
         'TABLE': 'tbl', 'TR': 'row', 'TD': 'cell', 'TH': 'cell',
         'FORM': 'frm', 'P': 'p', 'ARTICLE': 'art', 'SECTION': 'sec',
+        // Embedded documents. The walker cannot cross the frame
+        // boundary, so the node carries the only thing an agent can
+        // act on: the resolved src. Without it an embedded viewer
+        // (pdf.js and friends) is a hole in the tree.
+        'IFRAME': 'ifr', 'FRAME': 'ifr', 'EMBED': 'ifr', 'OBJECT': 'ifr',
     };
     // Roles whose label is *only* the leaf text the user reads, not the
     // entire subtree text. Containers (nav, main, hdr, sec, art, tbl,
@@ -138,6 +143,21 @@
             return (el.value || el.placeholder || '').trim();
         }
         if (el.tagName === 'IMG') return (el.alt || '').trim();
+        if (role === 'ifr') {
+            // `.src` / `.data` are already resolved against the base
+            // URL; the attribute is often relative and useless to an
+            // agent that wants to fetch it.
+            var frameSrc = String(el.src || el.data || el.getAttribute('src') || '');
+            if (!frameSrc && el.tagName === 'IFRAME' && el.getAttribute('srcdoc') !== null) {
+                return 'srcdoc:';
+            }
+            // A data: URL is the whole document inline — megabytes of
+            // it, sometimes. Keep the mime prefix, drop the payload.
+            if (frameSrc.slice(0, 5) === 'data:') {
+                return 'data:' + frameSrc.slice(5).split(';')[0].split(',')[0];
+            }
+            return frameSrc.slice(0, 500);
+        }
         if (LEAF_LABEL_ROLES.has(role)) {
             // Use innerText (capped) for leaf-ish nodes the user reads.
             return (el.innerText || el.textContent || '')

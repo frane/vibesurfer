@@ -34,6 +34,7 @@ element fallback is secondary.
 | `sec`  | `region` / `<section>`    | |
 | `art`  | `article` / `<article>`   | |
 | `mn`   | `menu` / `<menu>`         | |
+| `ifr`  | `<iframe>`, `<frame>`, `<embed>`, `<object>` | Label is the resolved `src` — the walker cannot cross into the frame, so the URL is all the agent gets. Feed it to `vs download`. |
 
 When no specific role applies, the daemon emits `el` and includes a
 `tag=<name>` attribute so the agent can disambiguate.

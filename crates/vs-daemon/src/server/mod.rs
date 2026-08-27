@@ -156,6 +156,7 @@ pub fn dispatch(daemon: &Daemon, req: &Request) -> String {
         "vs_log" => store_ops::handle_log(daemon, req),
         "vs_skill" => engine_ops::handle_skill(daemon, req),
         "vs_capture" => engine_ops::handle_capture(daemon, req),
+        "vs_download" => engine_ops::handle_download(daemon, req),
         "vs_viewport" => engine_ops::handle_viewport(daemon, req),
         "vs_layout" => engine_ops::handle_layout(daemon, req),
         "vs_auth" => engine_ops::handle_auth(daemon, req),

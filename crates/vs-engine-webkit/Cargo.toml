@@ -26,6 +26,9 @@ vs-humanize = { path = "../vs-humanize", version = "0.2.0" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Downloads cross the JS/Rust boundary base64-encoded: the engines'
+# `eval` bridges return strings, not binary.
+base64 = "0.22.1"
 [target.'cfg(target_os = "linux")'.dependencies]
 # WebKitGTK 6.0 + GLib for the Linux backend. Heavy system deps
 # (libwebkitgtk-6.0, libgtk-4, libsoup-3.0) — only pulled when

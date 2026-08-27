@@ -58,4 +58,14 @@ impl Paths {
         }
         self.root.join("captures")
     }
+
+    /// Where the daemon writes files pulled out of a page by
+    /// `vs download`. Mirrors `vs_daemon::config::Paths::downloads`.
+    #[must_use]
+    pub fn downloads(&self) -> PathBuf {
+        if let Some(p) = std::env::var_os("VS_DOWNLOADS_DIR") {
+            return PathBuf::from(p);
+        }
+        self.root.join("downloads")
+    }
 }

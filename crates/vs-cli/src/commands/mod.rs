@@ -195,6 +195,33 @@ pub enum Command {
         #[arg(long, alias = "b64")]
         base64: bool,
     },
+    /// 16b. Save a file out of a page. With a URL, the page fetches it
+    ///     with its own session cookies (relative URLs resolve against
+    ///     the current document). With no URL, the newest download the
+    ///     page itself started — a `download` link, a viewer's save
+    ///     button, a `blob:` navigation — is drained from the capture
+    ///     buffer. Files land in `~/.vibesurfer/downloads`.
+    #[command(visible_alias = "dl")]
+    Download {
+        page: String,
+        /// URL to fetch from inside the page. Omit to take a download
+        /// the page started on its own.
+        url: Option<String>,
+        /// Write here instead of the default name. Relative paths
+        /// resolve under the downloads directory.
+        #[arg(long)]
+        dest: Option<String>,
+        /// List the captured download intents instead of saving one.
+        #[arg(long)]
+        list: bool,
+        /// Drain a specific buffered entry (see `--list`) instead of
+        /// the newest.
+        #[arg(long)]
+        id: Option<u64>,
+        /// How long to wait for the bytes, in milliseconds.
+        #[arg(long, default_value_t = 30_000)]
+        timeout_ms: u64,
+    },
     /// 17. Set the viewport. `spec` is a preset (e.g. `mobile`,
     ///     `desktop`) or `WxH` (e.g. `1280x720`).
     #[command(visible_alias = "vp")]
@@ -755,6 +782,32 @@ impl Command {
                     req = req.flag("full-page");
                 }
                 req
+            }
+            Self::Download {
+                page,
+                url,
+                dest,
+                list,
+                id,
+                timeout_ms,
+            } => {
+                let s = require_session(session_id)?;
+                let mut req = Request::new("vs_download")
+                    .arg(page.clone())
+                    .flag_value("session", s);
+                if *list {
+                    return Ok(req.flag("list"));
+                }
+                if let Some(u) = url {
+                    req = req.arg(u.clone());
+                }
+                if let Some(d) = dest {
+                    req = req.flag_value("dest", d.clone());
+                }
+                if let Some(i) = id {
+                    req = req.flag_value("id", i.to_string());
+                }
+                req.flag_value("timeout-ms", timeout_ms.to_string())
             }
             Self::Viewport { page, spec, dpr } => {
                 let s = require_session(session_id)?;

@@ -153,6 +153,45 @@ capture a specific element, or `--full-page` for the entire page. The
 binary lands at a daemon-chosen path; the response carries the path,
 not the bytes.
 
+## 16b. `vs_download <page> [url] [--dest=P] [--list] [--id=N] [--timeout-ms=N]`
+
+Save a file out of a page. Like `vs_capture`, the response carries the
+on-disk path, not the bytes.
+
+A headless web view has no download delegate, so a download the page
+starts has nowhere to land and no event an agent can observe. Both
+halves of this primitive exist to close that hole:
+
+- **`url` given** — read it from *inside* the page, so the request
+  carries the page's cookies and referer. Relative URLs resolve
+  against the current document. This is the path for a file behind a
+  login, and for the contents of an `<iframe>` (whose `src` appears as
+  an `ifr` node's label in `vs_view`).
+- **`url` omitted** — drain the newest download the page performed
+  itself. Every frame runs a document-start shim that intercepts
+  `download` anchors, `blob:` / `data:` navigations, and
+  `window.open` of either, reads the bytes at intercept time, and
+  parks them in a bounded per-page buffer. Reading at intercept time
+  is what makes the common viewer pattern work: a saved blob's object
+  URL is typically revoked a tick after the click, so anything that
+  waits and fetches later finds nothing. `--id=N` selects a buffered
+  entry; `--list` enumerates them without reading any payload.
+
+Response body rows: `path`, `size`, `mime`, `url`. `--list` emits one
+`dl\t<id>\t<size>\t<ready|pending>\t<mime>\t<name>\t<url-or-error>` row
+per entry.
+
+Filenames come from `Content-Disposition`, the anchor's `download`
+attribute, or the URL's last path segment — all page-controlled, so
+each is reduced to a single path component before the daemon writes
+anything. A name already taken gets a `-1`, `-2`, … suffix instead of
+overwriting. `--dest` overrides the name; a relative `--dest` resolves
+under the downloads directory and cannot climb out of it.
+
+Downloads over 64 MiB are refused, and a failed read (HTTP error,
+revoked blob, size cap) returns an error naming the cause rather than
+succeeding with nothing.
+
 ## 17. `vs_viewport <preset|WxH> [--dpr=N]`
 
 Set the page's viewport. Persistent for the page until changed again.

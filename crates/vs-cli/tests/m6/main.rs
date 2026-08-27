@@ -26,6 +26,7 @@ pub(crate) mod helpers;
 
 mod act;
 mod auth;
+mod download;
 mod extract;
 mod inspect;
 mod lifecycle;

@@ -3013,6 +3013,7 @@ name = "vs-engine-webkit"
 version = "0.2.0"
 dependencies = [
  "ashpd",
+ "base64",
  "block2",
  "enumflags2",
  "glib",

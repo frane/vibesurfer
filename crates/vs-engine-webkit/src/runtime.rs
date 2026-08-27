@@ -22,8 +22,8 @@ use std::time::Duration;
 use vs_protocol::{Ref, Tree};
 
 use crate::engine::{
-    ActTarget, Action, AuthBlob, CaptureScope, Engine, EngineCapabilities, EngineError,
-    EngineResult, LayoutBox, PageHandle, Viewport, WaitCondition,
+    ActTarget, Action, AuthBlob, CaptureScope, Download, DownloadEntry, DownloadSource, Engine,
+    EngineCapabilities, EngineError, EngineResult, LayoutBox, PageHandle, Viewport, WaitCondition,
 };
 
 /// One unit of work for the engine thread.
@@ -267,6 +267,19 @@ impl EngineRuntime {
 
     pub fn layout(&self, page: PageHandle, refs: Vec<Ref>) -> EngineResult<Vec<LayoutBox>> {
         self.dispatch(move |e| e.layout(page, &refs))
+    }
+
+    pub fn download(
+        &self,
+        page: PageHandle,
+        source: DownloadSource,
+        budget: Duration,
+    ) -> EngineResult<Download> {
+        self.dispatch(move |e| e.download(page, source, budget))
+    }
+
+    pub fn download_list(&self, page: PageHandle) -> EngineResult<Vec<DownloadEntry>> {
+        self.dispatch(move |e| e.download_list(page))
     }
 
     pub fn set_viewport(&self, page: PageHandle, viewport: Viewport) -> EngineResult<()> {

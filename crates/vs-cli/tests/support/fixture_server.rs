@@ -13,6 +13,8 @@
 //! - `GET  /api/slow` — 200 after a 500ms delay.
 //! - `POST /echo` — 200 echoes the request body.
 //! - `GET  /img/pixel.gif` — a tiny 1×1 transparent GIF.
+//! - `GET  /files/report.pdf` — `Content-Disposition: attachment`, but
+//!   only with the `session_id` cookie; 401 without it.
 //! - `GET  /static/script-a.js`, `/static/script-b.js` — small JS
 //!   files, used by `scripts.html`.
 //!
@@ -130,6 +132,9 @@ fn handle(mut req: Request) -> std::io::Result<()> {
     if path == "/img/pixel.gif" {
         return respond_pixel(req);
     }
+    if path == "/files/report.pdf" {
+        return handle_report_pdf(req);
+    }
     if path.starts_with("/static/") {
         return handle_static(req, &path);
     }
@@ -199,6 +204,42 @@ fn handle_dashboard_http_only(req: Request) -> std::io::Result<()> {
     }
     let path = fixtures_root().join("dashboard.html");
     serve_file(req, &path)
+}
+
+/// Body served by `/files/report.pdf`. Not a real PDF — just bytes
+/// distinctive enough that a test can prove the file on disk came from
+/// here and arrived intact.
+pub const REPORT_PDF_BODY: &[u8] = b"%PDF-1.4\n% vibesurfer download fixture\n%%EOF\n";
+
+/// Name the fixture advertises in `Content-Disposition`. Contains a
+/// space so the wire's quoting path is exercised too.
+pub const REPORT_PDF_NAME: &str = "Jahresabrechnung 2025.pdf";
+
+/// A download that only an authenticated session may have: 401 without
+/// the `session_id` cookie, `Content-Disposition: attachment` with it.
+///
+/// This is the case a headless web view drops on the floor — there is
+/// no download delegate to hand the response to — and the case
+/// `vs download <page> <url>` has to get right by reading it from
+/// inside the page, where the cookie jar applies.
+fn handle_report_pdf(req: Request) -> std::io::Result<()> {
+    let cookie_header = req
+        .headers()
+        .iter()
+        .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case("Cookie"))
+        .map(|h| h.value.as_str().to_string())
+        .unwrap_or_default();
+    if !cookie_header.contains("session_id=") {
+        return respond_text(req, 401, "text/plain", "unauthenticated");
+    }
+    let resp = Response::from_data(REPORT_PDF_BODY.to_vec())
+        .with_header(header("Content-Type", "application/pdf"))
+        .with_header(header(
+            "Content-Disposition",
+            &format!("attachment; filename=\"{REPORT_PDF_NAME}\""),
+        ))
+        .with_header(no_store());
+    req.respond(resp)
 }
 
 fn handle_static(req: Request, path: &str) -> std::io::Result<()> {

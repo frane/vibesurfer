@@ -53,6 +53,10 @@ any regression turns the badge red.
 | vs_log | yes | yes | yes |
 | vs_skill | yes | yes | yes |
 | vs_capture | yes | yes | yes |
+| vs_download url | partial¹ | yes | partial¹ |
+| vs_download captured | partial¹ | yes | partial¹ |
+| vs_download list | partial¹ | yes | partial¹ |
+| iframe src in tree (`ifr`) | partial¹ | yes | partial¹ |
 | vs_viewport | yes | yes | yes |
 | vs_layout | yes | yes | yes |
 | vs_auth save | yes | yes | yes |
@@ -69,6 +73,12 @@ any regression turns the badge red.
 | vs_inspect script | yes | yes | yes |
 | vs_inspect dom | yes | yes | yes |
 | vs_inspect performance | yes | yes | yes |
+
+¹ Cells exist in `crates/vs-cli/tests/m6/download.rs` and the shared
+implementation is the same on all three backends (one JS shim, one
+`common::run_download`), but they have only been run against
+`WKWebView` so far. The engine-tests workflow is what flips these to
+`yes` — do not promote them by hand.
 
 ## Verification — Mac column
 

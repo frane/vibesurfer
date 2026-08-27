@@ -881,3 +881,135 @@ fn concurrent_acts_on_same_page_serialize_without_deadlock() {
     let acts = actions.iter().filter(|a| a.primitive == "vs_act").count();
     assert_eq!(acts, 2, "both concurrent acts must be audited");
 }
+
+/// A captured download must land inside the downloads directory under
+/// a sanitized name, no matter what the page called it.
+///
+/// The name the `TestEngine` reports (`../../../escaped.bin`) is the
+/// shape a hostile `Content-Disposition` takes: three levels up and
+/// into a file of the attacker's choosing. Everything before the last
+/// separator has to be discarded before the daemon writes anything.
+#[test]
+fn captured_download_cannot_escape_the_downloads_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    let downloads = dir.path().join("downloads");
+    let store = Store::open(dir.path().join("state.db")).expect("store");
+    let runtime = EngineRuntime::spawn(|| Ok(Box::new(TestEngine::new()) as Box<dyn Engine>))
+        .expect("engine");
+    let d = Daemon::new(store, Arc::new(runtime)).with_downloads_dir(&downloads);
+
+    let s = d.session_open(Some("default")).unwrap();
+    let p = d.open(&s.session_id, "https://example.com/docs").unwrap();
+
+    let got = d
+        .download(
+            &s.session_id,
+            &p.page_id,
+            engine::DownloadSource::Captured { id: None },
+            None,
+            Duration::from_secs(5),
+        )
+        .unwrap();
+
+    assert_eq!(
+        got.path,
+        downloads.join("escaped.bin"),
+        "traversal survived sanitization"
+    );
+    assert_eq!(
+        std::fs::read(&got.path).unwrap(),
+        vs_engine_webkit::test_support::CAPTURED_DOWNLOAD_BODY,
+    );
+    assert_eq!(got.size, got.path.metadata().unwrap().len());
+    assert_eq!(got.mime, "application/pdf");
+}
+
+/// A second download of the same name gets a suffix instead of
+/// clobbering the first.
+#[test]
+fn repeated_download_does_not_overwrite() {
+    let dir = tempfile::tempdir().unwrap();
+    let downloads = dir.path().join("downloads");
+    let store = Store::open(dir.path().join("state.db")).expect("store");
+    let runtime = EngineRuntime::spawn(|| Ok(Box::new(TestEngine::new()) as Box<dyn Engine>))
+        .expect("engine");
+    let d = Daemon::new(store, Arc::new(runtime)).with_downloads_dir(&downloads);
+
+    let s = d.session_open(Some("default")).unwrap();
+    let p = d.open(&s.session_id, "https://example.com/docs").unwrap();
+
+    let url = engine::DownloadSource::Url("https://example.com/files/report.pdf".into());
+    let first = d
+        .download(
+            &s.session_id,
+            &p.page_id,
+            url.clone(),
+            None,
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    let second = d
+        .download(&s.session_id, &p.page_id, url, None, Duration::from_secs(5))
+        .unwrap();
+
+    assert_eq!(first.path, downloads.join("report.pdf"));
+    assert_eq!(second.path, downloads.join("report-1.pdf"));
+    assert!(first.path.exists() && second.path.exists());
+}
+
+/// A relative `--dest` is confined to the downloads directory; an
+/// absolute one is honored as given.
+#[test]
+fn download_dest_is_confined_when_relative() {
+    let dir = tempfile::tempdir().unwrap();
+    let downloads = dir.path().join("downloads");
+    let store = Store::open(dir.path().join("state.db")).expect("store");
+    let runtime = EngineRuntime::spawn(|| Ok(Box::new(TestEngine::new()) as Box<dyn Engine>))
+        .expect("engine");
+    let d = Daemon::new(store, Arc::new(runtime)).with_downloads_dir(&downloads);
+
+    let s = d.session_open(Some("default")).unwrap();
+    let p = d.open(&s.session_id, "https://example.com/docs").unwrap();
+    let url = engine::DownloadSource::Url("https://example.com/a.bin".into());
+
+    let confined = d
+        .download(
+            &s.session_id,
+            &p.page_id,
+            url.clone(),
+            Some("../../outside.bin"),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    assert_eq!(confined.path, downloads.join("outside.bin"));
+
+    let explicit = dir.path().join("elsewhere").join("named.bin");
+    let absolute = d
+        .download(
+            &s.session_id,
+            &p.page_id,
+            url,
+            Some(explicit.to_str().unwrap()),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    assert_eq!(absolute.path, explicit);
+    assert!(explicit.exists());
+}
+
+/// `vs_download --list` surfaces what the page tried to save without
+/// reading any payload.
+#[test]
+fn download_list_reports_captured_intents() {
+    let (d, _dir) = make_daemon();
+    let s = d.session_open(Some("default")).unwrap();
+    let p = d.open(&s.session_id, "https://example.com/docs").unwrap();
+
+    let listed = d.download_list(&s.session_id, &p.page_id).unwrap();
+    assert_eq!(listed.entries.len(), 1);
+    let e = &listed.entries[0];
+    assert!(e.done);
+    assert_eq!(e.error, None);
+    assert_eq!(e.mime, "application/pdf");
+    assert!(e.url.starts_with("blob:"));
+}

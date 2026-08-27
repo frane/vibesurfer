@@ -99,6 +99,13 @@ code_enum! {
         Sec => "sec",
         Art => "art",
         Mn => "mn",
+        /// An embedded frame (`<iframe>` / `<frame>` / `<embed>` /
+        /// `<object>`). Its label is the frame's resolved `src`, which
+        /// is otherwise invisible to an agent: the walker cannot cross
+        /// into the frame's document, so without this the node — and
+        /// with it the URL of whatever is embedded — simply vanished
+        /// from the tree.
+        Ifr => "ifr",
         El => "el",
     }
 }
@@ -202,9 +209,18 @@ mod tests {
         assert_eq!(Role::Lnk.as_str(), "lnk");
     }
 
+    /// Pins the code tables against accidental edits. Adding a role is
+    /// a deliberate protocol addition (allowed within `proto=1`) — bump
+    /// the count *and* the table in `docs/codes.md` together.
     #[test]
     fn role_count() {
-        assert_eq!(Role::all().len(), 25);
+        assert_eq!(Role::all().len(), 26);
         assert_eq!(Op::all().len(), 7);
+    }
+
+    #[test]
+    fn iframe_role_round_trips() {
+        assert_eq!(Role::Ifr.as_str(), "ifr");
+        assert_eq!("ifr".parse::<Role>().unwrap(), Role::Ifr);
     }
 }

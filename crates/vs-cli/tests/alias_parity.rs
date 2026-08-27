@@ -139,6 +139,15 @@ fn alias_capture() {
 }
 
 #[test]
+fn alias_download() {
+    assert_parity(
+        &["download", "p_1", "/files/report.pdf"],
+        &["dl", "p_1", "/files/report.pdf"],
+        "download/dl",
+    );
+}
+
+#[test]
 fn alias_viewport() {
     assert_parity(
         &["viewport", "p_1", "mobile"],

@@ -40,8 +40,9 @@ use objc2_web_kit::{
 use vs_protocol::{Ref, Tree};
 
 use crate::engine::{
-    ActTarget, Action, AuthBlob, CaptureScope, CursorOp, Engine, EngineCapabilities, EngineError,
-    EngineResult, InputMode, LayoutBox, PageHandle, Viewport, WaitCondition,
+    ActTarget, Action, AuthBlob, CaptureScope, CursorOp, Download, DownloadEntry, DownloadSource,
+    Engine, EngineCapabilities, EngineError, EngineResult, InputMode, LayoutBox, PageHandle,
+    Viewport, WaitCondition,
 };
 
 use eval::{eval_js_string, run_loop_until};
@@ -264,6 +265,19 @@ impl Engine for WkBackend {
         // macOS page has its frame clock paused (see RAF_SHIM_JS).
         unsafe {
             let src = NSString::from_str(RAF_SHIM_JS);
+            let shim = WKUserScript::initWithSource_injectionTime_forMainFrameOnly(
+                WKUserScript::alloc(mtm),
+                &src,
+                WKUserScriptInjectionTime::AtDocumentStart,
+                false,
+            );
+            ucc.addUserScript(&shim);
+        }
+        // Download capture, in every frame (`forMainFrameOnly: false`):
+        // a viewer that saves a blob usually lives in an iframe, and
+        // WKWebView has no download delegate to catch it.
+        unsafe {
+            let src = NSString::from_str(super::common::DOWNLOAD_SHIM_JS);
             let shim = WKUserScript::initWithSource_injectionTime_forMainFrameOnly(
                 WKUserScript::alloc(mtm),
                 &src,
@@ -558,6 +572,30 @@ impl Engine for WkBackend {
                 let _ = run_loop_until(|| false, Duration::from_millis(50));
             },
         )
+    }
+
+    fn download(
+        &mut self,
+        page: PageHandle,
+        source: DownloadSource,
+        budget: Duration,
+    ) -> EngineResult<Download> {
+        let p = self.page_mut(page)?;
+        let web_view = p.web_view.clone();
+        super::common::run_download(
+            |js, budget| eval_js_string(&web_view, js, budget),
+            || {
+                let _ = run_loop_until(|| false, Duration::from_millis(50));
+            },
+            &source,
+            budget,
+        )
+    }
+
+    fn download_list(&mut self, page: PageHandle) -> EngineResult<Vec<DownloadEntry>> {
+        let p = self.page_mut(page)?;
+        let web_view = p.web_view.clone();
+        super::common::run_download_list(move |js, budget| eval_js_string(&web_view, js, budget))
     }
 
     fn capture(&mut self, page: PageHandle, _scope: CaptureScope) -> EngineResult<PathBuf> {

@@ -180,6 +180,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
 
     let store = vs_store::Store::open(args.paths.db()).context("open state.db")?;
     let captures_dir = args.paths.captures();
+    let downloads_dir = args.paths.downloads();
     let skills_dir = args.paths.root.join("skills");
 
     // Engine lives on this thread (the Cocoa main thread). Construct
@@ -193,6 +194,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
 
     let mut daemon = Daemon::new(store, engine_runtime.clone())
         .with_captures_dir(captures_dir)
+        .with_downloads_dir(downloads_dir)
         .with_skills_dir(skills_dir);
 
     if let Some(k) = resolve_master_key(&args.paths) {
@@ -340,6 +342,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
 
     let store = vs_store::Store::open(args.paths.db()).context("open state.db")?;
     let captures_dir = args.paths.captures();
+    let downloads_dir = args.paths.downloads();
     let skills_dir = args.paths.root.join("skills");
 
     let backend = WpeBackend::new().with_capture_dir(captures_dir.clone());
@@ -349,6 +352,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
 
     let mut daemon = Daemon::new(store, engine_runtime.clone())
         .with_captures_dir(captures_dir)
+        .with_downloads_dir(downloads_dir)
         .with_skills_dir(skills_dir);
 
     if let Some(k) = resolve_master_key(&args.paths) {
@@ -472,6 +476,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
 
     let store = vs_store::Store::open(args.paths.db()).context("open state.db")?;
     let captures_dir = args.paths.captures();
+    let downloads_dir = args.paths.downloads();
     let skills_dir = args.paths.root.join("skills");
 
     let backend = Webview2Backend::new().with_capture_dir(captures_dir.clone());
@@ -481,6 +486,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
 
     let mut daemon = Daemon::new(store, engine_runtime.clone())
         .with_captures_dir(captures_dir)
+        .with_downloads_dir(downloads_dir)
         .with_skills_dir(skills_dir);
 
     if let Some(k) = resolve_master_key(&args.paths) {

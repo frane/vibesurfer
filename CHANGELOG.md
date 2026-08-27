@@ -4,6 +4,17 @@ All notable changes to vibesurfer are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `vs download <PAGE> [<URL>]` (alias `dl`, MCP `vs_download`): save a file out of a page to `~/.vibesurfer/downloads/`, response carrying the path rather than the bytes. Given a URL, the page fetches it from inside itself, so session cookies, referer, and same-origin rules apply and a file behind a login comes down. Given no URL, it drains the newest download the page started on its own. `--list` enumerates what is captured and waiting, `--id=N` picks one, `--dest` overrides the name, `--timeout-ms` the budget.
+
+### Fixed
+- Downloads are no longer discarded without a trace. A headless `WKWebView` / WebKitGTK / WebView2 has no download delegate, so a `download` link, a viewer's Save button, or a `blob:` navigation produced nothing at all: no file, no error, no audit row, and no way for the agent to get at the bytes by another route. Every frame now runs a document-start shim that intercepts those three shapes, reads the payload *at intercept time*, and parks it in a bounded per-page buffer that `vs download` drains. Reading at intercept time is what makes the embedded-viewer case work — pdf.js and friends revoke the object URL a tick after clicking their synthetic anchor, so anything that waits and fetches later finds it already gone. Failures (HTTP error, revoked blob, over the 64 MiB cap) surface as errors naming the cause instead of as silence. (Reported via `#vibesurfer`.)
+- `<iframe>` / `<frame>` / `<embed>` / `<object>` appear in the a11y tree as an `ifr` node whose label is the resolved `src`. The walker gives a frame no role and cannot cross into it, so it had no children either and got dropped entirely — taking with it the URL of whatever was embedded, which was often the only thing an agent could act on. That URL now feeds straight into `vs download`. (Reported via `#vibesurfer`.)
+- A `vs prompt-form` form now survives a waiter timing out. `vs_prompt_form_wait` deleted the form's pending entries when its own budget expired, but that budget is not the form's lifetime: an MCP host caps a tool call around 60s, so the first wait routinely died while the human was still typing. It took the form with it — the human's submit landed on nothing, and the agent's retry was told the form was "cancelled, timed out, or unknown" for a form that was still live. Entries now leave the queue only on submit, on cancel, or via the 30-minute orphan TTL, so any number of waiters can park on the same form. (Reported via `#vibesurfer`.)
+- A page-supplied download filename (`Content-Disposition`, a `download="..."` attribute) is reduced to a single path component before anything is written, so a hostile `../../.ssh/authorized_keys` lands as `authorized_keys` inside the downloads directory. Repeat downloads of the same name get a `-1`, `-2`, … suffix instead of overwriting.
+
 ## [0.2.0] - 2026-07-26
 
 ### Added (0.2)

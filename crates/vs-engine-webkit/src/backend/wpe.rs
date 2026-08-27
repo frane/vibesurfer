@@ -36,8 +36,9 @@ use webkit6::{LoadEvent, UserContentInjectedFrames, UserScript, UserScriptInject
 use vs_protocol::{Ref, Tree};
 
 use crate::engine::{
-    ActTarget, Action, AuthBlob, CaptureScope, CursorOp, Engine, EngineCapabilities, EngineError,
-    EngineResult, InputMode, LayoutBox, PageHandle, Viewport, WaitCondition,
+    ActTarget, Action, AuthBlob, CaptureScope, CursorOp, Download, DownloadEntry, DownloadSource,
+    Engine, EngineCapabilities, EngineError, EngineResult, InputMode, LayoutBox, PageHandle,
+    Viewport, WaitCondition,
 };
 
 // =============================================================================
@@ -179,6 +180,7 @@ impl Engine for WpeBackend {
         let inspector =
             super::inspector_bridge::InspectorSlots::new(crate::inspector::DEFAULT_BUFFER_CAPACITY);
         let inspector_installed = install_inspector(&web_view, &inspector);
+        install_download_shim(&web_view);
         web_view.load_uri(url);
 
         // Wait for LoadEvent::Finished or LoadEvent::Failed via signal.
@@ -309,6 +311,30 @@ impl Engine for WpeBackend {
             move |js, budget| eval_js_string(&web_view, js, budget),
             refs,
         )
+    }
+
+    fn download(
+        &mut self,
+        page: PageHandle,
+        source: DownloadSource,
+        budget: Duration,
+    ) -> EngineResult<Download> {
+        let p = self.page_mut(page)?;
+        let web_view = p.web_view.clone();
+        super::common::run_download(
+            |js, budget| eval_js_string(&web_view, js, budget),
+            || {
+                let _ = run_loop_until(|| false, Duration::from_millis(50));
+            },
+            &source,
+            budget,
+        )
+    }
+
+    fn download_list(&mut self, page: PageHandle) -> EngineResult<Vec<DownloadEntry>> {
+        let p = self.page_mut(page)?;
+        let web_view = p.web_view.clone();
+        super::common::run_download_list(move |js, budget| eval_js_string(&web_view, js, budget))
     }
     fn set_viewport(&mut self, page: PageHandle, viewport: Viewport) -> EngineResult<()> {
         let p = self.page_mut(page)?;
@@ -747,6 +773,24 @@ fn eval_js_string(web_view: &WebView, js: &str, budget: Duration) -> EngineResul
 // =============================================================================
 // Inspector capture wiring
 // =============================================================================
+
+/// Add the download-capture shim as a document-start script in every
+/// frame. WebKitGTK does emit a `download-started` signal, but the
+/// shim covers what that signal cannot see — an in-page `blob:` save
+/// whose object URL is revoked a tick later — and keeps the capture
+/// buffer identical across all three backends.
+fn install_download_shim(web_view: &WebView) {
+    let Some(manager) = web_view.user_content_manager() else {
+        return;
+    };
+    manager.add_script(&UserScript::new(
+        super::common::DOWNLOAD_SHIM_JS,
+        UserContentInjectedFrames::AllFrames,
+        UserScriptInjectionTime::Start,
+        &[],
+        &[],
+    ));
+}
 
 fn install_inspector(web_view: &WebView, slots: &super::inspector_bridge::InspectorSlots) -> bool {
     use super::inspector_bridge::{

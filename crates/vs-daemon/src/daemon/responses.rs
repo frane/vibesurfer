@@ -4,7 +4,9 @@
 //! super::responses::*;` without dragging in the rest of the daemon's
 //! internals.
 
-use vs_engine_webkit::{ActTarget as EngineTarget, Action as EngineAction, LayoutBox};
+use vs_engine_webkit::{
+    ActTarget as EngineTarget, Action as EngineAction, DownloadEntry, LayoutBox,
+};
 use vs_protocol::{Ref, StateToken, Warning};
 
 use crate::page_state::ViewForm;
@@ -125,6 +127,24 @@ pub struct SkillShowResponse {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CaptureResponse {
     pub path: std::path::PathBuf,
+    pub token: StateToken,
+}
+
+/// One file `vs_download` wrote to disk. The bytes stay off the wire —
+/// the agent gets a path, a size, and a MIME type, same as `vs_capture`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadResponse {
+    pub path: std::path::PathBuf,
+    pub size: u64,
+    pub mime: String,
+    pub url: String,
+    pub token: StateToken,
+}
+
+/// The download intents a page has produced but nobody has drained.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadListResponse {
+    pub entries: Vec<DownloadEntry>,
     pub token: StateToken,
 }
 

@@ -222,6 +222,7 @@ The audit row is still written and marked with `idempotency_hit=1`.
 | `vs_log [...]`     | —        | —          |
 | `vs_skill <name>`  | —        | yes        |
 | `vs_capture [ref]` | —        | yes        |
+| `vs_download <page> [url]` | — | yes      |
 | `vs_viewport <preset|WxH>` | — | yes (re-baseline) |
 | `vs_layout <ref>...` | —      | yes        |
 | `vs_auth <save|load|list|clear> [name]` | — | yes (load triggers re-baseline) |
