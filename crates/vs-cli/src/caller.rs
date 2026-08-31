@@ -1,9 +1,21 @@
 //! Stable per-caller key. Identifies the process tree that invoked
 //! `vs` so different shells / agents get different auto-sessions.
 //!
-//! Key is `<parent_pid>-<parent_start_time>`. Parent start time
-//! disambiguates PID reuse: even if the OS recycles a PID after a
-//! parent exits, the new process has a different start time.
+//! Resolution order:
+//!
+//!   1. `VS_CALLER` — an explicit, durable name (`named-<name>`).
+//!   2. POSIX session id (`sid-<sid>`) on Unix. This is the OS's own
+//!      notion of "the shell I belong to" and, unlike the parent pid,
+//!      survives command substitution, nested shells and pipelines.
+//!   3. `<parent_pid>-<parent_start_time>` as a fallback (Windows, or
+//!      a process with no session id). Parent start time disambiguates
+//!      PID reuse: even if the OS recycles a PID after a parent exits,
+//!      the new process has a different start time.
+//!
+//! Step 2 exists because step 3 alone was too fine-grained to be an
+//! identity: a command-substitution subshell is a different process
+//! from its shell, so `P=$(vs open …)` bound its page to a session
+//! that the next `vs view $P` could not see.
 
 #[cfg(unix)]
 fn parent_pid() -> u32 {
@@ -128,6 +140,29 @@ pub fn caller_key() -> Option<String> {
             return Some(format!("named-{clean}"));
         }
     }
+    // Prefer the POSIX session id. The parent pid is too fine-grained
+    // to be a caller identity: `P=$(vs open …)` runs `vs` inside a
+    // command-substitution subshell, so every capture had a different
+    // parent and therefore its own auto-session. The documented flow
+    //
+    //     P=$(vs open URL)
+    //     vs view $P            -> ! WRONG_SESSION
+    //
+    // could not work, and each call leaked a session row plus a file
+    // under `callers/` (301 of them on the author's machine).
+    //
+    // The session id is what "the shell I am running under" actually
+    // means to the OS: identical across command substitution, nested
+    // shells and pipelines, distinct between terminals and between
+    // separately-launched agents. Verified across all four shapes.
+    #[cfg(unix)]
+    {
+        let sid = unsafe { libc::getsid(0) };
+        if sid > 0 {
+            return Some(format!("sid-{sid}"));
+        }
+    }
+    // Fallback: no session id (Windows, or a process with none).
     let ppid = parent_pid();
     if ppid == 0 {
         return None;

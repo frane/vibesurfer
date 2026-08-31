@@ -300,3 +300,47 @@ fn cell_session_resurrection_across_daemon_restart() {
         );
     }
 }
+
+/// The documented shell flow must survive command substitution.
+///
+/// `P=$(vs open URL)` runs `vs` inside a subshell, so the caller key
+/// used to differ from the one the next `vs view $P` computed — each
+/// invocation auto-created its own session and the view came back
+/// `! WRONG_SESSION`. That is the most natural way to script this tool
+/// and it could not work; it also leaked a session row and a
+/// `callers/` file per call.
+///
+/// Runs the real shell rather than the harness's direct spawn, because
+/// the subshell is the whole point.
+#[test]
+fn cell_session_survives_command_substitution() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let home = ctx.home_path().display().to_string();
+        let vs = env!("CARGO_BIN_EXE_vs");
+        let url = ctx.url("/static.html");
+
+        // Each `$( )` is a distinct subshell — the shape that broke.
+        let script = format!(
+            "P=$({vs} --home={home} --no-spawn open {url} | sed -n '2p'); \
+             {vs} --home={home} --no-spawn view \"$P\""
+        );
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&script)
+            .env_remove("VS_SESSION")
+            .env_remove("VS_CALLER")
+            .output()
+            .expect("run shell flow");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+
+        assert!(
+            !stdout.contains("WRONG_SESSION"),
+            "a page opened in a subshell must be visible to the next call:\n{stdout}"
+        );
+        assert!(
+            stdout.contains("doc"),
+            "expected a tree from view, got:\n{stdout}"
+        );
+    }
+}
