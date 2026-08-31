@@ -38,6 +38,7 @@ pub(crate) fn parse_role(s: &str) -> Role {
         "sec" => Role::Sec,
         "art" => Role::Art,
         "mn" => Role::Mn,
+        "ifr" => Role::Ifr,
         _ => Role::El,
     }
 }
@@ -96,6 +97,13 @@ fn build_node(v: &serde_json::Value) -> Option<Node> {
     if v.get("hid").and_then(serde_json::Value::as_u64) == Some(1) {
         attrs.insert("hid".to_string(), "1".to_string());
     }
+    // `challenge=<provider>:<state>` on a bot-check widget. The state
+    // is the actionable part: `unrendered` means the script produced
+    // no widget, so there is nothing for an agent *or* a human to
+    // interact with and the form will be refused on submit.
+    if let Some(chal) = v.get("chal").and_then(serde_json::Value::as_str) {
+        attrs.insert("challenge".to_string(), chal.to_string());
+    }
     Some(Node {
         r: Ref(r),
         role,
@@ -129,6 +137,12 @@ pub(crate) const STORAGE_LOAD_BODY_JS: &str = include_str!("storage_load_body.js
 /// and parse the result with [`parse_snapshot`].
 pub(crate) const SNAPSHOT_DOM_WALKER_JS: &str = include_str!("snapshot_dom_walker.js");
 
+/// Download-capture shim. Injected at document-start into every frame
+/// on every backend, and re-evaluated on demand by [`run_download`] for
+/// documents that predate the injection. See the file header for why
+/// interception happens above the engine's download machinery.
+pub(crate) const DOWNLOAD_SHIM_JS: &str = include_str!("download_shim.js");
+
 // =============================================================================
 // Shared primitive logic — dispatched through each backend's eval_js
 // =============================================================================
@@ -147,7 +161,8 @@ pub(crate) const SNAPSHOT_DOM_WALKER_JS: &str = include_str!("snapshot_dom_walke
 use std::time::Duration;
 
 use crate::engine::{
-    ActTarget, Action, AuthBlob, EngineError, EngineResult, LayoutBox, WaitCondition,
+    ActTarget, Action, AuthBlob, Download, DownloadEntry, DownloadSource, EngineError,
+    EngineResult, LayoutBox, WaitCondition,
 };
 
 fn json_string(s: &str) -> String {
@@ -407,9 +422,15 @@ fn build_wait_predicate(cond: &WaitCondition) -> String {
     }
 }
 
-/// Run a `wait` primitive: poll a JS predicate every 150ms until it
-/// returns `"1"` or `budget` elapses. The `tick` closure is called
-/// between polls so the caller can pump its platform run loop.
+/// Ceiling for a single wait-predicate eval. Generous on purpose: it
+/// bounds a wedged eval without turning a merely-slow one into a
+/// failed wait. The pacing between polls comes from `tick`, and the
+/// wait's own `budget` is what actually ends the loop.
+const POLL_EVAL_BUDGET: Duration = Duration::from_secs(5);
+
+/// Run a `wait` primitive: poll a JS predicate until it returns `"1"`
+/// or `budget` elapses. The `tick` closure is called between polls so
+/// the caller can pump its platform run loop.
 pub(crate) fn run_wait<F, T>(
     eval: F,
     cond: &WaitCondition,
@@ -422,7 +443,6 @@ where
 {
     let predicate = build_wait_predicate(cond);
     let deadline = std::time::Instant::now() + budget;
-    let slice = Duration::from_millis(150);
     loop {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         if remaining.is_zero() {
@@ -431,11 +451,26 @@ where
                 primitive: "wait",
             });
         }
-        let one = if remaining < slice { remaining } else { slice };
-        let result = eval(&predicate, one)?;
-        let unwrapped = serde_json::from_str::<String>(&result).unwrap_or(result);
-        if unwrapped == "1" {
-            return Ok(());
+        // Budget for *this* poll's eval, distinct from how often we
+        // poll. These used to be the same 150ms value, which made a
+        // single slow eval fatal: `eval` returned
+        // `Timeout { primitive: "eval" }`, `?` propagated it, and the
+        // caller saw `! TIMEOUT 150ms eval` — a failed wait on a page
+        // that was merely busy. On a loaded CI runner that was the
+        // whole of `cell_wait_gone`'s flakiness.
+        let one = POLL_EVAL_BUDGET.min(remaining);
+        match eval(&predicate, one) {
+            Ok(result) => {
+                let unwrapped = serde_json::from_str::<String>(&result).unwrap_or(result);
+                if unwrapped == "1" {
+                    return Ok(());
+                }
+            }
+            // A poll that timed out is "not satisfied yet", not a
+            // failure. Keep polling; the wait's own deadline above is
+            // what bounds this loop.
+            Err(EngineError::Timeout { .. }) => {}
+            Err(e) => return Err(e),
         }
         tick();
     }
@@ -519,6 +554,199 @@ where
         });
     }
     Ok(out)
+}
+
+/// Raw bytes pulled per `__vsDl.read` call. 768 KiB in → 1 MiB of
+/// base64 out, which keeps every eval round-trip (and the NSString /
+/// GVariant / PCWSTR conversion behind it) bounded no matter how large
+/// the file is.
+const DOWNLOAD_CHUNK: usize = 768 * 1024;
+
+/// Largest download the engine will materialize. Mirrors `MAX_BYTES`
+/// in `download_shim.js`; kept in both places because the shim refuses
+/// the capture and this refuses the read-back.
+const MAX_DOWNLOAD_BYTES: usize = 64 * 1024 * 1024;
+
+/// Strip the one layer of JSON-string quoting some eval bridges wrap
+/// around a returned string.
+fn eval_str(raw: String) -> String {
+    serde_json::from_str::<String>(&raw).unwrap_or(raw)
+}
+
+/// Install [`DOWNLOAD_SHIM_JS`] if this document doesn't already have
+/// it. Pages opened before the shim was registered as a document-start
+/// script — and any backend where that registration silently failed —
+/// still get a working `vs_download` this way.
+fn ensure_download_shim<F>(eval: &F) -> EngineResult<()>
+where
+    F: Fn(&str, Duration) -> EngineResult<String>,
+{
+    let probe = |e: &F| -> EngineResult<String> {
+        Ok(eval_str(e(
+            "(typeof window.__vsDl)",
+            Duration::from_secs(5),
+        )?))
+    };
+    if probe(eval)? == "object" {
+        return Ok(());
+    }
+    eval(DOWNLOAD_SHIM_JS, Duration::from_secs(5))?;
+    if probe(eval)? == "object" {
+        Ok(())
+    } else {
+        Err(EngineError::Other(
+            "download shim failed to install on this page".into(),
+        ))
+    }
+}
+
+fn parse_download_entry(v: &serde_json::Value) -> DownloadEntry {
+    let s = |k: &str| {
+        v.get(k)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    DownloadEntry {
+        id: v.get("id").and_then(serde_json::Value::as_u64).unwrap_or(0),
+        filename: s("name"),
+        mime: s("mime"),
+        url: s("url"),
+        size: v
+            .get("size")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
+        error: v
+            .get("err")
+            .and_then(serde_json::Value::as_str)
+            .map(ToString::to_string),
+        done: v
+            .get("done")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+    }
+}
+
+/// Run `download`: resolve the source to a buffered entry, wait for it
+/// to complete, then pull its payload out of the page in chunks.
+///
+/// The bytes never touch the wire — the daemon writes them to disk and
+/// reports only the path. `tick` pumps the platform run loop between
+/// polls, exactly as in [`run_wait`].
+pub(crate) fn run_download<F, T>(
+    eval: F,
+    mut tick: T,
+    source: &DownloadSource,
+    budget: Duration,
+) -> EngineResult<Download>
+where
+    F: Fn(&str, Duration) -> EngineResult<String>,
+    T: FnMut(),
+{
+    use base64::Engine as _;
+
+    ensure_download_shim(&eval)?;
+    let deadline = std::time::Instant::now() + budget;
+
+    // `0` addresses "whatever is newest" on the JS side.
+    let id = match source {
+        DownloadSource::Url(url) => {
+            let js = format!("window.__vsDl.fetch({}, null)", json_string(url));
+            let raw = eval_str(eval(&js, Duration::from_secs(10))?);
+            raw.trim().parse::<u64>().map_err(|_| {
+                EngineError::Other(format!("download: shim returned no id ({raw:?})"))
+            })?
+        }
+        DownloadSource::Captured { id } => id.unwrap_or(0),
+    };
+
+    let meta = loop {
+        let raw = eval_str(eval(
+            &format!("window.__vsDl.meta({id})"),
+            Duration::from_secs(5),
+        )?);
+        if raw != "null" && !raw.is_empty() {
+            let v: serde_json::Value = serde_json::from_str(&raw)
+                .map_err(|e| EngineError::Other(format!("download: bad meta {raw:?}: {e}")))?;
+            let entry = parse_download_entry(&v);
+            if entry.done {
+                break entry;
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(EngineError::Timeout {
+                budget,
+                primitive: "download",
+            });
+        }
+        tick();
+    };
+
+    if let Some(err) = meta.error {
+        return Err(EngineError::Other(format!("download failed: {err}")));
+    }
+
+    // The shim caps a capture at MAX_DOWNLOAD_BYTES, but `size` is
+    // read back out of the page and a page can overwrite `__vsDl`
+    // wholesale. Re-check before reserving, so a bogus length is an
+    // error rather than a multi-gigabyte allocation.
+    let size = usize::try_from(meta.size).unwrap_or(usize::MAX);
+    if size > MAX_DOWNLOAD_BYTES {
+        return Err(EngineError::Other(format!(
+            "download too large: {size} bytes (cap {MAX_DOWNLOAD_BYTES})"
+        )));
+    }
+    let mut bytes: Vec<u8> = Vec::with_capacity(size);
+    while bytes.len() < size {
+        let off = bytes.len();
+        let len = DOWNLOAD_CHUNK.min(size - off);
+        let js = format!("window.__vsDl.read({}, {off}, {len})", meta.id);
+        let b64 = eval_str(eval(&js, Duration::from_secs(30))?);
+        if b64.is_empty() {
+            break;
+        }
+        let chunk = base64::engine::general_purpose::STANDARD
+            .decode(b64.as_bytes())
+            .map_err(|e| EngineError::Other(format!("download: bad base64 chunk: {e}")))?;
+        if chunk.is_empty() {
+            break;
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    // Release the page-side copy; the buffer is small and holding a
+    // second copy of a large file in the web content process is waste.
+    let _ = eval(
+        &format!("window.__vsDl.drop({})", meta.id),
+        Duration::from_secs(5),
+    );
+
+    if bytes.len() != size {
+        return Err(EngineError::Other(format!(
+            "download truncated: read {} of {size} bytes",
+            bytes.len()
+        )));
+    }
+    Ok(Download {
+        bytes,
+        filename: meta.filename,
+        mime: meta.mime,
+        url: meta.url,
+    })
+}
+
+/// Run `download_list`: the captured download intents, payloads
+/// excluded.
+pub(crate) fn run_download_list<F>(eval: F) -> EngineResult<Vec<DownloadEntry>>
+where
+    F: Fn(&str, Duration) -> EngineResult<String>,
+{
+    ensure_download_shim(&eval)?;
+    let raw = eval_str(eval("window.__vsDl.index()", Duration::from_secs(5))?);
+    let v: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| EngineError::Other(format!("download list: bad json {raw:?}: {e}")))?;
+    Ok(v.as_array()
+        .map(|a| a.iter().map(parse_download_entry).collect())
+        .unwrap_or_default())
 }
 
 /// Run `save_auth`: eval the snapshot JS, capture the JSON blob.

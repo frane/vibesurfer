@@ -1,8 +1,8 @@
 ---
 name: vibesurfer
-version: 0.1.28
+version: 0.2.1
 binary: vs
-description: Agent-native headless browser. 20 primitives over a Unix-socket wire protocol. Real WKWebView (macOS), WebKitGTK 6 (Linux), or WebView2 (Windows) — all three engines CI-verified by 48 integration cells per platform. Optimistic concurrency via state tokens; tree-delta wire format; durable session/page/auth state in SQLite.
+description: Agent-native headless browser. 26 primitives over a Unix-socket wire protocol. Real WKWebView (macOS), WebKitGTK 6 (Linux), or WebView2 (Windows) — all three engines verified per-commit by a real-browser integration suite. Optimistic concurrency via state tokens; tree-delta wire format; durable session/page/auth state in SQLite.
 ---
 
 # vibesurfer (binary: `vs`)
@@ -28,7 +28,7 @@ Frequent flags also have short forms: `-S` (`--session`), `-j` (`--json`), `-F` 
 - Anything where you'd be parsing the rendered HTML by string matching — `vs_view` already gives you a typed accessibility tree with stable refs.
 - Headless screenshots of fixed URLs with no interaction (overkill — though you can; see `vs capture`).
 
-## The 25 primitives
+## The 26 primitives
 
 Wire form is `vs_<name>` (over the socket); CLI subcommand is `<name>` with hyphens. Each call returns a state envelope (`@<token>` success, `! CODE` error, `? warning` lines before the envelope).
 
@@ -114,6 +114,23 @@ But a credential YOU own is not a secret to protect from yourself: a test user y
 |---|-----|------|
 | 15 | `vs skill list \| show <NAME>` | List or show installed skill bundles. |
 | 16 | `vs capture <PAGE> [<REF>] [--full-page] [--base64]` | PNG to `~/.vibesurfer/captures/`. With `--base64` (`--b64`) the response body carries `base64=<bytes>` + `path=…` (default ON over MCP, where the pixels arrive as a proper image content block, not text). The dir is auto-capped (newest 200 / 30 days) after each shot; `vs capture clean [--all] [--older-than 7d] [--keep 50]` prunes it on demand. |
+| 16b | `vs download <PAGE> [<URL>] [--dest=<P>] [--list] [--id=N]` | Save a file out of the page to `~/.vibesurfer/downloads/`. Alias `dl`. |
+
+**Downloads (v0.2.1+).** A headless web view has no download UI, so a file the page tries to save has nowhere to go. `vs download` is the way out, in two modes:
+
+- **You know the URL** — `vs download <PAGE> <URL>` reads it *from inside the page*, so session cookies, referer, and same-origin rules apply. This is how you get a PDF that only an authenticated session may fetch. Relative URLs resolve against the current document.
+- **The page saved it itself** — `vs download <PAGE>` with no URL drains the newest download the page started: a `download` link, a viewer's Save button, a `blob:` navigation. Those are captured as they happen (bytes and all, even when the page revokes the object URL a tick later), so click Save first, then call `vs download`. `--list` shows what is waiting; `--id=N` picks one entry instead of the newest.
+
+The response body is `path` / `size` / `mime` / `url` rows — bytes never cross the wire. A failed read (401, revoked blob, over the 64 MiB cap) comes back as an error saying why, not as silence. Files are named from `Content-Disposition` or the `download` attribute, sanitized to a single path component; a repeat download gets a `-1`, `-2`, … suffix rather than overwriting. `--dest` overrides the name (relative paths stay inside the downloads dir).
+
+An `<iframe>` shows up in the tree as an `ifr` node whose label is its resolved `src` — the walker cannot cross into the frame, so that URL is what you feed `vs download`.
+
+**Bot challenges (v0.2.1+).** If a page is gated by Turnstile / hCaptcha / reCAPTCHA, `vs view` raises `? captcha_visible <provider> <state>` and the widget appears as a labelled node carrying `challenge=<provider>:<state>`. Two states matter:
+
+- `pending` — the widget rendered. A human can complete it: relay a `vs watch` URL and park on `vs prompt-confirm` until they say they're done.
+- `unrendered` — the script loaded but produced no widget at all. **Nobody can complete this, you included.** Submitting will be refused server-side with an empty token. Don't retry the form and don't conclude it's broken; say plainly that the page's bot check failed to initialise and ask the human how they want to proceed.
+
+Do not try to defeat a challenge. If it can't be completed, that is a fact to report, not a problem to route around.
 
 In MCP Apps hosts (Claude Desktop, ChatGPT, VS Code Copilot), calling `vs_watch` also renders a live panel inline: the tool carries `_meta.ui` → `ui://vibesurfer/live-panel`, a self-contained page that polls frames over the bridge via the app-only `vs_live_frame` tool (never billed to the model). Hosts without Apps support just get the URL line.
 
@@ -190,6 +207,8 @@ Trusted clicks (v0.1.11+): every backend routes `vs act click` and the cursor pr
 | `~/.vibesurfer/daemon.sock` | Unix socket the CLI talks to. |
 | `~/.vibesurfer/state.db` | SQLite (sessions, pages, refs, marks, annotations, auth blobs, audit log). |
 | `~/.vibesurfer/captures/` | PNG screenshots from `vs capture`. Auto-capped (newest 200 / 30 days); prune with `vs capture clean`. |
+| `~/.vibesurfer/downloads/` | Files saved by `vs download`. Never auto-pruned — they are deliberate artifacts, not scratch. |
 | `~/.vibesurfer/skills/` | Composed skill bundles, listed by `vs skill list`. |
+| `~/.vibesurfer/skill-install.json` | What `vs skill install` wrote, and the version that wrote it. On upgrade, `vs` rewrites those SKILL.md copies so agents don't keep reading stale instructions. Only touches paths the installer recorded; a skill file you delete stays deleted. |
 | `~/.vibesurfer/active-session` | Plain-text id of the active session. |
 | `~/.vibesurfer/key` | Master key fallback, auto-generated by the daemon if no system keyring entry. 32 raw bytes; 64-hex or base64 text also accepted. |

@@ -198,6 +198,14 @@ tool("vs_type", "Type text into the FOCUSED element with trusted keystrokes (rea
             ("ref", uint_prop("Optional ref to capture instead of the viewport.", false)),
             ("full_page", bool_prop("Capture the full document, not just the viewport.", false)),
         ])),
+        tool("vs_download", "Save a file out of a page to disk; returns the path. With `url`, the page fetches it using its own session cookies (relative URLs resolve against the current document) — this is how you get at a PDF behind a login, or the contents of an iframe (its src shows as an `ifr` node's label in vs_view). Without `url`, drains the newest download the page started on its own (a download link, a viewer's save button, a blob: navigation) — headless web views have no download UI, so those are captured rather than saved. `list=true` shows what's captured and waiting.", obj(&[
+            ("page", str_prop("Page id.", true)),
+            ("url", str_prop("URL to fetch from inside the page. Omit to take a download the page started itself.", false)),
+            ("dest", str_prop("Write here instead of the suggested name. Relative paths resolve under the downloads directory.", false)),
+            ("list", bool_prop("List captured download intents instead of saving one.", false)),
+            ("id", uint_prop("Drain this buffered entry (from list) instead of the newest.", false)),
+            ("timeout_ms", uint_prop("How long to wait for the bytes (default 30000).", false)),
+        ])),
         tool("vs_viewport", "Set the viewport. Spec is a preset (mobile, desktop, etc.) or WxH.", obj(&[
             ("page", str_prop("Page id.", true)),
             ("spec", str_prop("Preset name or WxH.", true)),
@@ -319,6 +327,14 @@ pub fn build_cli(name: &str, args: &Value) -> Result<(Cli, CallOpts)> {
             full_page: opt_bool(args, "full_page").unwrap_or(false),
             // Default base64 ON over MCP — agents need bytes inline.
             base64: opt_bool(args, "base64").unwrap_or(true),
+        },
+        "vs_download" => Command::Download {
+            page: req_str(args, "page")?,
+            url: opt_str(args, "url"),
+            dest: opt_str(args, "dest"),
+            list: opt_bool(args, "list").unwrap_or(false),
+            id: opt_u64(args, "id"),
+            timeout_ms: opt_u64(args, "timeout_ms").unwrap_or(30_000),
         },
         "vs_viewport" => Command::Viewport {
             page: req_str(args, "page")?,

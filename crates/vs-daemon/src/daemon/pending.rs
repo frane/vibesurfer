@@ -115,8 +115,13 @@ impl PendingQueue {
     /// Block until every entry of `form` is fulfilled, all are
     /// cancelled, or `timeout` elapses. On full fulfillment returns
     /// the entries with their values, sorted by `form_index`; on
-    /// cancellation or timeout returns `None`. Either way the form's
-    /// entries leave the queue.
+    /// cancellation or timeout returns `None`.
+    ///
+    /// Fulfillment and cancellation take the form's entries out of the
+    /// queue. A **timeout does not** — the waiter's budget is not the
+    /// form's lifetime, and callers routinely park again on the same
+    /// form after their transport cut the first wait short. Entries
+    /// nobody ever comes back for are reaped by [`ORPHAN_TTL`].
     #[must_use]
     pub fn wait_form(&self, form: &str, timeout: Duration) -> Option<Vec<(PendingEntry, String)>> {
         let deadline = Instant::now() + timeout;
@@ -147,20 +152,28 @@ impl PendingQueue {
             }
             let remaining = match deadline.checked_duration_since(Instant::now()) {
                 Some(r) if !r.is_zero() => r,
-                _ => {
-                    guard.retain(|_, (e, _)| e.form.as_deref() != Some(form));
-                    return None;
-                }
+                // Timed out. Leave the form's entries in the queue.
+                //
+                // The waiter's deadline is not the form's lifetime:
+                // an MCP host caps a tool call well below the wait
+                // budget, so the first `vs_prompt_form_wait` routinely
+                // dies while the human is still typing. Purging here
+                // meant that call took the form down with it — the
+                // human's submit landed on nothing and the agent's
+                // retry got "cancelled, timed out, or unknown" for a
+                // form that was still perfectly live. A form now
+                // outlives any number of waiters and is reaped only by
+                // cancel, by completion, or by ORPHAN_TTL.
+                _ => return None,
             };
             let (g, _) = self.cv.wait_timeout(guard, remaining).unwrap();
             guard = g;
         }
     }
 
-    /// Drop entries past [`ORPHAN_TTL`]. Entries with a parked waiter
-    /// never reach the TTL (the waiter removes them on its own
-    /// timeout, which is shorter); this catches enqueue-only entries
-    /// whose agent never came back to wait.
+    /// Drop entries past [`ORPHAN_TTL`]. This is the only thing that
+    /// reaps a form nobody fulfilled or cancelled — a waiter timing
+    /// out deliberately leaves the entries alone (see [`Self::wait_form`]).
     fn gc(guard: &mut HashMap<String, (PendingEntry, FulfillState)>) {
         guard.retain(|_, (e, _)| e.created_at.elapsed() < ORPHAN_TTL);
     }
@@ -299,11 +312,39 @@ mod tests {
         q.enqueue(entry("a", Some("f_3"), 0));
         assert!(q.cancel("a"));
         assert!(q.wait_form("f_3", Duration::from_secs(1)).is_none());
+        assert!(q.list().is_empty(), "cancelled form must be cleaned up");
         // Unknown form: nothing to wait on.
         assert!(q.wait_form("f_nope", Duration::from_millis(50)).is_none());
-        // Timeout: entry stays unfulfilled past the deadline.
-        q.enqueue(entry("b", Some("f_4"), 0));
-        assert!(q.wait_form("f_4", Duration::from_millis(50)).is_none());
-        assert!(q.list().is_empty(), "timed-out form must be cleaned up");
+    }
+
+    /// A waiter timing out must not take the form down with it.
+    ///
+    /// An MCP host caps a tool call (60s is common) far below the
+    /// wait budget, so the first `vs_prompt_form_wait` regularly dies
+    /// while the human is still typing into the form. When the timeout
+    /// purged the entries, the human's submit landed on nothing and
+    /// the agent's retry was told the form was "cancelled, timed out,
+    /// or unknown" — for a form that was still live.
+    #[test]
+    fn form_survives_a_waiter_timeout_and_a_later_waiter_still_collects() {
+        let q = PendingQueue::new();
+        q.enqueue(entry("a", Some("f_5"), 0));
+        q.enqueue(entry("b", Some("f_5"), 1));
+
+        // First waiter gives up before the human submits.
+        assert!(q.wait_form("f_5", Duration::from_millis(50)).is_none());
+        assert_eq!(
+            q.list().len(),
+            2,
+            "a timed-out waiter must leave the form pending"
+        );
+
+        // The human submits; a second waiter collects everything.
+        assert!(q.fulfill("a", "one".into()));
+        assert!(q.fulfill("b", "two".into()));
+        let got = q.wait_form("f_5", Duration::from_secs(1)).expect("form");
+        let values: Vec<_> = got.iter().map(|(_, v)| v.as_str()).collect();
+        assert_eq!(values, ["one", "two"]);
+        assert!(q.list().is_empty(), "collected form must leave the queue");
     }
 }

@@ -1,7 +1,16 @@
 # Reality check
 
-> Updated continuously as cells land. Cells reflect the **actual**
-> verification state at the time of reading, not the target.
+> Cells reflect the **actual** verification state, not the target.
+>
+> This table is hand-maintained and nothing enforces it, which has
+> bitten once already: the Windows column read `yes` on every row for
+> about a month while that job was failing every cell (see
+> "Verification — Windows column"). Treat the
+> [engine-tests workflow](../.github/workflows/engine-tests.yml) as
+> the source of truth and this file as a summary of it. If you edit a
+> cell, cite the run you are citing it from. Exact pass counts are
+> deliberately not recorded here — they drifted stale too, and the run
+> log already has them.
 
 ## Cell states
 
@@ -11,12 +20,13 @@
   with WebView2).
 - `partial` — code exists but no test, or test exists but is
   known-failing.
+- `unverified` — code and test exist, but no green run on that
+  backend backs the claim.
 - `no` — neither code nor test.
 
-End-state target met: every cell on every backend `yes` (141 cells:
-138 protocol cells + 3 capability-gate cells, one per backend). The
-engine-tests workflow runs all three platforms as load-bearing jobs;
-any regression turns the badge red.
+Target: every cell on every backend `yes` — currently met. All three
+platforms are load-bearing jobs in the engine-tests workflow and a
+regression on any of them turns the badge red.
 
 ## Status
 
@@ -53,6 +63,10 @@ any regression turns the badge red.
 | vs_log | yes | yes | yes |
 | vs_skill | yes | yes | yes |
 | vs_capture | yes | yes | yes |
+| vs_download url | yes | yes | yes |
+| vs_download captured | yes | yes | yes |
+| vs_download list | yes | yes | yes |
+| iframe src in tree (`ifr`) | yes | yes | yes |
 | vs_viewport | yes | yes | yes |
 | vs_layout | yes | yes | yes |
 | vs_auth save | yes | yes | yes |
@@ -72,21 +86,24 @@ any regression turns the badge red.
 
 ## Verification — Mac column
 
-48 of 48 tests in `crates/vs-cli/tests/m6/{lifecycle,act,wait,
-extract,visual,auth,memory,inspect}.rs` (including the capability-
-gate `cell_engine_unsupported_when_install_disabled`) pass against
-the host's real `WKWebView` via the `vs serve` subprocess. Sequential
-execution required (Cocoa main-thread constraint).
+All cells in `crates/vs-cli/tests/m6/*.rs` (including the
+capability-gate `cell_engine_unsupported_when_install_disabled`) pass
+against the host's real `WKWebView` via the `vs serve` subprocess.
+Mac runs the largest set — a few cells are `cfg`'d off on the other
+two backends — and is the slowest, because trusted input goes through
+real `NSEvent` dispatch and the responder chain.
+
+Sequential execution required (Cocoa main-thread constraint):
 
 ```
 cargo test --test m6 -- --test-threads=1
-# → test result: ok. 48 passed; 0 failed; finished in ~38s
 ```
 
 ## Verification — Linux column
 
-Same 48 tests pass on GitHub Actions `ubuntu-latest` with WebKitGTK
-6 + xvfb against the real `WebView`. WebKitGTK's sandbox needs
+The same suite, minus the Mac-only cells, passes on GitHub Actions
+`ubuntu-latest` with WebKitGTK 6 + xvfb against the real `WebView`.
+WebKitGTK's sandbox needs
 unprivileged user namespaces, which Ubuntu's default AppArmor
 profile restricts; CI relaxes the restriction with one sysctl.
 The capability-gate cell flips correctly when
@@ -98,7 +115,6 @@ wire.
 ```
 sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 xvfb-run --auto-servernum cargo test --test m6 -- --test-threads=1
-# → test result: ok. 48 passed; 0 failed; finished in ~30s
 ```
 
 For Linux runs on a non-Linux host, the `vs-test-linux` Docker
@@ -116,17 +132,32 @@ for the namespace bit).
 
 ## Verification — Windows column
 
-Same 48 tests pass on GitHub Actions `windows-latest` against the
+The same suite passes on GitHub Actions `windows-latest` against the
 host's WebView2 runtime via the `vs serve` subprocess. Sequential
 execution required for the same reason as Mac (single-threaded COM
 STA / Win32 message pump constraint).
 
 ```
 cargo test --test m6 -- --test-threads=1
-# → test result: ok. 48 passed; 0 failed; finished in ~4m
 ```
 
-Two bugs surfaced during CI bring-up and are fixed in tree:
+This column was previously all `yes` on the strength of a claim the
+job history did not support: `windows-latest` had been failing every
+cell for at least a month. The cause was a third bug, found only once
+the job was allowed to run long enough to print its own failure —
+
+- **`STATUS_STACK_OVERFLOW` (0xC00000FD) in `vs serve` at startup** —
+  Windows reserves 1 MiB for a process's main thread against 8 on
+  Unix, and `serve` does its whole startup there (store open, WebView2
+  backend, engine runtime, daemon), which a debug build does not fit
+  into. The daemon died before binding its named pipe, so every cell
+  failed at the harness's 10s spawn deadline and 71 × 10s pushed the
+  job past its own 12-minute cap — killing it before the failure
+  summary could print, so the crash stayed invisible. `vs-cli/build.rs`
+  now links the binary with an 8 MiB reserve, the harness inlines
+  `daemon.log` on spawn failure, and the cap is 25 minutes.
+
+Two earlier bugs surfaced during CI bring-up and are also fixed in tree:
 
 - **`STATUS_ACCESS_VIOLATION` on `Webview2Backend::open`** — the
   host `WNDCLASSW` was registered with `lpfnWndProc: None`, so the

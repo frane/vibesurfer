@@ -70,9 +70,13 @@ jobs:
   windows:
     name: Windows (real WebView2)
     runs-on: windows-latest
-    # A healthy run is ~5min; 12 caps a wedged WebView2 op without
-    # burning a full 30 (a single hung CapturePreview used to stall here).
-    timeout-minutes: 12
+    # A healthy run is ~5min. The cap was 12, which turned out to hide
+    # the very failure it was meant to bound: when the daemon does not
+    # come up, all 71 cells fail at the harness's 10s spawn deadline
+    # (~12min of pure waiting), so the job was killed before the
+    # failure summary — and its daemon.log — ever printed. 25 leaves
+    # room for the summary on a fully-failing run.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: ilammy/setup-nasm@v1  # openh264 (vs-record) builds from source

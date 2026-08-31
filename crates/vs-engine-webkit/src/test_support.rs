@@ -14,8 +14,8 @@ use std::time::Duration;
 use vs_protocol::{Node, Op, Ref, Role, Tree};
 
 use crate::engine::{
-    ActTarget, Action, AuthBlob, CaptureScope, Engine, EngineCapabilities, EngineError,
-    EngineResult, LayoutBox, PageHandle, Viewport, WaitCondition,
+    ActTarget, Action, AuthBlob, CaptureScope, Download, DownloadEntry, DownloadSource, Engine,
+    EngineCapabilities, EngineError, EngineResult, LayoutBox, PageHandle, Viewport, WaitCondition,
 };
 
 /// 1×1 transparent PNG. Used by the test engine so the protocol's
@@ -28,6 +28,16 @@ const ONE_BY_ONE_PNG: &[u8] = &[
     0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
     0x42, 0x60, 0x82,
 ];
+/// Filename the fake captured download claims. A real one comes from
+/// `Content-Disposition` or a `download="..."` attribute — both
+/// attacker-controlled — so the fake is hostile on purpose: any test
+/// that sees this land as `escaped.bin` inside the downloads directory
+/// has proved the daemon's sanitizer holds.
+pub const CAPTURED_DOWNLOAD_NAME: &str = "../../../escaped.bin";
+
+/// Payload the fake captured download serves.
+pub const CAPTURED_DOWNLOAD_BODY: &[u8] = b"%PDF-1.4 test captured download";
+
 /// Per-page state held by [`TestEngine`].
 #[derive(Debug, Clone)]
 struct TestPage {
@@ -264,6 +274,62 @@ impl Engine for TestEngine {
         let p = self.page_mut(page)?;
         p.viewport = viewport;
         Ok(())
+    }
+
+    /// Synthetic downloads. A URL source echoes the URL back as the
+    /// payload; the captured source serves [`CAPTURED_DOWNLOAD_NAME`],
+    /// whose deliberately hostile filename lets daemon-layer tests
+    /// prove that a page-supplied name cannot steer the write.
+    fn download(
+        &mut self,
+        page: PageHandle,
+        source: DownloadSource,
+        _budget: Duration,
+    ) -> EngineResult<Download> {
+        let _ = self.page(page)?;
+        match source {
+            DownloadSource::Url(url) => {
+                let name = url
+                    .rsplit('/')
+                    .next()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("download")
+                    .to_string();
+                Ok(Download {
+                    bytes: format!("test-download:{url}").into_bytes(),
+                    filename: name,
+                    mime: "application/octet-stream".into(),
+                    url,
+                })
+            }
+            DownloadSource::Captured { id } => {
+                if id.is_some_and(|n| n != 1) {
+                    return Err(EngineError::NotFound {
+                        kind: "download",
+                        id: id.unwrap_or(0).to_string(),
+                    });
+                }
+                Ok(Download {
+                    bytes: CAPTURED_DOWNLOAD_BODY.to_vec(),
+                    filename: CAPTURED_DOWNLOAD_NAME.into(),
+                    mime: "application/pdf".into(),
+                    url: "blob:https://example.com/abc-123".into(),
+                })
+            }
+        }
+    }
+
+    fn download_list(&mut self, page: PageHandle) -> EngineResult<Vec<DownloadEntry>> {
+        let _ = self.page(page)?;
+        Ok(vec![DownloadEntry {
+            id: 1,
+            filename: CAPTURED_DOWNLOAD_NAME.into(),
+            mime: "application/pdf".into(),
+            url: "blob:https://example.com/abc-123".into(),
+            size: CAPTURED_DOWNLOAD_BODY.len() as u64,
+            error: None,
+            done: true,
+        }])
     }
 
     fn save_auth(&mut self, page: PageHandle) -> EngineResult<AuthBlob> {

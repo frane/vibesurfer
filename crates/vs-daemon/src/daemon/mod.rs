@@ -37,10 +37,10 @@ use crate::page_state::PageState;
 pub(crate) use audit::AuditCtx;
 pub use responses::{
     ActCall, ActResponse, AnnotateResponse, AuthClearResponse, AuthListResponse, AuthLoadResponse,
-    AuthSaveResponse, CaptureResponse, CloseResponse, ExtractResponse, FindHit, FindResponse,
-    LayoutResponse, LogResponse, MarkResponse, OpenResponse, ReadResponse, SessionCloseResponse,
-    SessionOpenResponse, SkillListResponse, SkillShowResponse, StatusResponse, ViewResponse,
-    ViewportResponse, WaitResponse,
+    AuthSaveResponse, CaptureResponse, CloseResponse, DownloadListResponse, DownloadResponse,
+    ExtractResponse, FindHit, FindResponse, LayoutResponse, LogResponse, MarkResponse,
+    OpenResponse, ReadResponse, SessionCloseResponse, SessionOpenResponse, SkillListResponse,
+    SkillShowResponse, StatusResponse, ViewResponse, ViewportResponse, WaitResponse,
 };
 
 /// One in-memory session.
@@ -68,6 +68,7 @@ pub(crate) struct Inner {
     pub(crate) engine: Arc<EngineRuntime>,
     pub(crate) sessions: Mutex<HashMap<String, SessionState>>,
     pub(crate) captures_dir: std::path::PathBuf,
+    pub(crate) downloads_dir: std::path::PathBuf,
     pub(crate) skills_dir: std::path::PathBuf,
     pub(crate) master_key: Option<vs_store::MasterKey>,
     pub(crate) pending: Arc<pending::PendingQueue>,
@@ -86,6 +87,7 @@ impl Daemon {
                 engine,
                 sessions: Mutex::new(HashMap::new()),
                 captures_dir: std::env::temp_dir().join("vibesurfer-captures"),
+                downloads_dir: std::env::temp_dir().join("vibesurfer-downloads"),
                 skills_dir: std::path::PathBuf::from("./skills"),
                 master_key: None,
                 pending: pending::PendingQueue::new(),
@@ -103,6 +105,19 @@ impl Daemon {
             .map_err(|_| ())
             .expect("Daemon::with_captures_dir must run before any clone of the daemon handle");
         inner.captures_dir = dir.into();
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// Pin the on-disk path where `vs_download` writes files.
+    /// Must run before the daemon is [`Arc::clone`]d.
+    #[must_use]
+    pub fn with_downloads_dir(self, dir: impl Into<std::path::PathBuf>) -> Self {
+        let mut inner = Arc::try_unwrap(self.inner)
+            .map_err(|_| ())
+            .expect("Daemon::with_downloads_dir must run before any clone of the daemon handle");
+        inner.downloads_dir = dir.into();
         Self {
             inner: Arc::new(inner),
         }

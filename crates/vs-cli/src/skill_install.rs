@@ -157,6 +157,7 @@ pub fn run() -> Result<()> {
     let agents = agents();
     let mut wrote_skill = 0usize;
     let mut wrote_mcp = 0usize;
+    let mut installed_skills: Vec<PathBuf> = Vec::new();
     let mut detected = 0usize;
     let mut failures = Vec::new();
 
@@ -173,6 +174,7 @@ pub fn run() -> Result<()> {
             match write_skill(&path) {
                 Ok(()) => {
                     lines.push(format!("skill → {}", path.display()));
+                    installed_skills.push(path.clone());
                     if let Some(post) = agent.skill_post {
                         if let Err(e) = post(&path) {
                             failures.push(format!("{}: post-install: {e:#}", agent.name));
@@ -210,6 +212,8 @@ pub fn run() -> Result<()> {
             }
         }
     }
+
+    write_stamp(&installed_skills);
 
     println!(
         "{wrote_skill} skill files, {wrote_mcp} MCP entries written across {detected} detected agents."
@@ -392,9 +396,7 @@ fn file_exists(rel: &str) -> bool {
 }
 
 fn project_dir_exists(rel: &str) -> bool {
-    std::env::current_dir()
-        .ok()
-        .is_some_and(|cwd| cwd.join(rel).is_dir())
+    std::env::current_dir().is_ok_and(|cwd| cwd.join(rel).is_dir())
 }
 
 fn on_path(bin: &str) -> bool {
@@ -433,6 +435,100 @@ fn claude_desktop_dir_exists() -> bool {
     })
 }
 
+// ============================================================================
+// Upgrade refresh
+// ============================================================================
+//
+// `SKILL.md` is baked into the binary with `include_str!`, so a new
+// binary always carries new instructions — but the copies already on
+// disk in each agent's skills directory are just files, and nothing
+// rewrote them. Upgrading vibesurfer (brew, npx, cargo install) left
+// every agent reading the SKILL.md from whichever version last ran
+// `vs skill install`. Agents kept describing primitives that had
+// changed and never learned about ones that had been added, which is
+// worse than an out-of-date binary: the instructions are what the
+// model acts on.
+
+/// Records which skill files this machine has, and the version that
+/// wrote them. Lives next to the rest of the daemon's state.
+fn stamp_path() -> Option<PathBuf> {
+    home_dir().map(|h| h.join(".vibesurfer/skill-install.json"))
+}
+
+fn write_stamp(skills: &[PathBuf]) {
+    let Some(path) = stamp_path() else { return };
+    if let Some(dir) = path.parent() {
+        if std::fs::create_dir_all(dir).is_err() {
+            return;
+        }
+    }
+    let doc = json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "skills": skills.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+    });
+    // Best-effort: a machine that cannot write the stamp still has a
+    // working install, it just re-checks on the next upgrade.
+    let _ = std::fs::write(&path, doc.to_string());
+}
+
+/// Rewrite previously-installed SKILL.md files when the binary has
+/// been upgraded since they were written.
+///
+/// Deliberately narrow. It only touches paths a previous
+/// `vs skill install` recorded, so it cannot surprise anyone by
+/// writing into an agent they never opted into, and it never adds
+/// newly-supported agents — that stays an explicit install. A path
+/// that has since been deleted is dropped from the stamp rather than
+/// recreated.
+///
+/// Returns the number of files refreshed. Cheap on the common path:
+/// one small read, and a string compare that matches.
+#[must_use]
+pub fn refresh_if_stale() -> usize {
+    let Some(path) = stamp_path() else { return 0 };
+    refresh_stamp_at(&path, env!("CARGO_PKG_VERSION"))
+}
+
+/// [`refresh_if_stale`] with the stamp location and current version
+/// injected, so it can be exercised without touching `$HOME`.
+fn refresh_stamp_at(stamp: &Path, current: &str) -> usize {
+    let Ok(body) = std::fs::read_to_string(stamp) else {
+        return 0;
+    };
+    let Ok(doc) = serde_json::from_str::<Value>(&body) else {
+        return 0;
+    };
+    if doc.get("version").and_then(Value::as_str) == Some(current) {
+        return 0;
+    }
+    let Some(entries) = doc.get("skills").and_then(Value::as_array) else {
+        return 0;
+    };
+
+    let mut refreshed = Vec::new();
+    for entry in entries {
+        let Some(p) = entry.as_str().map(PathBuf::from) else {
+            continue;
+        };
+        // Only refresh what is still there. A deleted skill file means
+        // the user removed that agent; recreating it would be the tool
+        // reinstalling itself behind their back.
+        if !p.exists() {
+            continue;
+        }
+        if write_skill(&p).is_ok() {
+            refreshed.push(p);
+        }
+    }
+    let n = refreshed.len();
+    let doc = json!({
+        "version": current,
+        "skills": refreshed.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+    });
+    let _ = std::fs::write(stamp, doc.to_string());
+    n
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -461,5 +557,68 @@ mod tests {
             ag.skill_post.is_none(),
             "no GEMINI manifest for antigravity"
         );
+    }
+
+    fn stamp_with(dir: &Path, version: &str, skills: &[&Path]) -> PathBuf {
+        let stamp = dir.join("skill-install.json");
+        let doc = json!({
+            "version": version,
+            "skills": skills.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+        });
+        std::fs::write(&stamp, doc.to_string()).unwrap();
+        stamp
+    }
+
+    /// Upgrading the binary must rewrite the SKILL.md copies already on
+    /// disk. They are what agents actually read, so a stale one keeps
+    /// describing primitives that changed and hides ones that were
+    /// added — worse than a stale binary.
+    #[test]
+    fn upgrade_rewrites_installed_skill_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let skill = dir.path().join("claude/skills/vibesurfer/SKILL.md");
+        std::fs::create_dir_all(skill.parent().unwrap()).unwrap();
+        std::fs::write(&skill, "STALE FROM AN OLD VERSION").unwrap();
+        let stamp = stamp_with(dir.path(), "0.0.1-old", &[skill.as_path()]);
+
+        assert_eq!(refresh_stamp_at(&stamp, "9.9.9"), 1);
+        assert_eq!(std::fs::read_to_string(&skill).unwrap(), SKILL_MD);
+
+        let doc: Value = serde_json::from_str(&std::fs::read_to_string(&stamp).unwrap()).unwrap();
+        assert_eq!(doc["version"], "9.9.9");
+    }
+
+    /// Same version: nothing to do, and nothing written. This runs on
+    /// every `vs` invocation, so it has to be a cheap no-op.
+    #[test]
+    fn same_version_is_a_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let skill = dir.path().join("SKILL.md");
+        std::fs::write(&skill, "untouched").unwrap();
+        let stamp = stamp_with(dir.path(), "9.9.9", &[skill.as_path()]);
+
+        assert_eq!(refresh_stamp_at(&stamp, "9.9.9"), 0);
+        assert_eq!(std::fs::read_to_string(&skill).unwrap(), "untouched");
+    }
+
+    /// A skill file the user deleted stays deleted. Recreating it would
+    /// be the tool reinstalling itself into an agent they removed.
+    #[test]
+    fn deleted_skill_file_is_not_recreated() {
+        let dir = tempfile::tempdir().unwrap();
+        let gone = dir.path().join("removed/SKILL.md");
+        let stamp = stamp_with(dir.path(), "0.0.1-old", &[gone.as_path()]);
+
+        assert_eq!(refresh_stamp_at(&stamp, "9.9.9"), 0);
+        assert!(!gone.exists(), "must not resurrect a removed agent");
+        let doc: Value = serde_json::from_str(&std::fs::read_to_string(&stamp).unwrap()).unwrap();
+        assert_eq!(doc["skills"].as_array().unwrap().len(), 0);
+    }
+
+    /// No stamp at all (never ran `vs skill install`) is not an error.
+    #[test]
+    fn missing_stamp_is_silent() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(refresh_stamp_at(&dir.path().join("nope.json"), "9.9.9"), 0);
     }
 }

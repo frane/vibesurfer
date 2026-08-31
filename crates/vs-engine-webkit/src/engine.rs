@@ -188,6 +188,49 @@ impl Viewport {
     }
 }
 
+/// What [`Engine::download`] should hand back.
+#[derive(Debug, Clone)]
+pub enum DownloadSource {
+    /// Read `url` from inside the page, with the page's own cookies and
+    /// referer. Relative URLs resolve against the current document.
+    Url(String),
+    /// Drain the newest download the page *tried* to perform (a
+    /// `download` anchor, a `blob:` navigation, a viewer's save button)
+    /// and that the shim captured. `id` selects a specific buffered
+    /// entry; `None` takes the newest completed one.
+    Captured { id: Option<u64> },
+}
+
+/// One download the engine holds in memory, on its way to disk.
+#[derive(Debug, Clone)]
+pub struct Download {
+    pub bytes: Vec<u8>,
+    /// Suggested file name, from `Content-Disposition`, the anchor's
+    /// `download` attribute, or the URL's last path segment.
+    pub filename: String,
+    /// MIME type as reported by the blob or the response. May be empty.
+    pub mime: String,
+    /// The URL the bytes came from. `blob:` for in-page saves.
+    pub url: String,
+}
+
+/// A captured download intent, without its payload. Listed by
+/// [`Engine::download_list`] so an agent can see what the page tried
+/// to save before committing to reading any of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadEntry {
+    pub id: u64,
+    pub filename: String,
+    pub mime: String,
+    pub url: String,
+    pub size: u64,
+    /// `Some(msg)` when the capture failed (revoked blob, HTTP error,
+    /// over the size cap). The entry is kept so the failure is visible
+    /// instead of the download silently vanishing.
+    pub error: Option<String>,
+    pub done: bool,
+}
+
 /// Result of [`Engine::layout`]: the computed box for a single ref.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LayoutBox {
@@ -409,6 +452,37 @@ pub trait Engine {
 
     /// Compute layout boxes for `refs` at `page`.
     fn layout(&mut self, page: PageHandle, refs: &[Ref]) -> EngineResult<Vec<LayoutBox>>;
+
+    /// Read a file out of `page` — either a URL fetched with the page's
+    /// credentials, or a download the page itself initiated and the
+    /// capture shim parked. Returns the bytes; the daemon owns where
+    /// they land on disk.
+    ///
+    /// Headless web views have no download delegate, so a download the
+    /// page starts is otherwise dropped without an event. Backends with
+    /// a working JS bridge get this for free via
+    /// [`common::run_download`](crate::backend); the default is
+    /// unsupported.
+    fn download(
+        &mut self,
+        _page: PageHandle,
+        _source: DownloadSource,
+        _budget: Duration,
+    ) -> EngineResult<Download> {
+        Err(EngineError::Unsupported {
+            engine: self.capabilities().name,
+            primitive: "download",
+        })
+    }
+
+    /// List the download intents the shim has captured on `page`,
+    /// payloads excluded.
+    fn download_list(&mut self, _page: PageHandle) -> EngineResult<Vec<DownloadEntry>> {
+        Err(EngineError::Unsupported {
+            engine: self.capabilities().name,
+            primitive: "download",
+        })
+    }
 
     /// Set the viewport at `page`. Triggers a re-baseline for the next
     /// `snapshot`.

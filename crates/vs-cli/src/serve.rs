@@ -155,6 +155,112 @@ pub async fn wait_terminate() {
 // macOS: NSApp on main, tokio on worker, real WKWebView backend.
 // =============================================================================
 
+/// Wakes the Cocoa main thread's run loop from a worker thread.
+///
+/// The engine's job queue is an `mpsc` channel, which a run loop cannot
+/// wait on. Handing the daemon's workers a way to signal the loop lets
+/// the main thread block on `runMode` until there is real work, instead
+/// of waking on a short timer to poll for it.
+///
+/// This is a real `CFRunLoopSource`, not a bare `CFRunLoopWakeUp`.
+/// `CFRunLoopWakeUp` alone only makes the loop re-evaluate its sources;
+/// with nothing to process it goes straight back to sleep and
+/// `runMode:beforeDate:` still does not return until the date passes
+/// (measured: every engine hop took the full slice). A signalled
+/// source has something to *handle*, which is what makes `runMode`
+/// return promptly.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy)]
+struct MainRunLoopWaker {
+    run_loop: *mut std::ffi::c_void,
+    source: *mut std::ffi::c_void,
+}
+
+// SAFETY: `CFRunLoopSourceSignal` and `CFRunLoopWakeUp` are documented
+// as safe to call from a thread other than the one running the loop.
+// Both pointers refer to the process's main run loop and a source
+// owned by it, which outlive every worker holding this waker.
+#[cfg(target_os = "macos")]
+unsafe impl Send for MainRunLoopWaker {}
+#[cfg(target_os = "macos")]
+unsafe impl Sync for MainRunLoopWaker {}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+struct CFRunLoopSourceContext {
+    version: isize,
+    info: *mut std::ffi::c_void,
+    retain: *const std::ffi::c_void,
+    release: *const std::ffi::c_void,
+    copy_description: *const std::ffi::c_void,
+    equal: *const std::ffi::c_void,
+    hash: *const std::ffi::c_void,
+    schedule: *const std::ffi::c_void,
+    cancel: *const std::ffi::c_void,
+    perform: Option<extern "C" fn(*mut std::ffi::c_void)>,
+}
+
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn CFRunLoopGetCurrent() -> *mut std::ffi::c_void;
+    fn CFRunLoopWakeUp(rl: *mut std::ffi::c_void);
+    fn CFRunLoopSourceSignal(source: *mut std::ffi::c_void);
+    fn CFRunLoopSourceCreate(
+        allocator: *const std::ffi::c_void,
+        order: isize,
+        context: *mut CFRunLoopSourceContext,
+    ) -> *mut std::ffi::c_void;
+    fn CFRunLoopAddSource(
+        rl: *mut std::ffi::c_void,
+        source: *mut std::ffi::c_void,
+        mode: *const std::ffi::c_void,
+    );
+    static kCFRunLoopDefaultMode: *const std::ffi::c_void;
+}
+
+/// The source's only job is to exist and be signalled — handling it is
+/// what returns control to our loop, which then drains the real queue.
+#[cfg(target_os = "macos")]
+extern "C" fn waker_perform(_info: *mut std::ffi::c_void) {}
+
+#[cfg(target_os = "macos")]
+impl MainRunLoopWaker {
+    /// Install a wake source on the calling thread's run loop. Must be
+    /// called on the thread that will run the loop.
+    fn install() -> Self {
+        let mut ctx = CFRunLoopSourceContext {
+            version: 0,
+            info: std::ptr::null_mut(),
+            retain: std::ptr::null(),
+            release: std::ptr::null(),
+            copy_description: std::ptr::null(),
+            equal: std::ptr::null(),
+            hash: std::ptr::null(),
+            schedule: std::ptr::null(),
+            cancel: std::ptr::null(),
+            perform: Some(waker_perform),
+        };
+        unsafe {
+            let run_loop = CFRunLoopGetCurrent();
+            let source = CFRunLoopSourceCreate(std::ptr::null(), 0, &raw mut ctx);
+            if !source.is_null() {
+                CFRunLoopAddSource(run_loop, source, kCFRunLoopDefaultMode);
+            }
+            Self { run_loop, source }
+        }
+    }
+
+    fn wake(self) {
+        if self.source.is_null() || self.run_loop.is_null() {
+            return;
+        }
+        unsafe {
+            CFRunLoopSourceSignal(self.source);
+            CFRunLoopWakeUp(self.run_loop);
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 #[allow(clippy::too_many_lines)]
 pub fn run(args: &ServeArgs) -> Result<()> {
@@ -180,6 +286,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
 
     let store = vs_store::Store::open(args.paths.db()).context("open state.db")?;
     let captures_dir = args.paths.captures();
+    let downloads_dir = args.paths.downloads();
     let skills_dir = args.paths.root.join("skills");
 
     // Engine lives on this thread (the Cocoa main thread). Construct
@@ -189,10 +296,20 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     let backend = WkBackend::new(mtm).with_capture_dir(captures_dir.clone());
     let engine_box: Box<dyn Engine> = Box::new(backend);
     let (engine_runtime, mut dispatcher) = EngineRuntime::dispatcher(engine_box);
-    let engine_runtime = Arc::new(engine_runtime);
+    // Let the run loop below sleep instead of polling. An mpsc send is
+    // not a run-loop source, so without this the main thread has to
+    // wake on a timer just to notice queued work — which cost ~1.5%
+    // CPU at idle, forever, on a daemon doing nothing.
+    // `CFRunLoopWakeUp` is the one CFRunLoop call documented as safe
+    // from another thread, and its signal is a mach port message: if it
+    // lands while the loop is between iterations it stays queued, so
+    // the next `runMode` returns immediately rather than missing a job.
+    let waker = MainRunLoopWaker::install();
+    let engine_runtime = Arc::new(engine_runtime.with_waker(Box::new(move || waker.wake())));
 
     let mut daemon = Daemon::new(store, engine_runtime.clone())
         .with_captures_dir(captures_dir)
+        .with_downloads_dir(downloads_dir)
         .with_skills_dir(skills_dir);
 
     if let Some(k) = resolve_master_key(&args.paths) {
@@ -300,17 +417,22 @@ pub fn run(args: &ServeArgs) -> Result<()> {
         if !keep_going {
             break 'main;
         }
-        // Pump the runloop briefly so WKWebView delegates / JS
-        // completion handlers fire on this thread. The slice also
-        // bounds how long a freshly-queued engine job waits to be
-        // picked up: an mpsc send from a daemon worker is not a
-        // run-loop source, so it can't cut this wait short, and the
-        // loop only returns to `tick()` when the slice elapses. At
-        // 50ms that was a ~50ms floor on *every* engine hop (measured:
-        // a trivial layout eval cost ~50ms). 4ms drops per-hop latency
-        // to ~10ms while keeping idle wakeups cheap (runMode sleeps
-        // efficiently between them).
-        let slice = NSDate::dateWithTimeIntervalSinceNow(0.004);
+        // Pump the runloop so WKWebView delegates / JS completion
+        // handlers fire on this thread.
+        //
+        // The slice used to double as the job-pickup latency: an mpsc
+        // send is not a run-loop source, so a queued job waited for the
+        // slice to elapse. That forced a bad trade — 50ms slices meant
+        // a ~50ms floor on every engine hop, and the 4ms slices that
+        // fixed it meant ~250 wakeups/sec and ~1.5% CPU on a daemon
+        // sitting idle.
+        //
+        // `MainRunLoopWaker` removes the trade: a worker signals the
+        // loop the moment it queues a job, so this can be a long sleep
+        // and still pick work up immediately. The slice is now only a
+        // backstop bounding how stale things could get if a wakeup were
+        // ever missed, which is why it is not simply `distantFuture`.
+        let slice = NSDate::dateWithTimeIntervalSinceNow(0.25);
         unsafe { runloop.runMode_beforeDate(NSDefaultRunLoopMode, &slice) };
     }
 
@@ -340,6 +462,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
 
     let store = vs_store::Store::open(args.paths.db()).context("open state.db")?;
     let captures_dir = args.paths.captures();
+    let downloads_dir = args.paths.downloads();
     let skills_dir = args.paths.root.join("skills");
 
     let backend = WpeBackend::new().with_capture_dir(captures_dir.clone());
@@ -349,6 +472,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
 
     let mut daemon = Daemon::new(store, engine_runtime.clone())
         .with_captures_dir(captures_dir)
+        .with_downloads_dir(downloads_dir)
         .with_skills_dir(skills_dir);
 
     if let Some(k) = resolve_master_key(&args.paths) {
@@ -472,6 +596,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
 
     let store = vs_store::Store::open(args.paths.db()).context("open state.db")?;
     let captures_dir = args.paths.captures();
+    let downloads_dir = args.paths.downloads();
     let skills_dir = args.paths.root.join("skills");
 
     let backend = Webview2Backend::new().with_capture_dir(captures_dir.clone());
@@ -481,6 +606,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
 
     let mut daemon = Daemon::new(store, engine_runtime.clone())
         .with_captures_dir(captures_dir)
+        .with_downloads_dir(downloads_dir)
         .with_skills_dir(skills_dir);
 
     if let Some(k) = resolve_master_key(&args.paths) {

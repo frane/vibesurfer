@@ -60,8 +60,9 @@ use crate::backend::inspector_bridge::{
     self, InspectorSlots, NetworkIngestSlot, CONSOLE_HANDLER, NETWORK_HANDLER,
 };
 use crate::engine::{
-    ActTarget, Action, AuthBlob, CaptureScope, CursorOp, Engine, EngineCapabilities, EngineError,
-    EngineResult, InputMode, LayoutBox, PageHandle, Viewport, WaitCondition,
+    ActTarget, Action, AuthBlob, CaptureScope, CursorOp, Download, DownloadEntry, DownloadSource,
+    Engine, EngineCapabilities, EngineError, EngineResult, InputMode, LayoutBox, PageHandle,
+    Viewport, WaitCondition,
 };
 // =============================================================================
 // JS payload shared with Mac / Linux backends.
@@ -530,6 +531,10 @@ impl Engine for Webview2Backend {
         //    document-start hook fires on the loaded page.
         let inspector = InspectorSlots::new(crate::inspector::DEFAULT_BUFFER_CAPACITY);
         let inspector_installed = install_inspector(&web_view, &inspector);
+        // Download capture, same shim as Mac / Linux.
+        // `AddScriptToExecuteOnDocumentCreated` applies to every frame,
+        // which is what the in-iframe viewer case needs.
+        let _ = add_init_script(&web_view, super::common::DOWNLOAD_SHIM_JS);
 
         // 4. Navigate + wait for NavigationCompleted.
         let (tx, rx) = mpsc::channel();
@@ -717,6 +722,42 @@ impl Engine for Webview2Backend {
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
         super::common::run_layout(move |js, _budget| execute_script(&web_view, js), refs)
+    }
+
+    fn download(
+        &mut self,
+        page: PageHandle,
+        source: DownloadSource,
+        budget: Duration,
+    ) -> EngineResult<Download> {
+        let p = self.page_mut(page)?;
+        let web_view = p.web_view.clone();
+        super::common::run_download(
+            |js, _budget| execute_script(&web_view, js),
+            || {
+                // Pump the Win32 message loop between polls so the
+                // in-page fetch's script completions make progress —
+                // same reasoning as `wait`.
+                use windows::Win32::UI::WindowsAndMessaging::{
+                    DispatchMessageW, PeekMessageW, MSG, PM_REMOVE,
+                };
+                let mut msg = MSG::default();
+                unsafe {
+                    while PeekMessageW(&raw mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                        DispatchMessageW(&raw const msg);
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            },
+            &source,
+            budget,
+        )
+    }
+
+    fn download_list(&mut self, page: PageHandle) -> EngineResult<Vec<DownloadEntry>> {
+        let p = self.page_mut(page)?;
+        let web_view = p.web_view.clone();
+        super::common::run_download_list(move |js, _budget| execute_script(&web_view, js))
     }
 
     fn set_viewport(&mut self, page: PageHandle, viewport: Viewport) -> EngineResult<()> {

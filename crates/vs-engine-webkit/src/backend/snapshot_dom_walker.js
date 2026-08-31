@@ -34,6 +34,11 @@
         'IMG': 'img', 'UL': 'lst', 'OL': 'lst', 'LI': 'li',
         'TABLE': 'tbl', 'TR': 'row', 'TD': 'cell', 'TH': 'cell',
         'FORM': 'frm', 'P': 'p', 'ARTICLE': 'art', 'SECTION': 'sec',
+        // Embedded documents. The walker cannot cross the frame
+        // boundary, so the node carries the only thing an agent can
+        // act on: the resolved src. Without it an embedded viewer
+        // (pdf.js and friends) is a hole in the tree.
+        'IFRAME': 'ifr', 'FRAME': 'ifr', 'EMBED': 'ifr', 'OBJECT': 'ifr',
     };
     // Roles whose label is *only* the leaf text the user reads, not the
     // entire subtree text. Containers (nav, main, hdr, sec, art, tbl,
@@ -114,6 +119,71 @@
         }
         return out.replace(/\s+/g, ' ').trim();
     }
+    // Bot-challenge detection.
+    //
+    // A challenge (Turnstile, hCaptcha, reCAPTCHA) is a hole in the
+    // tree: its container is a bare <div> the role table ignores, and
+    // when the widget fails to render there is no iframe either, so
+    // the only trace left is a hidden response input that reads as an
+    // anonymous `tf ... hid=1`. An agent sees a form, submits it, gets
+    // rejected by the server, and concludes the form is broken — the
+    // page never said it was gated.
+    //
+    // The response input is the reliable marker: every provider
+    // creates it, under both implicit (`.cf-turnstile` div) and
+    // explicit (`turnstile.render(...)`) rendering.
+    const CHALLENGE_INPUTS = {
+        'cf-turnstile-response': 'turnstile',
+        'h-captcha-response': 'hcaptcha',
+        'g-recaptcha-response': 'recaptcha',
+    };
+    const CHALLENGE_CLASSES = [
+        ['cf-turnstile', 'turnstile'],
+        ['h-captcha', 'hcaptcha'],
+        ['g-recaptcha', 'recaptcha'],
+    ];
+    /// `{provider, state}` if `el` is a challenge widget or its
+    /// response field, else null. `state` is what an agent needs to
+    /// decide what to do: `solved` (token present, submit away),
+    /// `pending` (widget is up, a human can complete it), or
+    /// `unrendered` (the script loaded but produced no widget at all —
+    /// nothing for anyone to interact with).
+    function challengeFor(el) {
+        var provider = null;
+        var tokenEl = null;
+        var name = el.getAttribute && (el.getAttribute('name') || '');
+        if (name && CHALLENGE_INPUTS[name]) {
+            provider = CHALLENGE_INPUTS[name];
+            tokenEl = el;
+        } else {
+            var cls = '';
+            try { cls = String(el.className && el.className.baseVal !== undefined ? el.className.baseVal : (el.className || '')); } catch (e) { cls = ''; }
+            for (var i = 0; i < CHALLENGE_CLASSES.length; i += 1) {
+                if (cls.indexOf(CHALLENGE_CLASSES[i][0]) >= 0) {
+                    provider = CHALLENGE_CLASSES[i][1];
+                    break;
+                }
+            }
+            if (!provider) return null;
+            try {
+                tokenEl = el.querySelector('[name="cf-turnstile-response"],[name="h-captcha-response"],[name="g-recaptcha-response"]');
+            } catch (e) { tokenEl = null; }
+        }
+        var token = tokenEl && tokenEl.value ? tokenEl.value : '';
+        // Look for a rendered widget: the provider draws into an
+        // iframe. Search the container, or the response field's
+        // enclosing widget wrapper.
+        var scope = tokenEl && tokenEl.parentNode && tokenEl.parentNode.parentNode
+            ? tokenEl.parentNode.parentNode
+            : el;
+        var rendered = false;
+        try {
+            rendered = !!(scope.querySelector && scope.querySelector('iframe'));
+        } catch (e) { rendered = false; }
+        var state = token ? 'solved' : (rendered ? 'pending' : 'unrendered');
+        return { provider: provider, state: state };
+    }
+
     function labelFor(el, role) {
         const aria = el.getAttribute('aria-label');
         if (aria) return aria.trim();
@@ -138,6 +208,21 @@
             return (el.value || el.placeholder || '').trim();
         }
         if (el.tagName === 'IMG') return (el.alt || '').trim();
+        if (role === 'ifr') {
+            // `.src` / `.data` are already resolved against the base
+            // URL; the attribute is often relative and useless to an
+            // agent that wants to fetch it.
+            var frameSrc = String(el.src || el.data || el.getAttribute('src') || '');
+            if (!frameSrc && el.tagName === 'IFRAME' && el.getAttribute('srcdoc') !== null) {
+                return 'srcdoc:';
+            }
+            // A data: URL is the whole document inline — megabytes of
+            // it, sometimes. Keep the mime prefix, drop the payload.
+            if (frameSrc.slice(0, 5) === 'data:') {
+                return 'data:' + frameSrc.slice(5).split(';')[0].split(',')[0];
+            }
+            return frameSrc.slice(0, 500);
+        }
         if (LEAF_LABEL_ROLES.has(role)) {
             // Use innerText (capped) for leaf-ish nodes the user reads.
             return (el.innerText || el.textContent || '')
@@ -156,6 +241,7 @@
     }
     function visit(el) {
         const role = roleFor(el);
+        const chal = challengeFor(el);
         const children = [];
         for (const c of el.children) {
             const node = visit(c);
@@ -171,8 +257,10 @@
                 if (node) children.push(node);
             }
         }
-        if (!role && children.length === 0) return null;
-        if (!role && children.length === 1) return children[0];
+        // A challenge node is always kept, even when it is a roleless
+        // childless div — dropping it is exactly the bug.
+        if (!chal && !role && children.length === 0) return null;
+        if (!chal && !role && children.length === 1) return children[0];
         const node = {
             // Always allocate a real (non-zero) ref, even for roleless
             // structural wrappers kept only to preserve tree shape.
@@ -183,6 +271,27 @@
             label: labelFor(el, role || 'el'),
             children,
         };
+        if (chal) {
+            node.chal = chal.provider + ':' + chal.state;
+            // Implicit rendering matches twice — once on the
+            // `.cf-turnstile` container, once on the response input
+            // inside it. Keep the outermost and clear the rest, so a
+            // page reports one challenge rather than two.
+            (function clearInner(kids) {
+                for (var i = 0; i < kids.length; i += 1) {
+                    if (kids[i].chal) delete kids[i].chal;
+                    if (kids[i].children) clearInner(kids[i].children);
+                }
+            })(children);
+            // Override the label: the response field would otherwise
+            // read as an anonymous masked input, which is what made
+            // this invisible in the first place.
+            node.label = chal.provider + ' challenge (' + chal.state + ')';
+            // Never mark a challenge hidden. It is legitimately
+            // zero-size when unrendered, and `hid=1` reads as "dead
+            // element, ignore it" — the opposite of what we mean.
+            return node;
+        }
         if (role && hiddenFor(el, role)) node.hid = 1;
         return node;
     }

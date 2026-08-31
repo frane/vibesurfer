@@ -25,6 +25,8 @@ vibesurfer is a native browser daemon in Rust. Reads return state tokens and tre
 
 When you actually need pixels there's `vs capture` for screenshots, `vs viewport` to switch between mobile and desktop layouts, and `vs layout` to get bounding boxes. But text comes first.
 
+When you need a file rather than a page, `vs download` saves one to disk. Given a URL it reads it from inside the page, so a session cookie still applies and a PDF behind a login comes down. Given no URL it hands back whatever the page last tried to save itself — a download link, a viewer's Save button — which a headless web view otherwise drops on the floor, since there is no download UI for it to go to.
+
 ## Install
 
 Try it instantly, no install. `npx` downloads the prebuilt binary for your platform (checksum-verified, then cached), so this just works:
@@ -137,6 +139,7 @@ Every primitive has a one-to-three-letter alias. Long forms exist for documentat
 | `view`         | `v`   | | `log`      | `l`   |
 | `read`         | `r`   | | `skill`    | `sk`  |
 | `act`          | `a`   | | `capture`  | `cap` |
+| `download`     | `dl`  | |            |       |
 | `find`         | `f`   | | `viewport` | `vp`  |
 | `wait`         | `w`   | | `layout`   | `lay` |
 | `auth`         | `au`  | | `inspect`  | `i`   |
@@ -200,7 +203,9 @@ Two of those exist for the humans next to the agents. `vs prompt-form` asks for 
 | `~/.vibesurfer/daemon.sock` *(Unix)* | AF_UNIX socket the CLI talks to |
 | Windows named pipe | Same role on Windows; resolved automatically |
 | `~/.vibesurfer/captures/` | Screenshots (`vs capture`) and recordings (`vs record`) |
+| `~/.vibesurfer/downloads/` | Files saved by `vs download` |
 | `VS_CAPTURES_DIR` | Override the capture directory |
+| `VS_DOWNLOADS_DIR` | Override the download directory |
 | `VS_SESSION` | Pin the session id (recommended in scripts; see `docs/known-issues.md`) |
 | `VS_CALLER` | Durable caller name; same name rebinds to the same session across restarts |
 | `VS_THUMBS=1` | On `vs mcp`: attach a screenshot thumbnail to every act/open result |

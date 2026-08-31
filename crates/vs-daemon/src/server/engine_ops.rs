@@ -1,15 +1,16 @@
 //! Wire handlers for engine-backed primitives: skill, capture,
-//! viewport, layout, auth.
+//! download, viewport, layout, auth.
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use vs_engine_webkit::{CaptureScope, Viewport};
+use vs_engine_webkit::{CaptureScope, DownloadSource, Viewport};
 use vs_protocol::{ErrorCode, Ref, Request, ResponseHead, StateToken};
 
 use super::helpers::{flag_value, format_daemon_error, format_error, require_session};
 use crate::daemon::{
-    AuthListResponse, AuthLoadResponse, AuthSaveResponse, CaptureResponse, Daemon, LayoutResponse,
-    SkillListResponse, SkillShowResponse, ViewportResponse,
+    AuthListResponse, AuthLoadResponse, AuthSaveResponse, CaptureResponse, Daemon,
+    DownloadListResponse, DownloadResponse, LayoutResponse, SkillListResponse, SkillShowResponse,
+    ViewportResponse,
 };
 use crate::page_state::ViewForm;
 
@@ -101,6 +102,100 @@ pub(super) fn handle_capture(daemon: &Daemon, req: &Request) -> String {
         Ok(CaptureResponse { path, token }) => {
             format!("{}{}\n", ResponseHead::ok(token).encode(), path.display())
         }
+        Err(e) => format_daemon_error(&e),
+    }
+}
+
+/// Flatten page-supplied text so it cannot break a tab-separated body
+/// row. Filenames and MIME types come from the page; a tab or newline
+/// in one would shift every column after it.
+fn one_line(s: &str) -> String {
+    s.replace(['\t', '\n', '\r'], " ")
+}
+
+/// Default budget for a download: enough for a slow multi-megabyte PDF
+/// behind an authenticated session, short enough that a wedged fetch
+/// doesn't hold an agent's tool call open forever. Override with
+/// `--timeout-ms`.
+const DOWNLOAD_BUDGET_MS: u64 = 30_000;
+
+/// `vs_download` — write a file out of a page to disk.
+///
+/// Args: `<page> [url]`. With a URL, the page fetches it with its own
+/// cookies. Without one, the newest download the page *tried* to
+/// perform is drained from the capture shim (`--id=N` picks a specific
+/// buffered entry, `--list` just enumerates them).
+///
+/// Body: `path`/`size`/`mime`/`url` rows, or one `dl` row per entry for
+/// `--list`. Bytes never cross the wire — only the path does.
+pub(super) fn handle_download(daemon: &Daemon, req: &Request) -> String {
+    let session_id = match require_session(req) {
+        Ok(s) => s,
+        Err(msg) => return format_error(ErrorCode::BadRequest, vec![msg]),
+    };
+    let Some(page_id) = req.args.first().cloned() else {
+        return format_error(
+            ErrorCode::BadRequest,
+            vec!["vs_download: missing page id".into()],
+        );
+    };
+
+    if req.flags.contains_key("list") {
+        return match daemon.download_list(&session_id, &page_id) {
+            Ok(DownloadListResponse { entries, token }) => {
+                let mut body = String::new();
+                for e in entries {
+                    use std::fmt::Write as _;
+                    // The last column is the URL, or `err=<why>` when
+                    // the capture failed — a failed download stays
+                    // listed so the agent sees the reason instead of an
+                    // entry that silently never appeared.
+                    let last = match &e.error {
+                        Some(msg) => format!("err={}", one_line(msg)),
+                        None => one_line(&e.url),
+                    };
+                    let _ = writeln!(
+                        body,
+                        "dl\t{}\t{}\t{}\t{}\t{}\t{last}",
+                        e.id,
+                        e.size,
+                        if e.done { "ready" } else { "pending" },
+                        one_line(&e.mime),
+                        one_line(&e.filename),
+                    );
+                }
+                format!("{}{body}", ResponseHead::ok(token).encode())
+            }
+            Err(e) => format_daemon_error(&e),
+        };
+    }
+
+    let source = match req.args.get(1) {
+        Some(url) => DownloadSource::Url(url.clone()),
+        None => DownloadSource::Captured {
+            id: flag_value(req, "id").and_then(|s| s.parse::<u64>().ok()),
+        },
+    };
+    let budget = std::time::Duration::from_millis(
+        flag_value(req, "timeout-ms")
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(DOWNLOAD_BUDGET_MS),
+    );
+    let dest = flag_value(req, "dest");
+    match daemon.download(&session_id, &page_id, source, dest.as_deref(), budget) {
+        Ok(DownloadResponse {
+            path,
+            size,
+            mime,
+            url,
+            token,
+        }) => format!(
+            "{}path\t{}\nsize\t{size}\nmime\t{}\nurl\t{}\n",
+            ResponseHead::ok(token).encode(),
+            path.display(),
+            one_line(&mime),
+            one_line(&url),
+        ),
         Err(e) => format_daemon_error(&e),
     }
 }

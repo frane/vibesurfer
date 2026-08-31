@@ -8,6 +8,7 @@
 //!   key                   # AES-256 fallback if OS keyring unavailable
 //!   log/                  # rotating tracing output (M5+)
 //!   captures/             # screenshot output paths (M5+)
+//!   downloads/            # files pulled out of a page by vs_download
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -73,6 +74,17 @@ impl Paths {
             return PathBuf::from(p);
         }
         self.root.join("captures")
+    }
+
+    /// Where the daemon writes files pulled out of a page by
+    /// `vs_download`. Defaults to `<root>/downloads`. Overridable
+    /// per-process via the `VS_DOWNLOADS_DIR` environment variable.
+    #[must_use]
+    pub fn downloads(&self) -> PathBuf {
+        if let Some(p) = std::env::var_os("VS_DOWNLOADS_DIR") {
+            return PathBuf::from(p);
+        }
+        self.root.join("downloads")
     }
 
     /// Ensure the root directory exists. On Unix the directory is

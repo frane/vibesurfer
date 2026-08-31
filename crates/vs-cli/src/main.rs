@@ -19,10 +19,32 @@ use vs_cli::commands::{render, run, Cli, Command};
 use vs_cli::serve::{self, ServeArgs};
 use vs_protocol::Envelope;
 
+/// Keep installed SKILL.md files in step with the binary. The
+/// instructions are what agents act on, so a stale copy is worse than
+/// a stale binary — it describes primitives that changed and omits
+/// ones that were added.
+///
+/// Called only from the two long-lived entry points (`serve` and
+/// `mcp`), not from every `vs` invocation. Those are the moments a
+/// newly-installed binary actually starts running: a plain `vs view`
+/// is answered by whichever daemon is already up, so refreshing there
+/// would put a file read on the hot path of every call to buy nothing.
+/// No-ops unless the version moved since `vs skill install` last ran.
+fn refresh_skills() {
+    let refreshed = vs_cli::skill_install::refresh_if_stale();
+    if refreshed > 0 {
+        eprintln!(
+            "vs: refreshed {refreshed} skill file(s) for v{} (run `vs skill install` to add agents)",
+            env!("CARGO_PKG_VERSION"),
+        );
+    }
+}
+
 fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
 
     if let Command::Serve { stop } = cli.command {
+        refresh_skills();
         let paths = vs_daemon::config::Paths::at(
             cli.home
                 .clone()
@@ -36,6 +58,7 @@ fn main() -> std::process::ExitCode {
     }
 
     if matches!(cli.command, Command::Mcp) {
+        refresh_skills();
         if let Err(e) = vs_cli::mcp::run(&cli) {
             eprintln!("error: {e:#}");
             return std::process::ExitCode::from(1);

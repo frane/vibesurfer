@@ -1,13 +1,14 @@
-//! Engine-backed primitives: `vs_skill`, `vs_capture`, `vs_viewport`,
-//! `vs_layout`, `vs_auth`.
+//! Engine-backed primitives: `vs_skill`, `vs_capture`, `vs_download`,
+//! `vs_viewport`, `vs_layout`, `vs_auth`.
 
-use vs_engine_webkit::{AuthBlob, CaptureScope, Viewport};
+use vs_engine_webkit::{AuthBlob, CaptureScope, DownloadSource, Viewport};
 use vs_protocol::{Ref, StateToken, Warning, WarningCode};
 
 use super::audit::AuditCtx;
 use super::responses::{
     AuthClearResponse, AuthListResponse, AuthLoadResponse, AuthSaveResponse, CaptureResponse,
-    LayoutResponse, SkillListResponse, SkillShowResponse, ViewportResponse,
+    DownloadListResponse, DownloadResponse, LayoutResponse, SkillListResponse, SkillShowResponse,
+    ViewportResponse,
 };
 use super::Daemon;
 use crate::error::{DaemonError, Result};
@@ -110,6 +111,119 @@ impl Daemon {
             ctx.result_summary = Some(path.display().to_string());
             Ok(CaptureResponse { path, token })
         })
+    }
+
+    /// Pull a file out of a page and write it to disk.
+    ///
+    /// `source` is either a URL — read from inside the page, so session
+    /// cookies apply — or a download the page itself started and the
+    /// engine's capture shim parked. Returns the path; the bytes never
+    /// cross the wire.
+    pub fn download(
+        &self,
+        session_id: &str,
+        page_id: &str,
+        source: DownloadSource,
+        dest: Option<&str>,
+        budget: std::time::Duration,
+    ) -> Result<DownloadResponse> {
+        let label = match &source {
+            DownloadSource::Url(u) => u.clone(),
+            DownloadSource::Captured { id: Some(id) } => format!("captured:{id}"),
+            DownloadSource::Captured { id: None } => "captured:latest".to_string(),
+        };
+        let ctx = AuditCtx::new("vs_download", session_id)
+            .with_page(page_id)
+            .with_args(
+                label.clone(),
+                tokens::args_hash("vs_download", std::slice::from_ref(&label)),
+            );
+        self.audit_call(ctx, |ctx| {
+            let engine_handle = self.engine_handle_for(session_id, page_id)?;
+            let file = self.inner.engine.download(engine_handle, source, budget)?;
+            let path = self.resolve_download_path(dest, &file.filename)?;
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).map_err(DaemonError::Io)?;
+            }
+            std::fs::write(&path, &file.bytes).map_err(DaemonError::Io)?;
+            let token = self
+                .current_token(session_id, page_id)
+                .unwrap_or(StateToken::ZERO);
+            ctx.after_token = Some(token);
+            ctx.result_summary = Some(format!("{} ({} bytes)", path.display(), file.bytes.len()));
+            Ok(DownloadResponse {
+                path,
+                size: file.bytes.len() as u64,
+                mime: file.mime,
+                url: file.url,
+                token,
+            })
+        })
+    }
+
+    /// List the download intents the page has produced. Cheap — no
+    /// payload is read.
+    pub fn download_list(&self, session_id: &str, page_id: &str) -> Result<DownloadListResponse> {
+        let ctx = AuditCtx::new("vs_download", session_id)
+            .with_page(page_id)
+            .with_args(
+                "list".into(),
+                tokens::args_hash("vs_download", &["list".into()]),
+            );
+        self.audit_call(ctx, |ctx| {
+            let engine_handle = self.engine_handle_for(session_id, page_id)?;
+            let entries = self.inner.engine.download_list(engine_handle)?;
+            let token = self
+                .current_token(session_id, page_id)
+                .unwrap_or(StateToken::ZERO);
+            ctx.after_token = Some(token);
+            ctx.result_summary = Some(format!("{} pending", entries.len()));
+            Ok(DownloadListResponse { entries, token })
+        })
+    }
+
+    /// Where a downloaded file lands.
+    ///
+    /// With no `dest`, the page's suggested name is sanitized (see
+    /// [`safe_filename`]) and placed in the downloads directory, with a
+    /// `-1`, `-2`, … suffix if that name is taken — a second download
+    /// must never silently overwrite the first. An absolute `dest` is
+    /// honored verbatim; a relative one resolves under the downloads
+    /// directory, so a page-supplied `../../` cannot escape it.
+    fn resolve_download_path(
+        &self,
+        dest: Option<&str>,
+        suggested: &str,
+    ) -> Result<std::path::PathBuf> {
+        let dir = &self.inner.downloads_dir;
+        if let Some(d) = dest {
+            let p = std::path::Path::new(d);
+            return Ok(if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                dir.join(safe_relative(p))
+            });
+        }
+        std::fs::create_dir_all(dir).map_err(DaemonError::Io)?;
+        let name = safe_filename(suggested);
+        let candidate = dir.join(&name);
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+        let (stem, ext) = match name.rsplit_once('.') {
+            Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
+            _ => (name.clone(), String::new()),
+        };
+        for n in 1..10_000 {
+            let candidate = dir.join(format!("{stem}-{n}{ext}"));
+            if !candidate.exists() {
+                return Ok(candidate);
+            }
+        }
+        Err(DaemonError::Io(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!("no free filename for {name:?} in {}", dir.display()),
+        )))
     }
 
     /// Set the page viewport. Triggers a fresh-full re-baseline on the
@@ -340,5 +454,142 @@ impl Daemon {
             store.delete_auth(name)?;
             Ok(AuthClearResponse)
         })
+    }
+}
+
+/// Reduce a page-supplied filename to a single, harmless path
+/// component.
+///
+/// The name comes from `Content-Disposition` or a `download="..."`
+/// attribute — attacker-controlled on any page an agent visits — and
+/// the daemon writes to it. Everything up to the last separator is
+/// dropped (so `../../.ssh/authorized_keys` becomes
+/// `authorized_keys`), reserved and control characters are replaced,
+/// and a name that reduces to nothing, to a dot-entry, or to a Windows
+/// device name falls back to `download`.
+fn safe_filename(suggested: &str) -> String {
+    /// Windows device names: a file so called is the device, not a
+    /// file, on that platform. Guarded everywhere so a downloads
+    /// directory copied between hosts stays sane.
+    const RESERVED: [&str; 22] = [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    // Both separators: a Content-Disposition minted on Windows can
+    // carry backslashes even when we're writing on Unix.
+    let base = suggested
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(suggested)
+        .trim();
+    let mut out: String = base
+        .chars()
+        .map(|c| match c {
+            // Path/shell/Windows-reserved and every control char.
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0' => '_',
+            c if c.is_control() => '_',
+            c => c,
+        })
+        .collect();
+    // Trailing dots and spaces are stripped by Windows on create,
+    // which would silently retarget the write.
+    while out.ends_with(['.', ' ']) {
+        out.pop();
+    }
+    if out.is_empty() || out == "." || out == ".." {
+        return "download".into();
+    }
+    let stem = out.split('.').next().unwrap_or("").to_ascii_uppercase();
+    if RESERVED.contains(&stem.as_str()) {
+        out.insert(0, '_');
+    }
+    // Filesystems cap a component at 255 bytes; truncate on a char
+    // boundary so the result stays valid UTF-8.
+    while out.len() > 255 {
+        out.pop();
+    }
+    out
+}
+
+/// Sanitize a caller-supplied *relative* `--dest` into a path that
+/// cannot climb out of the downloads directory: every component is run
+/// through [`safe_filename`], and `..` / root components are dropped.
+fn safe_relative(p: &std::path::Path) -> std::path::PathBuf {
+    use std::path::Component;
+    let mut out = std::path::PathBuf::new();
+    for c in p.components() {
+        if let Component::Normal(part) = c {
+            out.push(safe_filename(&part.to_string_lossy()));
+        }
+    }
+    if out.as_os_str().is_empty() {
+        out.push("download");
+    }
+    out
+}
+
+#[cfg(test)]
+mod download_path_tests {
+    use super::{safe_filename, safe_relative};
+    use std::path::Path;
+
+    #[test]
+    fn strips_traversal_from_content_disposition() {
+        assert_eq!(
+            safe_filename("../../.ssh/authorized_keys"),
+            "authorized_keys"
+        );
+        assert_eq!(
+            safe_filename("..\\..\\windows\\system32\\cmd.exe"),
+            "cmd.exe"
+        );
+        assert_eq!(safe_filename("/etc/passwd"), "passwd");
+    }
+
+    #[test]
+    fn degenerate_names_fall_back() {
+        for bad in ["", "   ", ".", "..", "/", "///", "..."] {
+            assert_eq!(safe_filename(bad), "download", "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn keeps_ordinary_names_intact() {
+        assert_eq!(
+            safe_filename("Jahresabrechnung 2025.pdf"),
+            "Jahresabrechnung 2025.pdf"
+        );
+        assert_eq!(
+            safe_filename("report-v2.final.xlsx"),
+            "report-v2.final.xlsx"
+        );
+    }
+
+    #[test]
+    fn replaces_control_and_reserved_chars() {
+        assert_eq!(safe_filename("a\nb\tc.txt"), "a_b_c.txt");
+        assert_eq!(safe_filename("q?:*.txt"), "q___.txt");
+        assert_eq!(safe_filename("nul.txt"), "_nul.txt");
+    }
+
+    #[test]
+    fn truncation_stays_on_a_char_boundary() {
+        let name = "ä".repeat(400);
+        let out = safe_filename(&name);
+        assert!(out.len() <= 255);
+        assert!(out.chars().all(|c| c == 'ä'));
+    }
+
+    #[test]
+    fn relative_dest_cannot_escape() {
+        assert_eq!(
+            safe_relative(Path::new("../../etc/passwd")),
+            Path::new("etc/passwd")
+        );
+        assert_eq!(
+            safe_relative(Path::new("sub/dir/file.pdf")),
+            Path::new("sub/dir/file.pdf")
+        );
+        assert_eq!(safe_relative(Path::new("..")), Path::new("download"));
     }
 }

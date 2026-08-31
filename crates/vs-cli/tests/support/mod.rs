@@ -135,10 +135,22 @@ pub fn spawn_daemon_with_env(home: &Path, env: &[(&str, &str)]) -> DaemonGuard {
         std::thread::sleep(Duration::from_millis(50));
     }
     let _ = guard.child.kill();
-    let _ = guard.child.wait();
+    let exit = guard.child.wait();
+    // Include the daemon's own output. Without it this panic says only
+    // that the socket never appeared, which is the symptom, not the
+    // cause — and on Windows, where every cell fails this way, the
+    // cause was invisible because the run is killed by the job timeout
+    // before the failure summary ever prints.
+    let log = std::fs::read_to_string(&log).unwrap_or_else(|e| format!("<unreadable: {e}>"));
     panic!(
-        "daemon socket {} did not appear within 10s",
-        socket.display()
+        "daemon socket {} did not appear within 10s (child exit: {exit:?})\n\
+         --- daemon.log ---\n{}",
+        socket.display(),
+        if log.trim().is_empty() {
+            "<empty — daemon wrote nothing>"
+        } else {
+            log.trim()
+        }
     );
 }
 

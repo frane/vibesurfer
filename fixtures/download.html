@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Downloads</title></head>
+<body>
+  <h1>Downloads</h1>
+
+  <!-- Server-driven: Content-Disposition attachment behind a cookie. -->
+  <a id="server-link" href="/files/report.pdf" download>Report (server)</a>
+
+  <!--
+    In-page save, the shape every embedded viewer uses (pdf.js among
+    them): build a Blob, mint an object URL, click a detached anchor,
+    then revoke the URL immediately. A capture shim that waits and then
+    fetches the URL loses this race; one that holds the Blob does not.
+  -->
+  <button id="save-blob" type="button">Save blob</button>
+
+  <!--
+    An embedded document. The a11y walker cannot cross into it, so the
+    only thing an agent can use is this src.
+  -->
+  <iframe id="viewer" src="/files/report.pdf" width="300" height="200"></iframe>
+
+  <script>
+    document.getElementById('save-blob').addEventListener('click', function () {
+      var blob = new Blob(['in-page blob payload'], { type: 'text/plain' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'saved-from-page.txt';
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  </script>
+</body>
+</html>
