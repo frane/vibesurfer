@@ -14,12 +14,10 @@
 use crate::helpers::open_fixture;
 use crate::support::{assert_ok, body_rest, each_available_backend, TestContext};
 
-/// An unrendered challenge must be visible in the tree *and* announced
-/// on the envelope. `unrendered` is the state that cost the reporter an
-/// hour: the script ran, produced no widget, and left a token nobody
-/// can fill — so neither the agent nor a human has anything to act on.
+/// An unsolved challenge must be visible in the tree *and* announced
+/// on the envelope, with a box an agent can aim a click at.
 #[test]
-fn cell_challenge_unrendered_is_announced() {
+fn cell_challenge_pending_is_announced() {
     for _ in each_available_backend() {
         let ctx = TestContext::start();
         let (_s, page, _t) = open_fixture(&ctx, "/challenge.html");
@@ -27,15 +25,19 @@ fn cell_challenge_unrendered_is_announced() {
         assert_ok("view", &r);
 
         assert!(
-            r.stdout.contains("? captcha_visible turnstile unrendered"),
-            "an unrendered challenge must raise ? captcha_visible:\n{}",
+            r.stdout.contains("? captcha_visible turnstile pending"),
+            "an unsolved challenge must raise ? captcha_visible:\n{}",
             r.stdout
         );
 
         let body = body_rest(&r);
         assert!(
-            body.contains("challenge=turnstile:unrendered"),
+            body.contains("challenge=turnstile:pending"),
             "the challenge node must carry its provider and state:\n{body}"
+        );
+        assert!(
+            body.contains("challenge_box="),
+            "the node must carry a box so an agent can click it:\n{body}"
         );
         assert!(
             body.contains("turnstile challenge"),

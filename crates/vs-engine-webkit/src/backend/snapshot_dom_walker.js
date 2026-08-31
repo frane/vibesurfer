@@ -142,12 +142,20 @@
         ['h-captcha', 'hcaptcha'],
         ['g-recaptcha', 'recaptcha'],
     ];
-    /// `{provider, state}` if `el` is a challenge widget or its
-    /// response field, else null. `state` is what an agent needs to
-    /// decide what to do: `solved` (token present, submit away),
-    /// `pending` (widget is up, a human can complete it), or
-    /// `unrendered` (the script loaded but produced no widget at all —
-    /// nothing for anyone to interact with).
+    /// `{provider, state, box}` if `el` is a challenge widget or its
+    /// response field, else null.
+    ///
+    /// `state` is `solved` (token present, submit away) or `pending`
+    /// (a challenge is up and unsolved). There is deliberately no
+    /// "unrendered" state: Turnstile draws its widget into a **closed**
+    /// shadow root, which `querySelector('iframe')` cannot see by
+    /// design, so the previous iframe-counting check reported "no
+    /// widget exists" for widgets that were on screen and clickable.
+    /// That is the worst possible error here — it tells an agent to
+    /// give up on something it could have solved in one click.
+    ///
+    /// `box` is the widget's viewport rect, so an agent can go straight
+    /// to `vs click-at` without measuring it first.
     function challengeFor(el) {
         var provider = null;
         var tokenEl = null;
@@ -170,18 +178,25 @@
             } catch (e) { tokenEl = null; }
         }
         var token = tokenEl && tokenEl.value ? tokenEl.value : '';
-        // Look for a rendered widget: the provider draws into an
-        // iframe. Search the container, or the response field's
-        // enclosing widget wrapper.
-        var scope = tokenEl && tokenEl.parentNode && tokenEl.parentNode.parentNode
+        // The widget host: the response field's wrapper, or the
+        // container class we matched. Its rect is what an agent aims
+        // at — the interactive checkbox sits at the left of it.
+        var host = tokenEl && tokenEl.parentNode && tokenEl.parentNode.parentNode
             ? tokenEl.parentNode.parentNode
             : el;
-        var rendered = false;
+        var box = null;
         try {
-            rendered = !!(scope.querySelector && scope.querySelector('iframe'));
-        } catch (e) { rendered = false; }
-        var state = token ? 'solved' : (rendered ? 'pending' : 'unrendered');
-        return { provider: provider, state: state };
+            var r = host.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) {
+                box = [Math.round(r.left), Math.round(r.top),
+                       Math.round(r.width), Math.round(r.height)];
+            }
+        } catch (e) { box = null; }
+        return {
+            provider: provider,
+            state: token ? 'solved' : 'pending',
+            box: box,
+        };
     }
 
     function labelFor(el, role) {
@@ -273,6 +288,9 @@
         };
         if (chal) {
             node.chal = chal.provider + ':' + chal.state;
+            // Hand the agent the widget's rect so it can aim
+            // `vs click-at` at the checkbox without measuring first.
+            if (chal.box) node.chalbox = chal.box.join(',');
             // Implicit rendering matches twice — once on the
             // `.cf-turnstile` container, once on the response input
             // inside it. Keep the outermost and clear the rest, so a

@@ -4,7 +4,7 @@ All notable changes to vibesurfer are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.2] - 2026-08-31
 
 ### Changed
 - The Linux and Windows daemons wait instead of polling, matching the macOS fix in 0.2.1. Linux blocks in `MainContext::iteration` and workers call `MainContext::wakeup`; Windows waits in `MsgWaitForMultipleObjectsEx` and workers post `WM_NULL` via `PostThreadMessageW`. Both replace an unconditional 10ms sleep, and both keep a 250ms backstop bounding staleness if a wakeup were missed. Idle CPU was measured only on macOS (1.5% → 0.00%); the other two are verified by the engine-test suites running at unchanged speed, which is what a broken wakeup would show up as.

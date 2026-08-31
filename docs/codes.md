@@ -88,7 +88,7 @@ Used by `vs_viewport <preset>`. DPR defaults to 2; override per call.
 | Code               | Args              | Meaning |
 | ------------------ | ----------------- | ------- |
 | `nav`              | `<new_url>`       | Page navigated; baseline reset. |
-| `captcha_visible`  | `<provider> <state>` | A bot challenge (`turnstile` / `hcaptcha` / `recaptcha`) is present and not solved. State: `pending` (widget rendered, a human can complete it) or `unrendered` (the script produced no widget — nobody can complete it, and submitting will be refused). |
+| `captcha_visible`  | `<provider> <state>` | A bot challenge (`turnstile` / `hcaptcha` / `recaptcha`) is present and unsolved (`pending`). The node carries `challenge_box=x,y,w,h`; the checkbox is near `(x+28, y+h/2)` and a trusted `vs_click_at` usually solves it. Providers draw into a closed shadow root, so the widget is not in the tree. |
 | `auth_loaded`      | `<name>`          | Auth blob applied; baseline reset. |
 | `viewport_changed` | `<W>x<H>`         | Viewport changed; baseline reset. |
 | `idempotent_hit`   | —                 | Repeat call on same `(page, token, args)` returned cached result. |
