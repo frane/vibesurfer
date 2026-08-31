@@ -232,4 +232,11 @@
       return origSend.apply(this, arguments);
     };
   }
+
+  // This script is injected after the download shim, so its global is
+  // created after that shim's hide pass has run. Re-hide, or
+  // `Object.keys(window)` still advertises the inspector.
+  if (typeof window.__vsHideGlobals === 'function') {
+    window.__vsHideGlobals(['__vsInspectorInstalled']);
+  }
 })();

@@ -331,6 +331,16 @@
     var __vsResult = JSON.stringify(root);
     window.__vsLastResult = __vsResult;
     window.__vsDirty = false;
+    // The walker's globals are created here, after the download shim's
+    // document-start pass has already run, so re-hide them. Without
+    // this `Object.keys(window)` lists vibesurfer's snapshot cache and
+    // ref counter to the page.
+    if (typeof window.__vsHideGlobals === 'function') {
+        window.__vsHideGlobals([
+            '__vsDirty', '__vsDirtyObserver', '__vsRefCounter',
+            '__vsFindRef', '__vsLastResult',
+        ]);
+    }
     return __vsResult;
 })()
 
