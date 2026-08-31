@@ -521,7 +521,7 @@ impl Engine for Webview2Backend {
         // the background.
         if let Err(e) = unsafe { controller.MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC) }
         {
-            tracing::debug!(error = ?e, "MoveFocus failed; document.hasFocus() will be false");
+            eprintln!("vs: MoveFocus failed ({e:?}); document.hasFocus() will be false");
         }
 
         let web_view: ICoreWebView2 = unsafe { controller.CoreWebView2() }
