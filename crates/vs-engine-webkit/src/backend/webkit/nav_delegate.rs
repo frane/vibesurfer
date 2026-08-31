@@ -7,8 +7,8 @@ use std::rc::Rc;
 
 use objc2::rc::Retained;
 use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
-use objc2_foundation::{NSError, NSObject, NSObjectProtocol};
-use objc2_web_kit::{WKNavigation, WKNavigationDelegate, WKWebView};
+use objc2_foundation::{NSError, NSObject, NSObjectProtocol, NSRect};
+use objc2_web_kit::{WKNavigation, WKNavigationDelegate, WKUIDelegate, WKWebView};
 
 /// Slot shared between the delegate and the Rust caller. Both ends
 /// live on the main thread, so `Rc<RefCell<...>>` is fine.
@@ -53,10 +53,32 @@ define_class!(
             let msg = error.localizedDescription().to_string();
             *self.ivars().slot.borrow_mut() = Some(Err(msg));
         }
+
+        /// Answer WebKit's request for the host window's frame.
+        ///
+        /// `window.outerWidth` / `outerHeight` / `screenX` / `screenY`
+        /// are sourced from the UI client, not from the NSWindow. With
+        /// no UI delegate installed WebKit had nothing to ask and the
+        /// page saw a zero-sized outer window — which no real browser
+        /// reports, and which gives nonsense to any responsive code
+        /// deriving browser-chrome height from
+        /// `outerHeight - innerHeight`.
+        #[unsafe(method(_webView:getWindowFrameWithCompletionHandler:))]
+        fn get_window_frame(
+            &self,
+            web_view: &WKWebView,
+            handler: &block2::DynBlock<dyn Fn(NSRect)>,
+        ) {
+            let frame = web_view
+                .window()
+                .map_or_else(|| web_view.frame(), |w| w.frame());
+            handler.call((frame,));
+        }
     }
 
     unsafe impl NSObjectProtocol for NavDelegate {}
     unsafe impl WKNavigationDelegate for NavDelegate {}
+    unsafe impl WKUIDelegate for NavDelegate {}
 );
 
 impl NavDelegate {

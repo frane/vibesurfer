@@ -34,8 +34,8 @@ use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{NSBackingStoreType, NSWindow, NSWindowStyleMask};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSURLRequest, NSURL};
 use objc2_web_kit::{
-    WKNavigationDelegate, WKUserContentController, WKUserScript, WKUserScriptInjectionTime,
-    WKWebView, WKWebViewConfiguration,
+    WKNavigationDelegate, WKUIDelegate, WKUserContentController, WKUserScript,
+    WKUserScriptInjectionTime, WKWebView, WKWebViewConfiguration,
 };
 use vs_protocol::{Ref, Tree};
 
@@ -335,6 +335,11 @@ impl Engine for WkBackend {
         let delegate = NavDelegate::new(mtm, slot.clone());
         let proto: &ProtocolObject<dyn WKNavigationDelegate> = ProtocolObject::from_ref(&*delegate);
         unsafe { web_view.setNavigationDelegate(Some(proto)) };
+        // Same object serves as the UI delegate: WebKit sources
+        // `window.outerWidth` / `outerHeight` from the UI client, and
+        // with none installed the page saw a zero-sized outer window.
+        let ui_proto: &ProtocolObject<dyn WKUIDelegate> = ProtocolObject::from_ref(&*delegate);
+        unsafe { web_view.setUIDelegate(Some(ui_proto)) };
 
         let ns_url_str = NSString::from_str(url);
         let ns_url = NSURL::URLWithString(&ns_url_str)

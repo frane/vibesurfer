@@ -17,7 +17,9 @@
 
 use objc2::rc::Retained;
 use objc2::{define_class, msg_send, MainThreadMarker, MainThreadOnly};
-use objc2_app_kit::{NSBackingStoreType, NSWindow, NSWindowOcclusionState, NSWindowStyleMask};
+use objc2_app_kit::{
+    NSBackingStoreType, NSScreen, NSWindow, NSWindowOcclusionState, NSWindowStyleMask,
+};
 use objc2_foundation::NSRect;
 
 define_class!(
@@ -61,6 +63,23 @@ define_class!(
         #[unsafe(method(canBecomeKeyWindow))]
         fn can_become_key_window(&self) -> bool {
             true
+        }
+
+        /// Report a real screen for a window that is on none.
+        ///
+        /// A window never ordered in has no `screen`, and WebKit walks
+        /// that to answer `window.outerWidth` / `outerHeight` /
+        /// `screenX` / `screenY` — which all came back 0. No browser
+        /// reports a zero-sized outer window, and responsive code that
+        /// derives browser-chrome height from
+        /// `outerHeight - innerHeight` gets nonsense from it.
+        #[unsafe(method(screen))]
+        fn screen(&self) -> *mut NSScreen {
+            // `-screen` is a +0 getter, so hand back an unretained
+            // pointer: the main screen is owned by AppKit and outlives
+            // this window.
+            NSScreen::mainScreen(MainThreadMarker::from(self))
+                .map_or(std::ptr::null_mut(), |s| Retained::as_ptr(&s).cast_mut())
         }
     }
 );

@@ -54,7 +54,7 @@ objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSURL", "NSURLRequest", "NSString", "NSError", "NSDictionary", "NSValue", "NSArray", "NSData", "NSThread", "NSDate", "NSRunLoop", "NSHTTPCookie"] }
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "NSView", "NSWindow", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphics", "NSGraphicsContext", "NSEvent", "NSScreen", "objc2-core-graphics"] }
 objc2-core-graphics = { version = "0.3", features = ["CGImage"] }
-objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKWebViewConfiguration", "WKNavigation", "WKNavigationDelegate", "WKUserContentController", "WKUserScript", "WKScriptMessage", "WKScriptMessageHandler", "WKContentWorld", "WKWebsiteDataStore", "WKHTTPCookieStore", "WKSnapshotConfiguration", "WKFrameInfo"] }
+objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKWebViewConfiguration", "WKNavigation", "WKNavigationDelegate", "WKUIDelegate", "WKUserContentController", "WKUserScript", "WKScriptMessage", "WKScriptMessageHandler", "WKContentWorld", "WKWebsiteDataStore", "WKHTTPCookieStore", "WKSnapshotConfiguration", "WKFrameInfo"] }
 block2 = "0.6"
 
 [target.'cfg(target_os = "windows")'.dependencies]
