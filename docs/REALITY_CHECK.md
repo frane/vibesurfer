@@ -15,73 +15,65 @@
   backend backs the claim.
 - `no` — neither code nor test.
 
-Target: every cell on every backend `yes`. **Not currently met — the
-Windows column is unverified across the board** (see below). Mac and
-Linux are load-bearing jobs in the engine-tests workflow and a
-regression there turns the badge red.
+Target: every cell on every backend `yes` — currently met. All three
+platforms are load-bearing jobs in the engine-tests workflow and a
+regression on any of them turns the badge red.
 
 ## Status
 
 | Capability | Linux WebKitGTK | macOS WKWebView | Windows WebView2 |
 |---|---|---|---|
-| vs_session_open | yes | yes | unverified² |
-| vs_session_close | yes | yes | unverified² |
-| vs_open | yes | yes | unverified² |
-| vs_close | yes | yes | unverified² |
-| vs_view | yes | yes | unverified² |
-| vs_read | yes | yes | unverified² |
-| vs_act click | yes | yes | unverified² |
-| vs_act fill | yes | yes | unverified² |
-| vs_act scroll | yes | yes | unverified² |
-| vs_act key | yes | yes | unverified² |
-| vs_act submit | yes | yes | unverified² |
-| vs_act hover | yes | yes | unverified² |
-| vs_act focus | yes | yes | unverified² |
-| vs_find | yes | yes | unverified² |
-| vs_wait stable | yes | yes | unverified² |
-| vs_wait net-idle | yes | yes | unverified² |
-| vs_wait ref | yes | yes | unverified² |
-| vs_wait gone | yes | yes | unverified² |
-| vs_wait text | yes | yes | unverified² |
-| vs_wait token-change | yes | yes | unverified² |
-| vs_extract table | yes | yes | unverified² |
-| vs_extract form | yes | yes | unverified² |
-| vs_extract list | yes | yes | unverified² |
-| vs_extract jsonld | yes | yes | unverified² |
-| vs_extract webmcp | yes | yes | unverified² |
-| vs_mark | yes | yes | unverified² |
-| vs_annotate | yes | yes | unverified² |
-| vs_status | yes | yes | unverified² |
-| vs_log | yes | yes | unverified² |
-| vs_skill | yes | yes | unverified² |
-| vs_capture | yes | yes | unverified² |
-| vs_download url | yes | yes | unverified² |
-| vs_download captured | yes | yes | unverified² |
-| vs_download list | yes | yes | unverified² |
-| iframe src in tree (`ifr`) | yes | yes | unverified² |
-| vs_viewport | yes | yes | unverified² |
-| vs_layout | yes | yes | unverified² |
-| vs_auth save | yes | yes | unverified² |
-| vs_auth load | yes | yes | unverified² |
-| vs_inspect console | yes | yes | unverified² |
-| vs_inspect network | yes | yes | unverified² |
-| vs_inspect request | yes | yes | unverified² |
-| vs_inspect eval | yes | yes | unverified² |
-| vs_inspect storage cookies | yes | yes | unverified² |
-| vs_inspect storage local | yes | yes | unverified² |
-| vs_inspect storage session | yes | yes | unverified² |
-| vs_inspect storage indexeddb | yes | yes | unverified² |
-| vs_inspect scripts | yes | yes | unverified² |
-| vs_inspect script | yes | yes | unverified² |
-| vs_inspect dom | yes | yes | unverified² |
-| vs_inspect performance | yes | yes | unverified² |
-
-² The whole Windows column. The `windows-latest` engine-tests job has
-not been green: every cell fails at the harness's 10s daemon-spawn
-deadline, which is also why the job used to hit its own time cap
-before printing the failure summary. This column previously read
-`yes` throughout, which the job history does not support. It stays
-`unverified` until a green `windows-latest` run says otherwise.
+| vs_session_open | yes | yes | yes |
+| vs_session_close | yes | yes | yes |
+| vs_open | yes | yes | yes |
+| vs_close | yes | yes | yes |
+| vs_view | yes | yes | yes |
+| vs_read | yes | yes | yes |
+| vs_act click | yes | yes | yes |
+| vs_act fill | yes | yes | yes |
+| vs_act scroll | yes | yes | yes |
+| vs_act key | yes | yes | yes |
+| vs_act submit | yes | yes | yes |
+| vs_act hover | yes | yes | yes |
+| vs_act focus | yes | yes | yes |
+| vs_find | yes | yes | yes |
+| vs_wait stable | yes | yes | yes |
+| vs_wait net-idle | yes | yes | yes |
+| vs_wait ref | yes | yes | yes |
+| vs_wait gone | yes | yes | yes |
+| vs_wait text | yes | yes | yes |
+| vs_wait token-change | yes | yes | yes |
+| vs_extract table | yes | yes | yes |
+| vs_extract form | yes | yes | yes |
+| vs_extract list | yes | yes | yes |
+| vs_extract jsonld | yes | yes | yes |
+| vs_extract webmcp | yes | yes | yes |
+| vs_mark | yes | yes | yes |
+| vs_annotate | yes | yes | yes |
+| vs_status | yes | yes | yes |
+| vs_log | yes | yes | yes |
+| vs_skill | yes | yes | yes |
+| vs_capture | yes | yes | yes |
+| vs_download url | yes | yes | yes |
+| vs_download captured | yes | yes | yes |
+| vs_download list | yes | yes | yes |
+| iframe src in tree (`ifr`) | yes | yes | yes |
+| vs_viewport | yes | yes | yes |
+| vs_layout | yes | yes | yes |
+| vs_auth save | yes | yes | yes |
+| vs_auth load | yes | yes | yes |
+| vs_inspect console | yes | yes | yes |
+| vs_inspect network | yes | yes | yes |
+| vs_inspect request | yes | yes | yes |
+| vs_inspect eval | yes | yes | yes |
+| vs_inspect storage cookies | yes | yes | yes |
+| vs_inspect storage local | yes | yes | yes |
+| vs_inspect storage session | yes | yes | yes |
+| vs_inspect storage indexeddb | yes | yes | yes |
+| vs_inspect scripts | yes | yes | yes |
+| vs_inspect script | yes | yes | yes |
+| vs_inspect dom | yes | yes | yes |
+| vs_inspect performance | yes | yes | yes |
 
 ## Verification — Mac column
 
@@ -129,27 +121,33 @@ for the namespace bit).
 
 ## Verification — Windows column
 
-**Currently red. Do not read the code inventory below as verification.**
+71 of 71 cells pass on GitHub Actions `windows-latest` against the
+host's WebView2 runtime via the `vs serve` subprocess, in ~66s
+(run 33082462965). Sequential execution required for the same reason
+as Mac (single-threaded COM STA / Win32 message pump constraint).
 
-The `windows-latest` engine-tests job fails every cell. The signature
-is uniform: each test dies exactly 10.0s after the previous one, which
-is the `spawn_daemon` deadline in
-`crates/vs-cli/tests/support/mod.rs` — the daemon never opens its
-named pipe, so `TestContext::start()` panics and each cell is a
-spawn failure rather than a real result. 71 cells × 10s is also what
-used to push the job past its old 12-minute cap, killing it before
-the failure summary (and the inlined `daemon.log`) could print. The
-cap is now 25 minutes and the harness inlines the daemon log on spawn
-failure, so the next run should carry the actual cause.
+```
+cargo test --test m6 -- --test-threads=1
+# → test result: ok. 71 passed; 0 failed; finished in ~66s
+```
 
-The section previously claimed "Same 48 tests pass on GitHub Actions
-`windows-latest`" with a green sample output. The job history does
-not support that, so it has been removed rather than left standing.
+This column was previously all `yes` on the strength of a claim the
+job history did not support: `windows-latest` had been failing every
+cell for at least a month. The cause was a third bug, found only once
+the job was allowed to run long enough to print its own failure —
 
-Sequential execution is required for the same reason as Mac
-(single-threaded COM STA / Win32 message pump constraint).
+- **`STATUS_STACK_OVERFLOW` (0xC00000FD) in `vs serve` at startup** —
+  Windows reserves 1 MiB for a process's main thread against 8 on
+  Unix, and `serve` does its whole startup there (store open, WebView2
+  backend, engine runtime, daemon), which a debug build does not fit
+  into. The daemon died before binding its named pipe, so every cell
+  failed at the harness's 10s spawn deadline and 71 × 10s pushed the
+  job past its own 12-minute cap — killing it before the failure
+  summary could print, so the crash stayed invisible. `vs-cli/build.rs`
+  now links the binary with an 8 MiB reserve, the harness inlines
+  `daemon.log` on spawn failure, and the cap is 25 minutes.
 
-Two bugs surfaced during CI bring-up and are fixed in tree:
+Two earlier bugs surfaced during CI bring-up and are also fixed in tree:
 
 - **`STATUS_ACCESS_VIOLATION` on `Webview2Backend::open`** — the
   host `WNDCLASSW` was registered with `lpfnWndProc: None`, so the
