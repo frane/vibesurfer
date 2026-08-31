@@ -172,6 +172,13 @@ impl Engine for WpeBackend {
         // commit log for `crate::engine::DEFAULT_USER_AGENT` rationale.
         if let Some(settings) = WebViewExt::settings(&web_view) {
             settings.set_user_agent(Some(crate::engine::DEFAULT_USER_AGENT));
+            // Expose `navigator.mediaDevices`. WebKitGTK gates the
+            // MediaDevices surface off by default, so the object is
+            // simply absent and anything feature-detecting camera or
+            // mic support sees a browser that cannot exist. The macOS
+            // backend needed the same switch (there via a WKPreferences
+            // KVC key); here it is public API.
+            settings.set_enable_media_stream(true);
         }
 
         // Inspector capture wiring — install the user script + register
