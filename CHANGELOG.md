@@ -4,9 +4,10 @@ All notable changes to vibesurfer are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.2] - 2026-08-31
+## [0.2.1] - 2026-08-31
 
 ### Fixed
+- Upgrading vibesurfer now refreshes the SKILL.md copies it installed. `SKILL.md` is baked into the binary, but the copies `vs skill install` writes into each agent's skills directory are just files, and nothing rewrote them — so after `brew upgrade` / `npx` / `cargo install`, every agent kept reading the instructions from whichever version last ran the installer. That is worse than a stale binary: the instructions are what the model acts on, so agents went on describing primitives that had changed and never learned about ones that had been added. `vs skill install` now records what it wrote in `~/.vibesurfer/skill-install.json`, and any `vs` invocation whose version differs from the stamp rewrites those files and says so. Deliberately narrow: it only touches paths the installer recorded, never adds newly-supported agents on its own, and leaves a skill file the user deleted deleted.
 - A page gated by a bot challenge no longer looks like an ordinary page. Turnstile / hCaptcha / reCAPTCHA widgets now appear in the a11y tree as a labelled node carrying `challenge=<provider>:<state>`, and `vs view` raises `? captcha_visible <provider> <state>` — a warning the protocol has reserved since M0 and never implemented. Previously the challenge container was a bare `<div>` the role table ignored, a widget that failed to render left no iframe, and the only surviving trace was a hidden input that read as an anonymous `tf ... hid=1`. An agent filled the form, submitted, and got refused by the server with nothing in the tree to explain why — a silent misdiagnosis that cost the reporter an hour. The `unrendered` state specifically means the provider's script ran but produced no widget, so neither the agent nor a human can complete it; that is now stated rather than left to be inferred. Verified against a local fixture, plus real Turnstile on staging and production. (Reported via `#vibesurfer`.)
 
 ### Added

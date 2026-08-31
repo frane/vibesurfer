@@ -22,6 +22,20 @@ use vs_protocol::Envelope;
 fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
 
+    // Keep installed SKILL.md files in step with the binary. The
+    // instructions are what agents act on, so a stale copy is worse
+    // than a stale binary — it describes primitives that changed and
+    // omits ones that were added. No-ops unless the version moved
+    // since `vs skill install` last ran, and only rewrites files that
+    // install actually recorded.
+    let refreshed = vs_cli::skill_install::refresh_if_stale();
+    if refreshed > 0 {
+        eprintln!(
+            "vs: refreshed {refreshed} skill file(s) for v{} (run `vs skill install` to add agents)",
+            env!("CARGO_PKG_VERSION"),
+        );
+    }
+
     if let Command::Serve { stop } = cli.command {
         let paths = vs_daemon::config::Paths::at(
             cli.home
