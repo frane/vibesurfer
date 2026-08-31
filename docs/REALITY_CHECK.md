@@ -1,7 +1,16 @@
 # Reality check
 
-> Updated continuously as cells land. Cells reflect the **actual**
-> verification state at the time of reading, not the target.
+> Cells reflect the **actual** verification state, not the target.
+>
+> This table is hand-maintained and nothing enforces it, which has
+> bitten once already: the Windows column read `yes` on every row for
+> about a month while that job was failing every cell (see
+> "Verification — Windows column"). Treat the
+> [engine-tests workflow](../.github/workflows/engine-tests.yml) as
+> the source of truth and this file as a summary of it. If you edit a
+> cell, cite the run you are citing it from. Exact pass counts are
+> deliberately not recorded here — they drifted stale too, and the run
+> log already has them.
 
 ## Cell states
 
@@ -77,21 +86,24 @@ regression on any of them turns the badge red.
 
 ## Verification — Mac column
 
-48 of 48 tests in `crates/vs-cli/tests/m6/{lifecycle,act,wait,
-extract,visual,auth,memory,inspect}.rs` (including the capability-
-gate `cell_engine_unsupported_when_install_disabled`) pass against
-the host's real `WKWebView` via the `vs serve` subprocess. Sequential
-execution required (Cocoa main-thread constraint).
+All cells in `crates/vs-cli/tests/m6/*.rs` (including the
+capability-gate `cell_engine_unsupported_when_install_disabled`) pass
+against the host's real `WKWebView` via the `vs serve` subprocess.
+Mac runs the largest set — a few cells are `cfg`'d off on the other
+two backends — and is the slowest, because trusted input goes through
+real `NSEvent` dispatch and the responder chain.
+
+Sequential execution required (Cocoa main-thread constraint):
 
 ```
 cargo test --test m6 -- --test-threads=1
-# → test result: ok. 48 passed; 0 failed; finished in ~38s
 ```
 
 ## Verification — Linux column
 
-Same 48 tests pass on GitHub Actions `ubuntu-latest` with WebKitGTK
-6 + xvfb against the real `WebView`. WebKitGTK's sandbox needs
+The same suite, minus the Mac-only cells, passes on GitHub Actions
+`ubuntu-latest` with WebKitGTK 6 + xvfb against the real `WebView`.
+WebKitGTK's sandbox needs
 unprivileged user namespaces, which Ubuntu's default AppArmor
 profile restricts; CI relaxes the restriction with one sysctl.
 The capability-gate cell flips correctly when
@@ -103,7 +115,6 @@ wire.
 ```
 sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 xvfb-run --auto-servernum cargo test --test m6 -- --test-threads=1
-# → test result: ok. 48 passed; 0 failed; finished in ~30s
 ```
 
 For Linux runs on a non-Linux host, the `vs-test-linux` Docker
@@ -121,14 +132,13 @@ for the namespace bit).
 
 ## Verification — Windows column
 
-71 of 71 cells pass on GitHub Actions `windows-latest` against the
-host's WebView2 runtime via the `vs serve` subprocess, in ~66s
-(run 33082462965). Sequential execution required for the same reason
-as Mac (single-threaded COM STA / Win32 message pump constraint).
+The same suite passes on GitHub Actions `windows-latest` against the
+host's WebView2 runtime via the `vs serve` subprocess. Sequential
+execution required for the same reason as Mac (single-threaded COM
+STA / Win32 message pump constraint).
 
 ```
 cargo test --test m6 -- --test-threads=1
-# → test result: ok. 71 passed; 0 failed; finished in ~66s
 ```
 
 This column was previously all `yes` on the strength of a claim the
