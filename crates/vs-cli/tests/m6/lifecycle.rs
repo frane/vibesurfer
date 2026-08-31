@@ -312,6 +312,12 @@ fn cell_session_resurrection_across_daemon_restart() {
 ///
 /// Runs the real shell rather than the harness's direct spawn, because
 /// the subshell is the whole point.
+///
+/// Unix only, and not merely because `sh` is: the fix keys on the POSIX
+/// session id, which Windows has no equivalent of. Windows still falls
+/// back to the parent pid and so still has this bug — `VS_CALLER` is
+/// the reliable binding there.
+#[cfg(unix)]
 #[test]
 fn cell_session_survives_command_substitution() {
     for _ in each_available_backend() {

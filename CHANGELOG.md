@@ -7,7 +7,7 @@ All notable changes to vibesurfer are recorded here. The format follows
 ## [Unreleased]
 
 ### Fixed
-- `P=$(vs open URL)` followed by `vs view $P` no longer fails with `! WRONG_SESSION`. The per-caller key was `<parent_pid>-<parent_start_time>`, and a command-substitution subshell is a different process from its shell — so the most natural way to script this tool gave every invocation its own auto-session. Each call also leaked a session row and a file under `~/.vibesurfer/callers/` (301 of them, and 53 live sessions, on the author's machine). The key is now the POSIX session id, which is the OS's own notion of "the shell I belong to": identical across command substitution, nested shells and pipelines, still distinct between terminals and separately-launched agents. `VS_CALLER` and the pid fallback (Windows) are unchanged. (Reported via `#vibesurfer`.)
+- `P=$(vs open URL)` followed by `vs view $P` no longer fails with `! WRONG_SESSION`. The per-caller key was `<parent_pid>-<parent_start_time>`, and a command-substitution subshell is a different process from its shell — so the most natural way to script this tool gave every invocation its own auto-session. Each call also leaked a session row and a file under `~/.vibesurfer/callers/` (301 of them, and 53 live sessions, on the author's machine). The key is now the POSIX session id, which is the OS's own notion of "the shell I belong to": identical across command substitution, nested shells and pipelines, still distinct between terminals and separately-launched agents. `VS_CALLER` is unchanged and still takes precedence. Unix only — Windows has no session id, keeps the parent-pid key, and so keeps this behaviour; set `VS_CALLER` there. (Reported via `#vibesurfer`.)
 
 ## [0.2.1] - 2026-08-31
 

@@ -181,9 +181,17 @@ mod tests {
         assert_eq!(k, "named-claude-desktop", "sanitized, prefixed: {k}");
         std::env::set_var("VS_CALLER", "///");
         let k = super::caller_key().expect("key");
+        // Empty after sanitize falls through to the derived key: the
+        // POSIX session id on Unix, the parent pid elsewhere.
+        #[cfg(unix)]
+        assert!(
+            k.starts_with("sid-"),
+            "empty after sanitize falls back to the session-id key: {k}"
+        );
+        #[cfg(not(unix))]
         assert!(
             k.chars().next().is_some_and(char::is_numeric),
-            "empty after sanitize falls back to pid key: {k}"
+            "empty after sanitize falls back to the pid key: {k}"
         );
         std::env::remove_var("VS_CALLER");
     }
