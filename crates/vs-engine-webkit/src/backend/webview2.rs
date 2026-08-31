@@ -39,6 +39,7 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, COREWEBVIEW2_MOUSE_EVENT_KIND,
     COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOWN, COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP,
     COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE, COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE,
+    COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC,
 };
 use webview2_com::{
     pwstr_from_str, take_pwstr, AddScriptToExecuteOnDocumentCreatedCompletedHandler,
@@ -306,7 +307,13 @@ fn install_inspector(web_view: &ICoreWebView2, slots: &InspectorSlots) -> bool {
     // .postMessage(...)` — one global channel — so we install a
     // shim that maps the `webkit.messageHandlers` API onto
     // chrome.webview by tagging the JSON with `__channel`.
+    // Wrapped in an IIFE: a top-level `function __vsMakeHandler` here
+    // became a global, and `Object.keys(window)` then listed it
+    // alongside the page's own properties — the same instrumentation
+    // leak the shared shims were fixed for. Caught by the
+    // fingerprint cell on windows-latest.
     let shim = r"
+      (function () {
         window.webkit = window.webkit || {};
         window.webkit.messageHandlers = window.webkit.messageHandlers || {};
         function __vsMakeHandler(name) {
@@ -325,6 +332,7 @@ fn install_inspector(web_view: &ICoreWebView2, slots: &InspectorSlots) -> bool {
         }
         window.webkit.messageHandlers.vsConsole = __vsMakeHandler('vsConsole');
         window.webkit.messageHandlers.vsNetwork = __vsMakeHandler('vsNetwork');
+      })();
     ";
     if add_init_script(web_view, shim).is_err() {
         return false;
@@ -504,6 +512,17 @@ impl Engine for Webview2Backend {
         // CapturePreview can always read, with nothing shown on screen.
         unsafe { controller.SetIsVisible(true) }
             .map_err(|e| EngineError::Other(format!("SetIsVisible: {e}")))?;
+        // Give the page focus. Without this `document.hasFocus()` is
+        // false and the page behaves as a backgrounded tab: `autofocus`
+        // does not fire, `:focus-visible` never matches, IME
+        // composition does not start. The macOS backend needed the
+        // equivalent (a key window plus first responder). Not fatal if
+        // it fails — the browser still works, it just thinks it is in
+        // the background.
+        if let Err(e) = unsafe { controller.MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC) }
+        {
+            tracing::debug!(error = ?e, "MoveFocus failed; document.hasFocus() will be false");
+        }
 
         let web_view: ICoreWebView2 = unsafe { controller.CoreWebView2() }
             .map_err(|e| EngineError::Other(format!("CoreWebView2: {e}")))?;
