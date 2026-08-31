@@ -6,6 +6,10 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- The Linux and Windows daemons wait instead of polling, matching the macOS fix in 0.2.1. Linux blocks in `MainContext::iteration` and workers call `MainContext::wakeup`; Windows waits in `MsgWaitForMultipleObjectsEx` and workers post `WM_NULL` via `PostThreadMessageW`. Both replace an unconditional 10ms sleep, and both keep a 250ms backstop bounding staleness if a wakeup were missed. Idle CPU was measured only on macOS (1.5% → 0.00%); the other two are verified by the engine-test suites running at unchanged speed, which is what a broken wakeup would show up as.
+- `~/.vibesurfer/callers/` reaps bindings nothing has used in 30 days, when a new one is written. It had no reaper, so every key that ever ran `vs` left a file behind permanently — 301 of them on the author's machine.
+
 ### Fixed
 - `P=$(vs open URL)` followed by `vs view $P` no longer fails with `! WRONG_SESSION`. The per-caller key was `<parent_pid>-<parent_start_time>`, and a command-substitution subshell is a different process from its shell — so the most natural way to script this tool gave every invocation its own auto-session. Each call also leaked a session row and a file under `~/.vibesurfer/callers/` (301 of them, and 53 live sessions, on the author's machine). The key is now the POSIX session id, which is the OS's own notion of "the shell I belong to": identical across command substitution, nested shells and pipelines, still distinct between terminals and separately-launched agents. `VS_CALLER` is unchanged and still takes precedence. Unix only — Windows has no session id, keeps the parent-pid key, and so keeps this behaviour; set `VS_CALLER` there. (Reported via `#vibesurfer`.)
 

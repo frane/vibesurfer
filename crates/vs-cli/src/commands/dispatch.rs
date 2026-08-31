@@ -6,8 +6,11 @@
 //!   1. `--session=<id>` (or `-S`) — explicit override
 //!   2. `VS_SESSION` env var — set by the caller's shell
 //!   3. Per-caller saved session at `~/.vibesurfer/callers/<key>` —
-//!      keyed by `<parent_pid>-<parent_start_time>` so different
-//!      shells / agents get independent sessions automatically
+//!      keyed by the POSIX session id on Unix (parent pid elsewhere)
+//!      so different shells / agents get independent sessions
+//!      automatically. See [`crate::caller`] for why it is the session
+//!      id and not the parent pid. Bindings unused for 30 days are
+//!      reaped when a new one is written.
 //!   4. Auto-create: if the command needs a session and none of the
 //!      above resolved, the CLI implicitly runs `vs_session_open`
 //!      first and binds the new id to the caller key
@@ -85,9 +88,44 @@ fn save_caller_session(paths: &Paths, key: &str, session_id: &str) -> Result<()>
     let path = paths.caller_session(key);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).context("create callers/ directory")?;
+        prune_caller_sessions(parent);
     }
     std::fs::write(&path, session_id).context("write caller session file")?;
     Ok(())
+}
+
+/// How long a caller binding outlives its last use. A terminal session
+/// or agent that has not run `vs` in this long is not coming back to
+/// the same key.
+const CALLER_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 60 * 60);
+
+/// Drop caller bindings nothing has touched in [`CALLER_TTL`].
+///
+/// The directory had no reaper, so every key that ever ran `vs` left a
+/// file behind for good — 301 of them on the author's machine, most
+/// from ephemeral keys that could never be looked up again. Runs only
+/// when a binding is written (session open / auto-create), which is
+/// rare compared to ordinary calls, and never fails a command: a
+/// directory we cannot read or a file we cannot remove is left alone.
+fn prune_caller_sessions(dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        let stale = meta
+            .modified()
+            .ok()
+            .and_then(|m| now.duration_since(m).ok())
+            .is_some_and(|age| age > CALLER_TTL);
+        if stale {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// Sentinel written to the caller file by `vs session-close` so a
@@ -600,4 +638,39 @@ fn run_pending_fulfill(client: &mut Client, id: Option<String>) -> Result<Respon
         .arg(resolved_id)
         .arg(value);
     client.call(&req).context("daemon call")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{prune_caller_sessions, CALLER_TTL};
+
+    /// The `callers/` directory reaps bindings nothing has used in a
+    /// month. It had no reaper at all, so every ephemeral key that ever
+    /// ran `vs` left a file behind for good — 301 of them on the
+    /// author's machine, most of them keys that could never be looked
+    /// up again.
+    #[test]
+    fn stale_caller_bindings_are_reaped() {
+        let dir = tempfile::tempdir().unwrap();
+        let fresh = dir.path().join("sid-1234");
+        let stale = dir.path().join("9999-1700000000");
+        std::fs::write(&fresh, "s_fresh").unwrap();
+        std::fs::write(&stale, "s_stale").unwrap();
+
+        let old = std::time::SystemTime::now() - (CALLER_TTL + std::time::Duration::from_secs(60));
+        std::fs::File::options()
+            .write(true)
+            .open(&stale)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+
+        prune_caller_sessions(dir.path());
+
+        assert!(fresh.exists(), "a recently-used binding must survive");
+        assert!(
+            !stale.exists(),
+            "a binding unused past the TTL must be reaped"
+        );
+    }
 }
