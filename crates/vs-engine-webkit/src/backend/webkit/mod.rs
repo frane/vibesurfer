@@ -313,6 +313,11 @@ impl Engine for WkBackend {
             );
             w.setReleasedWhenClosed(false);
             w.setContentView(Some(&web_view));
+            // Give the web view first-responder status. Together with
+            // the window's `isKeyWindow` override this is what makes
+            // `document.hasFocus()` true, so the page does not think it
+            // is a backgrounded tab.
+            w.makeFirstResponder(Some(&web_view));
             w
         };
 

@@ -40,6 +40,28 @@ define_class!(
         fn occlusion_state(&self) -> NSWindowOcclusionState {
             NSWindowOcclusionState::Visible
         }
+
+        /// Report the window as key, so the page has focus.
+        ///
+        /// A window that is never ordered on screen is never key, so
+        /// `document.hasFocus()` returned false and the page believed
+        /// it was in a background tab. That breaks ordinary things well
+        /// beyond bot checks: `autofocus`, `:focus-visible`, IME
+        /// composition, and any SPA that defers work until focus.
+        /// Same technique and same justification as `isVisible` above —
+        /// we change the answer WebKit reads, not what is displayed.
+        #[unsafe(method(isKeyWindow))]
+        fn is_key_window(&self) -> bool {
+            true
+        }
+
+        /// A borderless window is not key-eligible by default, which
+        /// would make `isKeyWindow` inconsistent with what AppKit
+        /// believes.
+        #[unsafe(method(canBecomeKeyWindow))]
+        fn can_become_key_window(&self) -> bool {
+            true
+        }
     }
 );
 
