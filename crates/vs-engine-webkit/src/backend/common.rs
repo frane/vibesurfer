@@ -97,6 +97,13 @@ fn build_node(v: &serde_json::Value) -> Option<Node> {
     if v.get("hid").and_then(serde_json::Value::as_u64) == Some(1) {
         attrs.insert("hid".to_string(), "1".to_string());
     }
+    // `challenge=<provider>:<state>` on a bot-check widget. The state
+    // is the actionable part: `unrendered` means the script produced
+    // no widget, so there is nothing for an agent *or* a human to
+    // interact with and the form will be refused on submit.
+    if let Some(chal) = v.get("chal").and_then(serde_json::Value::as_str) {
+        attrs.insert("challenge".to_string(), chal.to_string());
+    }
     Some(Node {
         r: Ref(r),
         role,

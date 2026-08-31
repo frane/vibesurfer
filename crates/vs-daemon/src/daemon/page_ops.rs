@@ -23,6 +23,12 @@ impl Daemon {
         self.audit_call(ctx, |ctx| {
             let engine_handle = self.engine_handle_for(session_id, page_id)?;
             let (tree, console) = self.inner.engine.snapshot_with_console(engine_handle)?;
+            // Read the challenge state off the fresh snapshot, before
+            // it is diffed away. On a delta view the challenge node is
+            // usually unchanged and so absent from the body, but the
+            // page is still gated — the warning has to come from the
+            // snapshot, not from what we happen to be emitting.
+            let challenge = first_challenge(&tree);
             let (token, form) = {
                 let mut sessions = self.inner.sessions.lock().expect("poisoned");
                 let page = sessions
@@ -40,10 +46,24 @@ impl Daemon {
             let mut store = self.inner.store.lock().expect("poisoned");
             store.update_page_token(page_id, &token.to_string(), "engine", None)?;
             drop(store);
+            // `? captcha_visible <provider> <state>` — reserved in the
+            // protocol since M0 and never implemented until now. A
+            // page whose bot check did not render looks exactly like a
+            // page with a working form: the agent fills it, submits,
+            // and the server refuses. Say so out loud instead.
+            let mut warnings = Vec::new();
+            if let Some((provider, state)) = challenge {
+                if state != "solved" {
+                    warnings.push(vs_protocol::Warning::with_args(
+                        vs_protocol::WarningCode::CaptchaVisible,
+                        vec![provider, state],
+                    ));
+                }
+            }
             Ok(ViewResponse {
                 token,
                 form,
-                warnings: Vec::new(),
+                warnings,
                 console,
             })
         })
@@ -344,4 +364,21 @@ impl Daemon {
         }
         Ok(out)
     }
+}
+
+/// First bot-challenge node in `tree`, as `(provider, state)`.
+///
+/// The walker tags challenge widgets with `challenge=<provider>:<state>`
+/// (see `snapshot_dom_walker.js`); this just finds one. Depth-first and
+/// short-circuiting — a page has at most a couple of these, and we only
+/// need to know whether one is outstanding.
+fn first_challenge(tree: &vs_protocol::Tree) -> Option<(String, String)> {
+    fn walk(node: &vs_protocol::Node) -> Option<(String, String)> {
+        if let Some(v) = node.attrs.get("challenge") {
+            let (provider, state) = v.split_once(':')?;
+            return Some((provider.to_string(), state.to_string()));
+        }
+        node.children.iter().find_map(walk)
+    }
+    tree.roots.iter().find_map(walk)
 }

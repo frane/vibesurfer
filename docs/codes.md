@@ -88,7 +88,7 @@ Used by `vs_viewport <preset>`. DPR defaults to 2; override per call.
 | Code               | Args              | Meaning |
 | ------------------ | ----------------- | ------- |
 | `nav`              | `<new_url>`       | Page navigated; baseline reset. |
-| `captcha_visible`  | —                 | Heuristic detector matched. |
+| `captcha_visible`  | `<provider> <state>` | A bot challenge (`turnstile` / `hcaptcha` / `recaptcha`) is present and not solved. State: `pending` (widget rendered, a human can complete it) or `unrendered` (the script produced no widget — nobody can complete it, and submitting will be refused). |
 | `auth_loaded`      | `<name>`          | Auth blob applied; baseline reset. |
 | `viewport_changed` | `<W>x<H>`         | Viewport changed; baseline reset. |
 | `idempotent_hit`   | —                 | Repeat call on same `(page, token, args)` returned cached result. |

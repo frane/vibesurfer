@@ -86,7 +86,7 @@ A success response with warnings:
 
 ```
 ? nav https://example.com/login
-? captcha_visible
+? captcha_visible turnstile unrendered
 @a3f9b2c1d4e6f70a
 ... body ...
 <blank line>
@@ -117,7 +117,7 @@ Documented in [`codes.md`](codes.md). Highlights:
 | Code | Args | Meaning |
 | ---- | ---- | ------- |
 | `nav` | `<new_url>` | Page navigated; refs reset and a fresh full tree follows. |
-| `captcha_visible` | — | Heuristic detector matched a captcha overlay. |
+| `captcha_visible` | `<provider> <state>` | A bot challenge is present and unsolved. `<state>` is `pending` (widget up, human-completable) or `unrendered` (no widget produced). The matching tree node carries `challenge=<provider>:<state>`. |
 | `auth_loaded` | `<name>` | An auth blob was applied; next view forces a re-baseline. |
 | `viewport_changed` | `<W>x<H>` | Viewport changed; layout may have shifted. |
 

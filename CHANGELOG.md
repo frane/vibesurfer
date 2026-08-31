@@ -4,7 +4,10 @@ All notable changes to vibesurfer are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.1] - 2026-08-31
+## [0.2.2] - 2026-08-31
+
+### Fixed
+- A page gated by a bot challenge no longer looks like an ordinary page. Turnstile / hCaptcha / reCAPTCHA widgets now appear in the a11y tree as a labelled node carrying `challenge=<provider>:<state>`, and `vs view` raises `? captcha_visible <provider> <state>` — a warning the protocol has reserved since M0 and never implemented. Previously the challenge container was a bare `<div>` the role table ignored, a widget that failed to render left no iframe, and the only surviving trace was a hidden input that read as an anonymous `tf ... hid=1`. An agent filled the form, submitted, and got refused by the server with nothing in the tree to explain why — a silent misdiagnosis that cost the reporter an hour. The `unrendered` state specifically means the provider's script ran but produced no widget, so neither the agent nor a human can complete it; that is now stated rather than left to be inferred. Verified against a local fixture, plus real Turnstile on staging and production. (Reported via `#vibesurfer`.)
 
 ### Added
 - `vs download <PAGE> [<URL>]` (alias `dl`, MCP `vs_download`): save a file out of a page to `~/.vibesurfer/downloads/`, response carrying the path rather than the bytes. Given a URL, the page fetches it from inside itself, so session cookies, referer, and same-origin rules apply and a file behind a login comes down. Given no URL, it drains the newest download the page started on its own. `--list` enumerates what is captured and waiting, `--id=N` picks one, `--dest` overrides the name, `--timeout-ms` the budget.

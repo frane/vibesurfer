@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Bot challenge</title></head>
+<body>
+  <h1>Bot challenge</h1>
+
+  <!--
+    The DOM shape a bot challenge leaves behind, reproduced without
+    contacting the provider so the cell is deterministic and offline.
+
+    This is the shape that made the bug invisible: the container is a
+    bare div the role table ignores, the widget never rendered so there
+    is no iframe, and the only trace is a hidden input that reads as an
+    anonymous `tf ... hid=1`. An agent fills the form, submits, and the
+    server refuses it — with nothing in the tree to explain why.
+
+    Real markup from Cloudflare Turnstile, minus the script.
+  -->
+  <form id="signup">
+    <input type="text" name="email" placeholder="Enter your email">
+    <div class="cf-turnstile" data-sitekey="0xTESTONLYTESTONLYTEST">
+      <div></div>
+      <input type="hidden" name="cf-turnstile-response" id="cf-chl-widget-test_response" value="">
+    </div>
+    <button type="submit">Create account</button>
+  </form>
+
+  <!-- The solved counterpart: token present, nothing to hand a human. -->
+  <form id="solved">
+    <div class="h-captcha">
+      <textarea name="h-captcha-response">P0_eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.dummy</textarea>
+    </div>
+    <button type="submit">Already solved</button>
+  </form>
+</body>
+</html>
