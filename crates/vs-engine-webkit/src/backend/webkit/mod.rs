@@ -176,6 +176,35 @@ const WEBAUTHN_JS: &str = include_str!("../webauthn_virtual.js");
 // Engine impl
 // =============================================================================
 
+/// Turn on `navigator.mediaDevices`.
+///
+/// WKWebView gates the whole MediaDevices surface behind a preference
+/// that is off by default, so the object was simply absent — even on
+/// https with `isSecureContext: true`, where every real browser has
+/// it. Anything feature-detecting camera/mic support saw a browser
+/// that cannot exist.
+///
+/// The toggle has no public API, so it goes through KVC on
+/// WKPreferences. Unknown keys raise an Obj-C exception rather than
+/// returning an error, and the key set drifts between OS releases, so
+/// each is attempted inside a catch: a preference this macOS does not
+/// have must not stop the browser from starting.
+fn enable_media_devices(config: &WKWebViewConfiguration) {
+    unsafe {
+        let prefs = config.preferences();
+        for key in ["mediaDevicesEnabled", "mediaStreamEnabled"] {
+            let k = NSString::from_str(key);
+            let yes = objc2_foundation::NSNumber::numberWithBool(true);
+            let attempt = objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+                let _: () = objc2::msg_send![&*prefs, setValue: &*yes, forKey: &*k];
+            }));
+            if attempt.is_err() {
+                eprintln!("vs: WKPreferences key {key:?} unavailable on this macOS");
+            }
+        }
+    }
+}
+
 /// Stable seed for a per-ref Bezier path. Same ref → same seed → same
 /// path on every act. Different refs vary so an agent clicking through
 /// a list doesn't draw an identical curve N times.
@@ -259,6 +288,21 @@ impl Engine for WkBackend {
         // cookie jar. Assigning `defaultDataStore` defensively pins it.
         let data_store = unsafe { objc2_web_kit::WKWebsiteDataStore::defaultDataStore(mtm) };
         unsafe { config.setWebsiteDataStore(&data_store) };
+        // Expose `navigator.mediaDevices`. WKWebView gates the whole
+        // MediaDevices surface behind a preference that is off by
+        // default, so the object was simply absent — even on https with
+        // `isSecureContext: true`, where every real browser has it.
+        // Anything feature-detecting camera/mic support saw a browser
+        // that cannot exist.
+        //
+        // The toggle has no public API, so it goes through KVC on
+        // WKPreferences. Unknown keys raise an Obj-C exception rather
+        // than returning an error, and the set of keys drifts between
+        // OS releases, so each one is attempted inside a catch and a
+        // failure is logged and ignored — a missing preference must not
+        // stop the browser from starting.
+        enable_media_devices(&config);
+
         let ucc = unsafe { config.userContentController() };
         // Inject the rAF-flush shim at document-start so `act` can drive
         // pending requestAnimationFrame callbacks even though a headless
