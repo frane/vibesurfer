@@ -1,0 +1,72 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Fingerprint probe</title></head>
+<body>
+<h1>Fingerprint probe</h1>
+<p id="out">measuring</p>
+<script>
+// Signals that must hold in ANY real browser on ANY platform. Each is
+// checked as a defect, not as a fingerprint value: we assert that
+// nothing here reveals an automation artifact or an impossible browser,
+// not that a value matches some particular target.
+//
+// The a11y tree carries the result so a test cell can assert on it
+// without evaluating JS, which keeps the cell honest about what an
+// ordinary page would see.
+(function () {
+  var fails = [];
+
+  function check(name, ok) { if (!ok) fails.push(name); }
+
+  // --- automation artifacts ------------------------------------------
+  check('webdriver', navigator.webdriver === false || navigator.webdriver === undefined);
+
+  // No vibesurfer state may be enumerable on window. Our shims park
+  // things there; host builtins are not enumerable and neither should
+  // ours be.
+  var leaked = Object.keys(window).filter(function (k) { return k.indexOf('__vs') === 0; });
+  check('leaked_globals:' + leaked.join('|'), leaked.length === 0);
+
+  // Builtins we replace must still report native source. A replaced
+  // builtin that prints its own body is the oldest tampering check
+  // there is.
+  function isNative(fn) {
+    try { return /\[native code\]/.test(Function.prototype.toString.call(fn)); }
+    catch (e) { return false; }
+  }
+  check('native_open', isNative(window.open));
+  check('native_anchor_click', isNative(HTMLAnchorElement.prototype.click));
+  check('native_createObjectURL', isNative(URL.createObjectURL));
+  // The guard itself must not be visible.
+  check('native_toString', isNative(Function.prototype.toString));
+
+  // --- impossible-browser checks -------------------------------------
+  // A document that is hidden or unfocused is a backgrounded tab; ours
+  // is the only tab and is supposed to be live.
+  check('visible', document.visibilityState === 'visible');
+  check('not_hidden', document.hidden === false);
+  check('has_focus', document.hasFocus() === true);
+
+  // No browser reports a zero-sized outer window.
+  check('outer_size', window.outerWidth > 0 && window.outerHeight > 0);
+  // Inner must fit inside outer.
+  check('outer_ge_inner',
+    window.outerWidth >= window.innerWidth && window.outerHeight >= window.innerHeight);
+  // Screen must be sane and at least as big as the window.
+  check('screen_size', screen.width > 0 && screen.height > 0);
+  check('screen_ge_outer', screen.width >= window.outerWidth);
+  check('dpr', window.devicePixelRatio > 0);
+  check('color_depth', screen.colorDepth >= 24);
+  check('hw_concurrency', navigator.hardwareConcurrency > 0);
+  check('languages', Array.isArray(navigator.languages) && navigator.languages.length > 0);
+  check('cookies', navigator.cookieEnabled === true);
+
+  var verdict = fails.length === 0 ? 'FP_OK' : 'FP_FAIL ' + fails.join(' ');
+  // A <p> so the a11y walker carries the verdict as a node label —
+  // <pre> has no role and would never reach the tree.
+  document.getElementById('out').textContent = verdict;
+  document.title = verdict;
+})();
+</script>
+</body>
+</html>

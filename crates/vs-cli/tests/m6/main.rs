@@ -29,6 +29,7 @@ mod auth;
 mod challenge;
 mod download;
 mod extract;
+mod fingerprint;
 mod inspect;
 mod lifecycle;
 mod memory;
