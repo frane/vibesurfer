@@ -44,9 +44,21 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
 /// Drop semantics: dropping the runtime closes the command channel,
 /// which causes the engine thread to exit its loop and drop the
 /// engine. The destructor joins the thread.
+/// Called after a job is queued, to nudge a host loop that is asleep.
+///
+/// An `mpsc` send is invisible to a platform run loop, so a
+/// [`MainThreadDispatcher`] host cannot block waiting for work — it has
+/// to wake periodically and poll, trading idle CPU against how long a
+/// queued job sits. With a waker installed the host can sleep properly
+/// and be woken the moment a job lands, which removes both costs.
+///
+/// Must be safe to call from any thread.
+pub type Waker = Box<dyn Fn() + Send + Sync>;
+
 pub struct EngineRuntime {
     sender: Option<mpsc::Sender<Job>>,
     handle: Option<JoinHandle<()>>,
+    waker: Option<Waker>,
 }
 
 impl std::fmt::Debug for EngineRuntime {
@@ -108,6 +120,9 @@ impl EngineRuntime {
         Ok(Self {
             sender: Some(tx),
             handle: Some(handle),
+            // The spawned-thread runtime blocks on `rx.recv()`, so it is
+            // already woken by the send itself.
+            waker: None,
         })
     }
 
@@ -124,9 +139,20 @@ impl EngineRuntime {
         let runtime = Self {
             sender: Some(tx),
             handle: None,
+            waker: None,
         };
         let dispatcher = MainThreadDispatcher { engine, rx };
         (runtime, dispatcher)
+    }
+
+    /// Install the [`Waker`] the host loop is woken by.
+    ///
+    /// Call before the runtime is shared. Without one the host must
+    /// poll; with one it can sleep until there is actually work.
+    #[must_use]
+    pub fn with_waker(mut self, waker: Waker) -> Self {
+        self.waker = Some(waker);
+        self
     }
 
     /// Cleanly shut down: close the channel and join the thread.
@@ -159,6 +185,11 @@ impl EngineRuntime {
             let _ = reply_tx.send(result);
         });
         sender.send(job).map_err(|_| EngineError::Closed)?;
+        // Wake the host loop *after* the job is queued, so it cannot
+        // wake, find nothing, and go back to sleep past this job.
+        if let Some(waker) = &self.waker {
+            waker();
+        }
         reply_rx.recv().map_err(|_| EngineError::Crashed)?
     }
 
