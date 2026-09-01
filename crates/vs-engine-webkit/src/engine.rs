@@ -20,9 +20,26 @@ use vs_protocol::{Op, Ref, Tree};
 /// per-webview UA (WKWebView via `setCustomUserAgent`, WebKitGTK via
 /// `webkit_settings_set_user_agent`, WebView2 via `Profile2` /
 /// `coreWebView2.Settings.UserAgent`) apply this string at construction.
+#[cfg(target_os = "macos")]
 pub const DEFAULT_USER_AGENT: &str =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 \
      (KHTML, like Gecko) Version/17.5 Safari/605.1.15";
+
+/// WebKitGTK is WebKit, so the Safari family is honest — but the OS
+/// token has to say Linux. Claiming `Macintosh` here contradicted
+/// `navigator.platform`, which reports the real platform: an
+/// inconsistency any fingerprinter cross-checks, and one we created.
+#[cfg(target_os = "linux")]
+pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 \
+     (KHTML, like Gecko) Version/17.5 Safari/605.1.15";
+
+/// Windows runs WebView2, which *is* Chromium. There is no honest
+/// Safari string for it, and the engine's own default already names
+/// the right browser and OS — see `webview2.rs`, which no longer
+/// overrides it. This constant exists only so the shared code
+/// compiles; nothing applies it on Windows.
+#[cfg(target_os = "windows")]
+pub const DEFAULT_USER_AGENT: &str = "";
 
 /// An opaque engine-side handle to a page. The daemon associates each
 /// `PageHandle` with one `pages` row in [`vs-store`](vs_protocol).

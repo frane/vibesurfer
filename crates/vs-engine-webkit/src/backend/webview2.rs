@@ -527,24 +527,17 @@ impl Engine for Webview2Backend {
         let web_view: ICoreWebView2 = unsafe { controller.CoreWebView2() }
             .map_err(|e| EngineError::Other(format!("CoreWebView2: {e}")))?;
 
-        // Pin the User-Agent to a current Safari string so anti-bot
-        // fingerprinters don't flag the WebView2 default. Settings2
-        // is the interface that exposes UserAgent — the base
-        // ICoreWebView2Settings doesn't have it.
-        unsafe {
-            use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings2;
-            use windows::core::Interface;
-            let settings = web_view
-                .Settings()
-                .map_err(|e| EngineError::Other(format!("Settings: {e}")))?;
-            if let Ok(s2) = settings.cast::<ICoreWebView2Settings2>() {
-                let ua: Vec<u16> = crate::engine::DEFAULT_USER_AGENT
-                    .encode_utf16()
-                    .chain(std::iter::once(0))
-                    .collect();
-                let _ = s2.SetUserAgent(windows::core::PCWSTR(ua.as_ptr()));
-            }
-        }
+        // Deliberately no User-Agent override.
+        //
+        // WebView2 is Chromium, and its own default UA already names
+        // the right engine and OS. We used to stamp a Safari-on-macOS
+        // string over it — the same constant the WebKit backends use —
+        // which claimed a browser and a platform that contradicted
+        // everything else the page could observe: navigator.platform,
+        // the presence of window.chrome and the Chromium-only APIs,
+        // the JS engine's own behaviour. A UA that disagrees with the
+        // engine underneath it is the single loudest inconsistency a
+        // fingerprinter can find, and it was self-inflicted.
 
         // 3. Install inspector bridge BEFORE Navigate so the
         //    document-start hook fires on the loaded page.

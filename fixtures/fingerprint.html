@@ -64,6 +64,29 @@
   check('languages', Array.isArray(navigator.languages) && navigator.languages.length > 0);
   check('cookies', navigator.cookieEnabled === true);
 
+  // --- the UA must agree with the engine underneath it ---------------
+  // We used to stamp one Safari-on-macOS string onto all three
+  // backends, so Windows (Chromium/WebView2) and Linux (WebKitGTK)
+  // both claimed a browser and an OS that contradicted everything else
+  // observable. A UA disagreeing with its own engine is the loudest
+  // inconsistency a fingerprinter can find, and it was self-inflicted.
+  var ua = navigator.userAgent;
+  var plat = navigator.platform || '';
+  var uaMac = /Macintosh|Mac OS X/.test(ua);
+  var uaWin = /Windows/.test(ua);
+  var uaLinux = /Linux|X11/.test(ua);
+  var platMac = /Mac/.test(plat);
+  var platWin = /Win/.test(plat);
+  var platLinux = /Linux/.test(plat);
+  check('ua_os_matches_platform:' + plat,
+    (uaMac && platMac) || (uaWin && platWin) || (uaLinux && platLinux));
+
+  // A Chromium engine must not claim Safari, and vice versa. window.chrome
+  // plus the Chromium-only APIs are the tell for which engine this is.
+  var looksChromium = ('chrome' in window) || ('connection' in navigator);
+  var uaSaysChromium = /Chrome\/|Edg\//.test(ua);
+  check('ua_engine_matches_runtime', looksChromium === uaSaysChromium);
+
   // --- surfaces that must actually work ------------------------------
   // A blank canvas, a dead audio context or broken font metrics are
   // classic headless tells, and each is a real capability gap in its
