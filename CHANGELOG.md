@@ -6,6 +6,9 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [0.2.2] - 2026-08-31
 
+### Fixed
+- Each engine now presents as the browser it actually is. One Safari-on-macOS User-Agent was stamped onto all three backends, which on Windows put a Safari string on Chromium — WebView2 *is* Chromium, so the UA contradicted `navigator.platform`, the presence of `window.chrome` and the Chromium-only APIs, and the JS engine's own behaviour. On Linux it claimed `Macintosh` while `navigator.platform` reported Linux. A User-Agent that disagrees with the engine underneath it is the loudest inconsistency a fingerprinter can find, and this one was self-inflicted: the constant was added to avoid looking like a default WKWebView, then applied everywhere without checking whether it was true. macOS keeps the Safari string, Linux gets the same family with an `X11; Linux x86_64` OS token, and Windows overrides nothing because Chromium's own default is already correct. The `fingerprint` cell now asserts both halves — UA OS token against `navigator.platform`, and that a runtime exposing `window.chrome` or `navigator.connection` does not claim Safari.
+
 ### Changed
 - The Linux and Windows daemons wait instead of polling, matching the macOS fix in 0.2.1. Linux blocks in `MainContext::iteration` and workers call `MainContext::wakeup`; Windows waits in `MsgWaitForMultipleObjectsEx` and workers post `WM_NULL` via `PostThreadMessageW`. Both replace an unconditional 10ms sleep, and both keep a 250ms backstop bounding staleness if a wakeup were missed. Idle CPU was measured only on macOS (1.5% → 0.00%); the other two are verified by the engine-test suites running at unchanged speed, which is what a broken wakeup would show up as.
 - `~/.vibesurfer/callers/` reaps bindings nothing has used in 30 days, when a new one is written. It had no reaper, so every key that ever ran `vs` left a file behind permanently — 301 of them on the author's machine.

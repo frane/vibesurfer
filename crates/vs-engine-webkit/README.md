@@ -128,7 +128,7 @@ The walker also honors ARIA `role="..."` (Radix UI, Headless UI, Reach UI, every
 
 ### Where it actually stands
 
-Run by vibesurfer against each site, macOS / WKWebView, v0.2.2. These are our own numbers, not a comparison against another browser.
+Run by vibesurfer against each site, macOS / WKWebView, v0.2.2. These are our own numbers, not a comparison against another browser. Each engine reports as itself — Safari on the WebKit backends, Chromium on Windows, where WebView2 genuinely is Chromium — so the Chromium-only rows below read differently there by design.
 
 | Probe | Result |
 |---|---|
