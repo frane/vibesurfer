@@ -90,15 +90,20 @@
     sp.textContent = 'mmmmmmmmmmlli';
     document.body.appendChild(sp);
     var base = sp.offsetWidth;
-    sp.style.font = '72px "Helvetica Neue", monospace';
-    var real = sp.offsetWidth;
+    sp.style.font = '72px sans-serif';
+    var other = sp.offsetWidth;
     sp.style.font = '72px "NoSuchFontXYZ", monospace';
     var missing = sp.offsetWidth;
     document.body.removeChild(sp);
-    // A real font must measure differently from the fallback, and a
-    // missing one must fall back exactly. Both failing means no fonts
-    // are installed — the page renders, but not as any user sees it.
-    check('font_metrics', base > 0 && real !== base && missing === base);
+    // Two generic families must measure differently, and an absent
+    // family must fall back exactly. Generic families rather than a
+    // named one: an earlier version probed "Helvetica Neue" and so
+    // only passed on macOS — Linux containers and Windows do not ship
+    // it, and the check flagged them as broken when they were fine.
+    // Everything collapsing to one width is the real defect worth
+    // catching: no usable fonts, so the page renders nothing like a
+    // user sees it.
+    check('font_metrics', base > 0 && other !== base && missing === base);
   } catch (e) { check('font_metrics', false); }
 
   var verdict = fails.length === 0 ? 'FP_OK' : 'FP_FAIL ' + fails.join(' ');
