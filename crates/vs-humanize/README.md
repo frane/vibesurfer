@@ -126,6 +126,23 @@ Keyboard input has the same trust story: `vs type <TEXT>` sends native `NSEvent`
 
 The walker also honors ARIA `role="..."` (Radix UI, Headless UI, Reach UI, every custom-div-as-button pattern), plus a tabindex heuristic for focusable divs/spans without a role. Modern React UIs surface as actionable refs without coordinate workarounds.
 
+### Where it actually stands
+
+Run by vibesurfer against each site, macOS / WKWebView, v0.2.2. These are our own numbers, not a comparison against another browser. Each engine reports as itself — Safari on the WebKit backends, Chromium on Windows, where WebView2 genuinely is Chromium — so the Chromium-only rows below read differently there by design.
+
+| Probe | Result |
+|---|---|
+| [bot.sannysoft.com](https://bot.sannysoft.com/) | Every headless-artifact check passes — WebDriver, plugin array, languages, the PHANTOM_* and HEADCHR_* families, Selenium markers. `window.chrome` reports missing, which is correct for a WebKit browser and not a defect. |
+| [bot.incolumitas.com](https://bot.incolumitas.com/) | 31 checks OK, 1 FAIL (`webDriverAdvanced`). `navigator.webdriver` is `false` behind a native getter on `Navigator.prototype`, with no own-property override and absent from `Object.keys` — spec-correct; the check expects a Chrome-shaped descriptor. |
+| [CreepJS](https://abrahamjuliot.github.io/creepjs/) | Stable fingerprint, no lies section rendered. Headless heuristics: `chromium: false 6%`, `like headless: 33%`, `headless: 20%`. Evaluating its heuristic set directly, every flag that fires is a Chromium-only API WebKit does not have — `window.chrome`, Content Index, Contacts Picker, Network Information. The ones that would indicate a real problem (`noPlugins`, `noWebShare`, `hasWebDriver`, `noUserActivation`, `headlessUA`, the permissions bug) are all clear. `enumerateDevices` reports mic and webcam. |
+| In-repo `fingerprint` cell | Passes on all three engines, every commit. Asserts no automation artifacts (`Function.prototype.toString` native for every builtin we replace, zero enumerable `__vs*` globals) and no impossible-browser values (`hasFocus`, non-zero `outerWidth`/`outerHeight`, visible document, sane screen/DPR/concurrency). |
+
+Two of those artifacts were ours and shipped in 0.2.1: the download shim replaced `window.open`, `HTMLAnchorElement.prototype.click` and `URL.createObjectURL` so they stopped reporting `[native code]`, and every shim global sat enumerable on `window`. Both closed in 0.2.2 on all three engines, and the cell exists so they cannot come back.
+
+The residual score on each of these is Chromium-shaped expectation, not defect. `window.chrome`, `navigator.connection`, the Contacts and Content Index APIs and a `webdriver` property that reads as absent are all things Chrome has and Safari does not — a real Safari scores the same way. We do not add them. Inventing a Chromium API in a browser whose User-Agent says Safari is precisely the internal inconsistency CreepJS's lie detection looks for, so faking them would raise our detectability, not lower it.
+
+What the numbers do not mean: these are heuristic scores that move when the sites update, and passing them is not the same as passing a commercial anti-bot service on a live site. Cloudflare's own supported-browsers documentation places embedded engines under limited support regardless of configuration. Where a challenge does appear, the practical answer is to solve it rather than to be invisible — see the challenge handling in `SKILL.md`.
+
 ## Short forms
 
 Every primitive has a one-to-three-letter alias. Long forms exist for documentation; agent invocations should use the short form to save tokens.

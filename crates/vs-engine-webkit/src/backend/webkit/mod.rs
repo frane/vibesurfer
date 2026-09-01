@@ -34,8 +34,8 @@ use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{NSBackingStoreType, NSWindow, NSWindowStyleMask};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSURLRequest, NSURL};
 use objc2_web_kit::{
-    WKNavigationDelegate, WKUserContentController, WKUserScript, WKUserScriptInjectionTime,
-    WKWebView, WKWebViewConfiguration,
+    WKNavigationDelegate, WKUIDelegate, WKUserContentController, WKUserScript,
+    WKUserScriptInjectionTime, WKWebView, WKWebViewConfiguration,
 };
 use vs_protocol::{Ref, Tree};
 
@@ -176,6 +176,35 @@ const WEBAUTHN_JS: &str = include_str!("../webauthn_virtual.js");
 // Engine impl
 // =============================================================================
 
+/// Turn on `navigator.mediaDevices`.
+///
+/// WKWebView gates the whole MediaDevices surface behind a preference
+/// that is off by default, so the object was simply absent — even on
+/// https with `isSecureContext: true`, where every real browser has
+/// it. Anything feature-detecting camera/mic support saw a browser
+/// that cannot exist.
+///
+/// The toggle has no public API, so it goes through KVC on
+/// WKPreferences. Unknown keys raise an Obj-C exception rather than
+/// returning an error, and the key set drifts between OS releases, so
+/// each is attempted inside a catch: a preference this macOS does not
+/// have must not stop the browser from starting.
+fn enable_media_devices(config: &WKWebViewConfiguration) {
+    unsafe {
+        let prefs = config.preferences();
+        for key in ["mediaDevicesEnabled", "mediaStreamEnabled"] {
+            let k = NSString::from_str(key);
+            let yes = objc2_foundation::NSNumber::numberWithBool(true);
+            let attempt = objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+                let _: () = objc2::msg_send![&*prefs, setValue: &*yes, forKey: &*k];
+            }));
+            if attempt.is_err() {
+                eprintln!("vs: WKPreferences key {key:?} unavailable on this macOS");
+            }
+        }
+    }
+}
+
 /// Stable seed for a per-ref Bezier path. Same ref → same seed → same
 /// path on every act. Different refs vary so an agent clicking through
 /// a list doesn't draw an identical curve N times.
@@ -259,6 +288,21 @@ impl Engine for WkBackend {
         // cookie jar. Assigning `defaultDataStore` defensively pins it.
         let data_store = unsafe { objc2_web_kit::WKWebsiteDataStore::defaultDataStore(mtm) };
         unsafe { config.setWebsiteDataStore(&data_store) };
+        // Expose `navigator.mediaDevices`. WKWebView gates the whole
+        // MediaDevices surface behind a preference that is off by
+        // default, so the object was simply absent — even on https with
+        // `isSecureContext: true`, where every real browser has it.
+        // Anything feature-detecting camera/mic support saw a browser
+        // that cannot exist.
+        //
+        // The toggle has no public API, so it goes through KVC on
+        // WKPreferences. Unknown keys raise an Obj-C exception rather
+        // than returning an error, and the set of keys drifts between
+        // OS releases, so each one is attempted inside a catch and a
+        // failure is logged and ignored — a missing preference must not
+        // stop the browser from starting.
+        enable_media_devices(&config);
+
         let ucc = unsafe { config.userContentController() };
         // Inject the rAF-flush shim at document-start so `act` can drive
         // pending requestAnimationFrame callbacks even though a headless
@@ -313,6 +357,11 @@ impl Engine for WkBackend {
             );
             w.setReleasedWhenClosed(false);
             w.setContentView(Some(&web_view));
+            // Give the web view first-responder status. Together with
+            // the window's `isKeyWindow` override this is what makes
+            // `document.hasFocus()` true, so the page does not think it
+            // is a backgrounded tab.
+            w.makeFirstResponder(Some(&web_view));
             w
         };
 
@@ -330,6 +379,11 @@ impl Engine for WkBackend {
         let delegate = NavDelegate::new(mtm, slot.clone());
         let proto: &ProtocolObject<dyn WKNavigationDelegate> = ProtocolObject::from_ref(&*delegate);
         unsafe { web_view.setNavigationDelegate(Some(proto)) };
+        // Same object serves as the UI delegate: WebKit sources
+        // `window.outerWidth` / `outerHeight` from the UI client, and
+        // with none installed the page saw a zero-sized outer window.
+        let ui_proto: &ProtocolObject<dyn WKUIDelegate> = ProtocolObject::from_ref(&*delegate);
+        unsafe { web_view.setUIDelegate(Some(ui_proto)) };
 
         let ns_url_str = NSString::from_str(url);
         let ns_url = NSURL::URLWithString(&ns_url_str)

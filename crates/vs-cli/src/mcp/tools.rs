@@ -56,7 +56,7 @@ fn base_tools() -> Vec<Value> {
         tool("vs_close", "Close a page.", obj(&[
             ("page", str_prop("Page id (e.g. p_xxxxxx).", true)),
         ])),
-        tool("vs_view", "Snapshot the a11y tree of a page. First call after open is a full tree; subsequent calls are deltas unless --full is set.", obj(&[
+        tool("vs_view", "Snapshot the a11y tree of a page. First call after open is a full tree; subsequent calls are deltas unless --full is set. `? captcha_visible <provider> <state>` means a bot challenge gates the page; the node carries challenge=<provider>:<state> and challenge_box=x,y,w,h. Solve it like anything the tree cannot address: vs_capture, then vs_click_at at (x+28, y+h/2). Never write a token into the response field.", obj(&[
             ("page", str_prop("Page id.", true)),
             ("full", bool_prop("Force a full re-baseline instead of a delta.", false)),
         ])),
@@ -129,7 +129,7 @@ fn base_tools() -> Vec<Value> {
             ("y", num_prop("Target Y in CSS pixels.", true)),
             ("mode", str_prop("Input mode: human | careful | robotic. Default: human.", false)),
         ])),
-        tool("vs_click_at", "Click at exact coordinates. Trusted (isTrusted=true) on macOS; the Bezier lead-in from the last cursor position simulates real user motion.", obj(&[
+        tool("vs_click_at", "Click at exact coordinates. Trusted (isTrusted=true) on macOS; the Bezier lead-in from the last cursor position simulates real user motion. Reaches what the tree cannot: canvas, WebGL, map tiles, PDF viewers, cross-origin iframes, closed shadow roots (captchas). Loop vs_capture -> act -> vs_capture; the tree often will not change, so verify visually. Keep the viewport fixed between capture and click.", obj(&[
             ("page", str_prop("Page id.", true)),
             ("x", num_prop("Click X in CSS pixels.", true)),
             ("y", num_prop("Click Y in CSS pixels.", true)),

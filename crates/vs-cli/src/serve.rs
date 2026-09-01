@@ -468,7 +468,11 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     let backend = WpeBackend::new().with_capture_dir(captures_dir.clone());
     let engine_box: Box<dyn Engine> = Box::new(backend);
     let (engine_runtime, mut dispatcher) = EngineRuntime::dispatcher(engine_box);
-    let engine_runtime = Arc::new(engine_runtime);
+    // Let the GLib loop below block instead of polling. `wakeup` is
+    // thread-safe and is what lets a worker cut the blocking iteration
+    // short the moment it queues a job.
+    let waker_ctx = glib::MainContext::default();
+    let engine_runtime = Arc::new(engine_runtime.with_waker(Box::new(move || waker_ctx.wakeup())));
 
     let mut daemon = Daemon::new(store, engine_runtime.clone())
         .with_captures_dir(captures_dir)
@@ -547,7 +551,16 @@ pub fn run(args: &ServeArgs) -> Result<()> {
 
     // Pump the GLib main context on the main thread, draining engine
     // jobs between iterations. Exit when the channel closes.
+    //
+    // The iteration blocks rather than spinning: workers call
+    // `MainContext::wakeup` (thread-safe) when they queue a job, so
+    // there is no reason to poll. The 250ms timeout source below is
+    // only a backstop bounding staleness if a wakeup were ever missed
+    // — same shape as the macOS CFRunLoopSource path.
     let main_ctx = glib::MainContext::default();
+    glib::timeout_add_local(std::time::Duration::from_millis(250), || {
+        glib::ControlFlow::Continue
+    });
     'main: loop {
         loop {
             match dispatcher.tick() {
@@ -556,11 +569,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
                 Err(()) => break 'main,
             }
         }
-        // Iterate non-blocking — if the GLib loop has nothing to do,
-        // sleep briefly so we don't burn CPU.
-        if !main_ctx.iteration(false) {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        main_ctx.iteration(true);
     }
 
     let _ = server_thread.join();
@@ -575,9 +584,12 @@ pub fn run(args: &ServeArgs) -> Result<()> {
 #[allow(clippy::too_many_lines)]
 pub fn run(args: &ServeArgs) -> Result<()> {
     use vs_engine_webkit::{backend::webview2::Webview2Backend, Engine, EngineRuntime};
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
     use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+    use windows::Win32::System::Threading::GetCurrentThreadId;
     use windows::Win32::UI::WindowsAndMessaging::{
-        DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE,
+        DispatchMessageW, MsgWaitForMultipleObjectsEx, PeekMessageW, PostThreadMessageW,
+        TranslateMessage, MSG, MWMO_INPUTAVAILABLE, PM_REMOVE, QS_ALLINPUT, WM_NULL,
     };
 
     init_tracing();
@@ -602,7 +614,14 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     let backend = Webview2Backend::new().with_capture_dir(captures_dir.clone());
     let engine_box: Box<dyn Engine> = Box::new(backend);
     let (engine_runtime, mut dispatcher) = EngineRuntime::dispatcher(engine_box);
-    let engine_runtime = Arc::new(engine_runtime);
+    // Let the message loop below wait instead of spinning. A worker
+    // posts WM_NULL to this thread when it queues a job, which counts
+    // as input to `MsgWaitForMultipleObjectsEx` and returns the loop
+    // immediately. `PostThreadMessageW` is safe from any thread.
+    let main_tid = unsafe { GetCurrentThreadId() };
+    let engine_runtime = Arc::new(engine_runtime.with_waker(Box::new(move || unsafe {
+        let _ = PostThreadMessageW(main_tid, WM_NULL, WPARAM(0), LPARAM(0));
+    })));
 
     let mut daemon = Daemon::new(store, engine_runtime.clone())
         .with_captures_dir(captures_dir)
@@ -693,16 +712,23 @@ pub fn run(args: &ServeArgs) -> Result<()> {
                 }
             }
         }
-        // Non-blocking PeekMessage. If a message exists, dispatch
-        // (WebView2 callback completions arrive this way).
+        // Drain pending messages (WebView2 callback completions arrive
+        // this way), then wait rather than spin.
         let mut msg = MSG::default();
         unsafe {
             while PeekMessageW(&raw mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                 let _ = TranslateMessage(&raw const msg);
                 DispatchMessageW(&raw const msg);
             }
+            // `MsgWaitForMultipleObjectsEx` sleeps until a message
+            // arrives or the timeout expires. A worker queueing an
+            // engine job posts WM_NULL to this thread (see the waker
+            // installed above), which counts as a message and returns
+            // us immediately — so the 250ms is a staleness backstop,
+            // not the pickup path. The old unconditional 10ms sleep
+            // was 100 wakeups/sec on an idle daemon.
+            MsgWaitForMultipleObjectsEx(None, 250, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
     }
 
     let _ = server_thread.join();

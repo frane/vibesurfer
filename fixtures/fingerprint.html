@@ -1,0 +1,140 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Fingerprint probe</title></head>
+<body>
+<h1>Fingerprint probe</h1>
+<p id="out">measuring</p>
+<script>
+// Signals that must hold in ANY real browser on ANY platform. Each is
+// checked as a defect, not as a fingerprint value: we assert that
+// nothing here reveals an automation artifact or an impossible browser,
+// not that a value matches some particular target.
+//
+// The a11y tree carries the result so a test cell can assert on it
+// without evaluating JS, which keeps the cell honest about what an
+// ordinary page would see.
+(function () {
+  var fails = [];
+
+  function check(name, ok) { if (!ok) fails.push(name); }
+
+  // --- automation artifacts ------------------------------------------
+  check('webdriver', navigator.webdriver === false || navigator.webdriver === undefined);
+
+  // No vibesurfer state may be enumerable on window. Our shims park
+  // things there; host builtins are not enumerable and neither should
+  // ours be.
+  var leaked = Object.keys(window).filter(function (k) { return k.indexOf('__vs') === 0; });
+  check('leaked_globals:' + leaked.join('|'), leaked.length === 0);
+
+  // Builtins we replace must still report native source. A replaced
+  // builtin that prints its own body is the oldest tampering check
+  // there is.
+  function isNative(fn) {
+    try { return /\[native code\]/.test(Function.prototype.toString.call(fn)); }
+    catch (e) { return false; }
+  }
+  check('native_open', isNative(window.open));
+  check('native_anchor_click', isNative(HTMLAnchorElement.prototype.click));
+  check('native_createObjectURL', isNative(URL.createObjectURL));
+  // The guard itself must not be visible.
+  check('native_toString', isNative(Function.prototype.toString));
+
+  // --- impossible-browser checks -------------------------------------
+  // A document that is hidden or unfocused is a backgrounded tab; ours
+  // is the only tab and is supposed to be live.
+  check('visible', document.visibilityState === 'visible');
+  check('not_hidden', document.hidden === false);
+  check('has_focus', document.hasFocus() === true);
+
+  // No browser reports a zero-sized outer window.
+  check('outer_size', window.outerWidth > 0 && window.outerHeight > 0);
+  // Inner must fit inside outer.
+  check('outer_ge_inner',
+    window.outerWidth >= window.innerWidth && window.outerHeight >= window.innerHeight);
+  // Screen must be sane and at least as big as the window.
+  check('screen_size', screen.width > 0 && screen.height > 0);
+  // Deliberately NOT asserting screen >= window. A window legitimately
+  // exceeds the display on a small screen, and CI runners have tiny
+  // virtual displays — clamping our 1440x900 default to satisfy the
+  // check would change how pages render just to please a probe.
+  check('dpr', window.devicePixelRatio > 0);
+  check('color_depth', screen.colorDepth >= 24);
+  check('hw_concurrency', navigator.hardwareConcurrency > 0);
+  check('languages', Array.isArray(navigator.languages) && navigator.languages.length > 0);
+  check('cookies', navigator.cookieEnabled === true);
+
+  // --- the UA must agree with the engine underneath it ---------------
+  // We used to stamp one Safari-on-macOS string onto all three
+  // backends, so Windows (Chromium/WebView2) and Linux (WebKitGTK)
+  // both claimed a browser and an OS that contradicted everything else
+  // observable. A UA disagreeing with its own engine is the loudest
+  // inconsistency a fingerprinter can find, and it was self-inflicted.
+  var ua = navigator.userAgent;
+  var plat = navigator.platform || '';
+  var uaMac = /Macintosh|Mac OS X/.test(ua);
+  var uaWin = /Windows/.test(ua);
+  var uaLinux = /Linux|X11/.test(ua);
+  var platMac = /Mac/.test(plat);
+  var platWin = /Win/.test(plat);
+  var platLinux = /Linux/.test(plat);
+  check('ua_os_matches_platform:' + plat,
+    (uaMac && platMac) || (uaWin && platWin) || (uaLinux && platLinux));
+
+  // A Chromium engine must not claim Safari, and vice versa. window.chrome
+  // plus the Chromium-only APIs are the tell for which engine this is.
+  var looksChromium = ('chrome' in window) || ('connection' in navigator);
+  var uaSaysChromium = /Chrome\/|Edg\//.test(ua);
+  check('ua_engine_matches_runtime', looksChromium === uaSaysChromium);
+
+  // --- surfaces that must actually work ------------------------------
+  // A blank canvas, a dead audio context or broken font metrics are
+  // classic headless tells, and each is a real capability gap in its
+  // own right: charts, audio apps and text layout all depend on them.
+  try {
+    var c = document.createElement('canvas');
+    c.width = 200; c.height = 50;
+    var x = c.getContext('2d');
+    x.textBaseline = 'top';
+    x.font = '14px Arial';
+    x.fillStyle = '#f60'; x.fillRect(0, 0, 100, 20);
+    x.fillStyle = '#069'; x.fillText('vs-probe', 2, 15);
+    check('canvas_renders', c.toDataURL().length > 500);
+  } catch (e) { check('canvas_renders', false); }
+
+  try {
+    var oc = new OfflineAudioContext(1, 44100, 44100);
+    check('audio_context', oc.sampleRate > 0 && oc.destination.channelCount > 0);
+  } catch (e) { check('audio_context', false); }
+
+  try {
+    var sp = document.createElement('span');
+    sp.style.font = '72px monospace';
+    sp.textContent = 'mmmmmmmmmmlli';
+    document.body.appendChild(sp);
+    var base = sp.offsetWidth;
+    sp.style.font = '72px sans-serif';
+    var other = sp.offsetWidth;
+    sp.style.font = '72px "NoSuchFontXYZ", monospace';
+    var missing = sp.offsetWidth;
+    document.body.removeChild(sp);
+    // Two generic families must measure differently, and an absent
+    // family must fall back exactly. Generic families rather than a
+    // named one: an earlier version probed "Helvetica Neue" and so
+    // only passed on macOS — Linux containers and Windows do not ship
+    // it, and the check flagged them as broken when they were fine.
+    // Everything collapsing to one width is the real defect worth
+    // catching: no usable fonts, so the page renders nothing like a
+    // user sees it.
+    check('font_metrics', base > 0 && other !== base && missing === base);
+  } catch (e) { check('font_metrics', false); }
+
+  var verdict = fails.length === 0 ? 'FP_OK' : 'FP_FAIL ' + fails.join(' ');
+  // A <p> so the a11y walker carries the verdict as a node label —
+  // <pre> has no role and would never reach the tree.
+  document.getElementById('out').textContent = verdict;
+  document.title = verdict;
+})();
+</script>
+</body>
+</html>

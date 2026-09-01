@@ -1,6 +1,6 @@
 ---
 name: vibesurfer
-version: 0.2.1
+version: 0.2.2
 binary: vs
 description: Agent-native headless browser. 26 primitives over a Unix-socket wire protocol. Real WKWebView (macOS), WebKitGTK 6 (Linux), or WebView2 (Windows) — all three engines verified per-commit by a real-browser integration suite. Optimistic concurrency via state tokens; tree-delta wire format; durable session/page/auth state in SQLite.
 ---
@@ -125,12 +125,30 @@ The response body is `path` / `size` / `mime` / `url` rows — bytes never cross
 
 An `<iframe>` shows up in the tree as an `ifr` node whose label is its resolved `src` — the walker cannot cross into the frame, so that URL is what you feed `vs download`.
 
-**Bot challenges (v0.2.1+).** If a page is gated by Turnstile / hCaptcha / reCAPTCHA, `vs view` raises `? captcha_visible <provider> <state>` and the widget appears as a labelled node carrying `challenge=<provider>:<state>`. Two states matter:
+**Bot challenges (v0.2.1+).** If a page is gated by Turnstile / hCaptcha / reCAPTCHA, `vs view` raises `? captcha_visible <provider> <state>` and the widget appears as a labelled node carrying `challenge=<provider>:<state>` and `challenge_box=<x>,<y>,<w>,<h>`.
 
-- `pending` — the widget rendered. A human can complete it: relay a `vs watch` URL and park on `vs prompt-confirm` until they say they're done.
-- `unrendered` — the script loaded but produced no widget at all. **Nobody can complete this, you included.** Submitting will be refused server-side with an empty token. Don't retry the form and don't conclude it's broken; say plainly that the page's bot check failed to initialise and ask the human how they want to proceed.
+- `solved` — a token is present. Submit the form.
+- `pending` — a challenge is up and unsolved. **Usually you can just click it.**
 
-Do not try to defeat a challenge. If it can't be completed, that is a fact to report, not a problem to route around.
+One instance of "When the tree isn't enough" below. The checkbox is at the left of `challenge_box`, vertically centred — `ca` at `(x+28, y+h/2)` solves it in one trusted click (verified: token issued, state → `solved`). Never write a token into the response field; the server validates it with the provider. Can't solve it? Hand off with `w` + `pc`.
+
+## When the tree isn't enough: look, then act at coordinates
+
+The tree covers HTML. Canvas (charts, drawing, signature pads, games), WebGL, map tiles, PDF viewers, cross-origin iframes and closed shadow roots (captcha widgets) have no DOM to address. `vs v` will never show them. Look instead:
+
+```
+vs cap <PAGE>                     # look
+vs ca <PAGE> <X> <Y> --token=<TOK>
+vs cap <PAGE>                     # verify
+```
+
+`ca` / `mt` / `ha` / `dr` / `type` dispatch native OS events, so the page sees `isTrusted=true`. A synthetic `el.click()` does not work here — canvas apps track real pointer streams and trust-gated widgets reject anything else.
+
+- Keep the viewport fixed between `cap` and `ca`; screenshot coords are CSS px of the current viewport. `vp` re-baselines, so do it first.
+- Verify with `cap`, not `v` — acting on canvas often leaves the tree unchanged, so "no change" tells you nothing.
+- Use `dr` for sliders, panning and reordering: it presses, moves along a path, releases. Endpoints alone don't drive pointer-tracking widgets.
+- `ha` first for tooltips, map labels and flyouts — they don't exist until hovered.
+- One step at a time. Blind batches of `ca` are where this goes wrong.
 
 In MCP Apps hosts (Claude Desktop, ChatGPT, VS Code Copilot), calling `vs_watch` also renders a live panel inline: the tool carries `_meta.ui` → `ui://vibesurfer/live-panel`, a self-contained page that polls frames over the bridge via the app-only `vs_live_frame` tool (never billed to the model). Hosts without Apps support just get the URL line.
 

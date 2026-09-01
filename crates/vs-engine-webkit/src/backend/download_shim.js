@@ -34,6 +34,68 @@
   var isTop = false;
   try { isTop = window.top === window; } catch (e) { isTop = false; }
 
+  // --- keep our instrumentation out of the page's observable surface ---
+  //
+  // This shim replaces three builtins (see the bottom of the file), and
+  // a replaced builtin stops reporting `[native code]` from
+  // `Function.prototype.toString`. That is the oldest and most widely
+  // implemented check for a tampered-with browser, so leaving it is a
+  // bug in our plumbing: the page could see vibesurfer's own source
+  // where the platform's should be, and behave differently because of
+  // it.
+  //
+  // `toString` is redirected through a registry mapping each
+  // replacement back to the original, so a replaced builtin answers
+  // exactly as it did before. The redirect registers itself too —
+  // otherwise `Function.prototype.toString.toString()` is the one
+  // function that gives the game away.
+  var NATIVE = new WeakMap();
+  (function installToStringGuard() {
+    try {
+      var origToString = Function.prototype.toString;
+      var guard = function toString() {
+        var real = NATIVE.get(this);
+        return origToString.call(real || this);
+      };
+      NATIVE.set(guard, origToString);
+      Function.prototype.toString = guard;
+    } catch (e) { /* frozen prototype: nothing to hide behind */ }
+  })();
+
+  /// Register `replacement` as standing in for `original`, so it keeps
+  /// reporting the original's source.
+  function passAsNative(replacement, original) {
+    try { NATIVE.set(replacement, original); } catch (e) { /* ignore */ }
+    return replacement;
+  }
+
+  /// Make vibesurfer's own globals non-enumerable.
+  ///
+  /// Every shim parks state on `window` under a `__vs*` name, and those
+  /// were plain assignments — so `Object.keys(window)` listed the whole
+  /// of our instrumentation to any page that looked. Same bug as the
+  /// `toString` leak above: internal plumbing showing up in the page's
+  /// observable surface. The properties still work exactly as before;
+  /// they just stop appearing in enumeration, the way host builtins
+  /// don't.
+  ///
+  /// Names are listed rather than discovered, because this runs on the
+  /// snapshot path too and walking every property of `window` there
+  /// would be worth real milliseconds.
+  window.__vsHideGlobals = function (names) {
+    for (var i = 0; i < names.length; i += 1) {
+      var n = names[i];
+      if (!Object.prototype.hasOwnProperty.call(window, n)) continue;
+      try {
+        var d = Object.getOwnPropertyDescriptor(window, n);
+        if (!d || d.enumerable === false || d.configurable === false) continue;
+        d.enumerable = false;
+        Object.defineProperty(window, n, d);
+      } catch (e) { /* non-configurable: leave it */ }
+    }
+  };
+  passAsNative(window.__vsHideGlobals, Object.defineProperty);
+
   // Blob registry: object URL -> Blob, so a revoked URL is still
   // readable. Insertion-ordered Map, oldest evicted first.
   var blobs = new Map();
@@ -47,13 +109,13 @@
 
   var origCreate = typeof URL !== 'undefined' && URL.createObjectURL;
   if (origCreate) {
-    URL.createObjectURL = function (obj) {
+    URL.createObjectURL = passAsNative(function createObjectURL(obj) {
       var url = origCreate.call(URL, obj);
       try {
         if (typeof Blob !== 'undefined' && obj instanceof Blob) remember(url, obj);
       } catch (e) { /* not a Blob (MediaSource, MediaStream): ignore */ }
       return url;
-    };
+    }, origCreate);
   }
 
   // --- top-frame buffer -------------------------------------------------
@@ -294,21 +356,35 @@
   // and that is exactly the shape every "save this blob" helper uses.
   try {
     var protoClick = HTMLAnchorElement.prototype.click;
-    HTMLAnchorElement.prototype.click = function () {
+    HTMLAnchorElement.prototype.click = passAsNative(function click() {
       try { anchorIntent(this); } catch (e) { /* never block the click */ }
       return protoClick.apply(this, arguments);
-    };
+    }, protoClick);
   } catch (e) { /* prototype frozen */ }
 
   try {
     var origOpen = window.open;
-    window.open = function (url) {
+    window.open = passAsNative(function open(url) {
       try {
         if (url && (String(url).slice(0, 5) === 'blob:' || String(url).slice(0, 5) === 'data:')) {
           intercept(String(url), null);
         }
       } catch (e) { /* never block the open */ }
       return origOpen.apply(window, arguments);
-    };
+    }, origOpen);
   } catch (e) { /* window.open non-writable */ }
+
+  // Hide everything vibesurfer parks on `window`. Covers the other
+  // shims too: this runs at document-start in every frame, and the
+  // snapshot walker re-hides its own late-created globals when it
+  // first installs them.
+  window.__vsHideGlobals([
+    '__vsHideGlobals',
+    '__vsDlInstalled', '__vsDl',
+    '__vsRAFShimmed', '__vsFlushRAF',
+    '__vsInspectorInstalled',
+    '__vsWebAuthn',
+    '__vsDirty', '__vsDirtyObserver', '__vsRefCounter',
+    '__vsFindRef', '__vsLastResult',
+  ]);
 })()

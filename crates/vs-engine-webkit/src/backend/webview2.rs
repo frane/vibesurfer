@@ -39,6 +39,7 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, COREWEBVIEW2_MOUSE_EVENT_KIND,
     COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOWN, COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP,
     COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE, COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE,
+    COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC,
 };
 use webview2_com::{
     pwstr_from_str, take_pwstr, AddScriptToExecuteOnDocumentCreatedCompletedHandler,
@@ -306,7 +307,13 @@ fn install_inspector(web_view: &ICoreWebView2, slots: &InspectorSlots) -> bool {
     // .postMessage(...)` — one global channel — so we install a
     // shim that maps the `webkit.messageHandlers` API onto
     // chrome.webview by tagging the JSON with `__channel`.
+    // Wrapped in an IIFE: a top-level `function __vsMakeHandler` here
+    // became a global, and `Object.keys(window)` then listed it
+    // alongside the page's own properties — the same instrumentation
+    // leak the shared shims were fixed for. Caught by the
+    // fingerprint cell on windows-latest.
     let shim = r"
+      (function () {
         window.webkit = window.webkit || {};
         window.webkit.messageHandlers = window.webkit.messageHandlers || {};
         function __vsMakeHandler(name) {
@@ -325,6 +332,7 @@ fn install_inspector(web_view: &ICoreWebView2, slots: &InspectorSlots) -> bool {
         }
         window.webkit.messageHandlers.vsConsole = __vsMakeHandler('vsConsole');
         window.webkit.messageHandlers.vsNetwork = __vsMakeHandler('vsNetwork');
+      })();
     ";
     if add_init_script(web_view, shim).is_err() {
         return false;
@@ -504,28 +512,32 @@ impl Engine for Webview2Backend {
         // CapturePreview can always read, with nothing shown on screen.
         unsafe { controller.SetIsVisible(true) }
             .map_err(|e| EngineError::Other(format!("SetIsVisible: {e}")))?;
+        // Give the page focus. Without this `document.hasFocus()` is
+        // false and the page behaves as a backgrounded tab: `autofocus`
+        // does not fire, `:focus-visible` never matches, IME
+        // composition does not start. The macOS backend needed the
+        // equivalent (a key window plus first responder). Not fatal if
+        // it fails — the browser still works, it just thinks it is in
+        // the background.
+        if let Err(e) = unsafe { controller.MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC) }
+        {
+            eprintln!("vs: MoveFocus failed ({e:?}); document.hasFocus() will be false");
+        }
 
         let web_view: ICoreWebView2 = unsafe { controller.CoreWebView2() }
             .map_err(|e| EngineError::Other(format!("CoreWebView2: {e}")))?;
 
-        // Pin the User-Agent to a current Safari string so anti-bot
-        // fingerprinters don't flag the WebView2 default. Settings2
-        // is the interface that exposes UserAgent — the base
-        // ICoreWebView2Settings doesn't have it.
-        unsafe {
-            use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings2;
-            use windows::core::Interface;
-            let settings = web_view
-                .Settings()
-                .map_err(|e| EngineError::Other(format!("Settings: {e}")))?;
-            if let Ok(s2) = settings.cast::<ICoreWebView2Settings2>() {
-                let ua: Vec<u16> = crate::engine::DEFAULT_USER_AGENT
-                    .encode_utf16()
-                    .chain(std::iter::once(0))
-                    .collect();
-                let _ = s2.SetUserAgent(windows::core::PCWSTR(ua.as_ptr()));
-            }
-        }
+        // Deliberately no User-Agent override.
+        //
+        // WebView2 is Chromium, and its own default UA already names
+        // the right engine and OS. We used to stamp a Safari-on-macOS
+        // string over it — the same constant the WebKit backends use —
+        // which claimed a browser and a platform that contradicted
+        // everything else the page could observe: navigator.platform,
+        // the presence of window.chrome and the Chromium-only APIs,
+        // the JS engine's own behaviour. A UA that disagrees with the
+        // engine underneath it is the single loudest inconsistency a
+        // fingerprinter can find, and it was self-inflicted.
 
         // 3. Install inspector bridge BEFORE Navigate so the
         //    document-start hook fires on the loaded page.

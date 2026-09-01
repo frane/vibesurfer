@@ -97,12 +97,17 @@ fn build_node(v: &serde_json::Value) -> Option<Node> {
     if v.get("hid").and_then(serde_json::Value::as_u64) == Some(1) {
         attrs.insert("hid".to_string(), "1".to_string());
     }
-    // `challenge=<provider>:<state>` on a bot-check widget. The state
-    // is the actionable part: `unrendered` means the script produced
-    // no widget, so there is nothing for an agent *or* a human to
-    // interact with and the form will be refused on submit.
+    // `challenge=<provider>:<state>` on a bot-check widget. `pending`
+    // means unsolved, and is usually one trusted click away from
+    // solved — see `challenge_box` below. Providers draw into a closed
+    // shadow root, so the widget itself never appears in the tree.
     if let Some(chal) = v.get("chal").and_then(serde_json::Value::as_str) {
         attrs.insert("challenge".to_string(), chal.to_string());
+    }
+    // `challenge_box=x,y,w,h` — the widget's viewport rect, so an agent
+    // can drive `vs click-at` straight at it.
+    if let Some(b) = v.get("chalbox").and_then(serde_json::Value::as_str) {
+        attrs.insert("challenge_box".to_string(), b.to_string());
     }
     Some(Node {
         r: Ref(r),

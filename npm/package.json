@@ -1,6 +1,6 @@
 {
   "name": "vibesurfer",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "A browser for LLMs, not humans. Real WebKit over a line protocol built for agents. Try it with npx vibesurfer.",
   "keywords": [
     "browser-automation",

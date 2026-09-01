@@ -17,7 +17,9 @@
 
 use objc2::rc::Retained;
 use objc2::{define_class, msg_send, MainThreadMarker, MainThreadOnly};
-use objc2_app_kit::{NSBackingStoreType, NSWindow, NSWindowOcclusionState, NSWindowStyleMask};
+use objc2_app_kit::{
+    NSBackingStoreType, NSScreen, NSWindow, NSWindowOcclusionState, NSWindowStyleMask,
+};
 use objc2_foundation::NSRect;
 
 define_class!(
@@ -39,6 +41,45 @@ define_class!(
         #[unsafe(method(occlusionState))]
         fn occlusion_state(&self) -> NSWindowOcclusionState {
             NSWindowOcclusionState::Visible
+        }
+
+        /// Report the window as key, so the page has focus.
+        ///
+        /// A window that is never ordered on screen is never key, so
+        /// `document.hasFocus()` returned false and the page believed
+        /// it was in a background tab. That breaks ordinary things well
+        /// beyond bot checks: `autofocus`, `:focus-visible`, IME
+        /// composition, and any SPA that defers work until focus.
+        /// Same technique and same justification as `isVisible` above —
+        /// we change the answer WebKit reads, not what is displayed.
+        #[unsafe(method(isKeyWindow))]
+        fn is_key_window(&self) -> bool {
+            true
+        }
+
+        /// A borderless window is not key-eligible by default, which
+        /// would make `isKeyWindow` inconsistent with what AppKit
+        /// believes.
+        #[unsafe(method(canBecomeKeyWindow))]
+        fn can_become_key_window(&self) -> bool {
+            true
+        }
+
+        /// Report a real screen for a window that is on none.
+        ///
+        /// A window never ordered in has no `screen`, and WebKit walks
+        /// that to answer `window.outerWidth` / `outerHeight` /
+        /// `screenX` / `screenY` — which all came back 0. No browser
+        /// reports a zero-sized outer window, and responsive code that
+        /// derives browser-chrome height from
+        /// `outerHeight - innerHeight` gets nonsense from it.
+        #[unsafe(method(screen))]
+        fn screen(&self) -> *mut NSScreen {
+            // `-screen` is a +0 getter, so hand back an unretained
+            // pointer: the main screen is owned by AppKit and outlives
+            // this window.
+            NSScreen::mainScreen(MainThreadMarker::from(self))
+                .map_or(std::ptr::null_mut(), |s| Retained::as_ptr(&s).cast_mut())
         }
     }
 );
