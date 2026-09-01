@@ -814,10 +814,33 @@ impl Daemon {
         let mut token: Option<StateToken> = None;
         for (entry, value) in values {
             let before_token: StateToken = match token {
+                // Subsequent fields chain off the previous fill, which
+                // is the write this one is genuinely sequenced after.
                 Some(t) => t,
-                None => entry.token.parse().map_err(|_| {
-                    DaemonError::BadRequest("vs_prompt_form: bad token (not hex 16)".into())
-                })?,
+                // First field: read the page's *current* token rather
+                // than the one stored when `vs_prompt_form` was called.
+                //
+                // That stored token was captured before the human had
+                // even opened the entry URL. They then take seconds or
+                // minutes to type, and any re-render in that window —
+                // which a framework-driven login form does constantly,
+                // on validation, focus and timers — advances the token.
+                // The fill then failed the stale-token check and
+                // silently never ran: the pending entry was consumed,
+                // the daemon reported the form fulfilled, and the field
+                // stayed empty. Secure credential entry into a React or
+                // Vue login was impossible, which is the whole reason
+                // this primitive exists.
+                //
+                // The stale-token guard is there to stop an *agent*
+                // writing on the strength of a stale read. This is not
+                // that: the human authorised this exact value for this
+                // exact ref, and the delay is the feature. If the ref
+                // itself is gone the fill still fails loudly with
+                // NOT_FOUND, which is the honest error.
+                None => self
+                    .current_token(session_id, &entry.page)
+                    .unwrap_or(StateToken::ZERO),
             };
             let resp = self.act(ActCall {
                 session_id: session_id.to_string(),

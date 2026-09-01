@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use vs_daemon::{daemon::Daemon, page_state::ViewForm};
 use vs_engine_webkit::{self as engine, test_support::TestEngine, Engine, EngineRuntime};
-use vs_protocol::Ref;
+use vs_protocol::{Ref, StateToken};
 use vs_store::Store;
 
 fn make_daemon() -> (Daemon, tempfile::TempDir) {
@@ -1012,4 +1012,65 @@ fn download_list_reports_captured_intents() {
     assert_eq!(e.error, None);
     assert_eq!(e.mime, "application/pdf");
     assert!(e.url.starts_with("blob:"));
+}
+
+/// A secure form fill must survive the page changing while the human
+/// types.
+///
+/// `vs_prompt_form` captured the page token, then handed a URL to a
+/// person. They take seconds or minutes. Any re-render in that window
+/// — which a framework-driven login form does constantly, on
+/// validation, focus and timers — advances the token, and the fill
+/// then failed the stale-token check and silently never ran: pending
+/// entry consumed, form reported fulfilled, field still empty. Secure
+/// credential entry into a React or Vue login was impossible, which is
+/// what the primitive exists for.
+#[test]
+fn prompt_form_fill_survives_a_page_change_while_the_human_types() {
+    let (d, _dir) = make_daemon();
+    let s = d.session_open(Some("default")).unwrap();
+    let p = d.open(&s.session_id, "https://example.com/login").unwrap();
+    let before = d.view(&s.session_id, &p.page_id, false).unwrap();
+
+    // The agent asks for one secret, quoting the token it just read.
+    let (form_id, _url) = d
+        .prompt_form_enqueue(
+            &p.page_id,
+            vec![(Ref(3), "Password".to_string(), true)],
+            &before.token.to_string(),
+            None,
+        )
+        .expect("enqueue form");
+
+    // The page moves on while the human is typing. Navigating is the
+    // clearest stand-in available against the canned test tree — a
+    // re-baseline alone yields an identical token, because the token is
+    // derived from tree content and the fake engine's tree never
+    // changes. What matters is only that the page's current token no
+    // longer equals the one the form captured.
+    d.navigate(
+        &s.session_id,
+        &p.page_id,
+        "https://example.com/login?step=2",
+    )
+    .unwrap();
+    let after = d.view(&s.session_id, &p.page_id, true).unwrap();
+    assert_ne!(
+        before.token, after.token,
+        "test setup: the page must have moved for this to prove anything"
+    );
+
+    // The human submits.
+    let pending = d.pending_list();
+    let entry = pending
+        .iter()
+        .find(|e| e.form.as_deref() == Some(form_id.as_str()))
+        .expect("pending entry present");
+    assert!(d.pending_fulfill(&entry.id, "hunter2".into()));
+
+    // The fill must land, not fail on the token it captured minutes ago.
+    let token = d
+        .prompt_form_wait(&s.session_id, &form_id, Duration::from_secs(5))
+        .expect("secure fill must survive the page moving while a human types");
+    assert_ne!(token, StateToken::ZERO);
 }
