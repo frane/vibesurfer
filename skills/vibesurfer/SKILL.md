@@ -1,6 +1,6 @@
 ---
 name: vibesurfer
-version: 0.2.2
+version: 0.2.3
 binary: vs
 description: Agent-native headless browser. 26 primitives over a Unix-socket wire protocol. Real WKWebView (macOS), WebKitGTK 6 (Linux), or WebView2 (Windows) — all three engines verified per-commit by a real-browser integration suite. Optimistic concurrency via state tokens; tree-delta wire format; durable session/page/auth state in SQLite.
 ---
