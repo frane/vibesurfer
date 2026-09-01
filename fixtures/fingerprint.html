@@ -64,6 +64,43 @@
   check('languages', Array.isArray(navigator.languages) && navigator.languages.length > 0);
   check('cookies', navigator.cookieEnabled === true);
 
+  // --- surfaces that must actually work ------------------------------
+  // A blank canvas, a dead audio context or broken font metrics are
+  // classic headless tells, and each is a real capability gap in its
+  // own right: charts, audio apps and text layout all depend on them.
+  try {
+    var c = document.createElement('canvas');
+    c.width = 200; c.height = 50;
+    var x = c.getContext('2d');
+    x.textBaseline = 'top';
+    x.font = '14px Arial';
+    x.fillStyle = '#f60'; x.fillRect(0, 0, 100, 20);
+    x.fillStyle = '#069'; x.fillText('vs-probe', 2, 15);
+    check('canvas_renders', c.toDataURL().length > 500);
+  } catch (e) { check('canvas_renders', false); }
+
+  try {
+    var oc = new OfflineAudioContext(1, 44100, 44100);
+    check('audio_context', oc.sampleRate > 0 && oc.destination.channelCount > 0);
+  } catch (e) { check('audio_context', false); }
+
+  try {
+    var sp = document.createElement('span');
+    sp.style.font = '72px monospace';
+    sp.textContent = 'mmmmmmmmmmlli';
+    document.body.appendChild(sp);
+    var base = sp.offsetWidth;
+    sp.style.font = '72px "Helvetica Neue", monospace';
+    var real = sp.offsetWidth;
+    sp.style.font = '72px "NoSuchFontXYZ", monospace';
+    var missing = sp.offsetWidth;
+    document.body.removeChild(sp);
+    // A real font must measure differently from the fallback, and a
+    // missing one must fall back exactly. Both failing means no fonts
+    // are installed — the page renders, but not as any user sees it.
+    check('font_metrics', base > 0 && real !== base && missing === base);
+  } catch (e) { check('font_metrics', false); }
+
   var verdict = fails.length === 0 ? 'FP_OK' : 'FP_FAIL ' + fails.join(' ');
   // A <p> so the a11y walker carries the verdict as a node label —
   // <pre> has no role and would never reach the tree.
