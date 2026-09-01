@@ -4,6 +4,11 @@ All notable changes to vibesurfer are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Secure credential entry works against framework-driven login forms. `vs_prompt_form_wait` filled each value using the page token captured when `vs prompt-form` was called — before the human had even opened the entry URL. They then take seconds or minutes to type, and any re-render in that window (validation, focus, timers: constant on a React or Vue login) advances the token, so the fill failed the stale-token check and silently never ran. The pending entry was consumed, the form reported fulfilled, and the field stayed empty. The first field now reads the page's current token instead; later fields still chain off the preceding fill, which is the write they are genuinely sequenced after. A ref that no longer exists still fails loudly with `NOT_FOUND`. (Reported via `#vibesurfer`.)
+
 ## [0.2.2] - 2026-08-31
 
 ### Fixed

@@ -100,6 +100,8 @@ But a credential YOU own is not a secret to protect from yourself: a test user y
 `vs prompt-scan <PAGE> [--open]` (alias `ps`) shows the human a live view of the headless page (a QR code, a 2FA screen) and blocks until they press Enter, so out-of-band steps like scanning a TOTP enrollment QR work. Over MCP, compose the existing tools instead: call `vs_watch` for the live URL, relay it, then `vs_prompt_confirm` to wait.
 
 **Browser entry (v0.1.23+):** the human alternative to the tty. `vs pending url` (`pe u`) mints a single-use loopback URL; the page lists every pending entry as one form (secret fields masked, password managers can autofill), and one submit fulfills them all. `vs prompt-form` prints such a URL automatically. Whole-login flow over MCP: call `vs_prompt_form` with all fields (`[{ref, label, secret}]`) — it returns `form` + `url` immediately; relay the URL to the user verbatim; then call `vs_prompt_form_wait` with the form id, which parks until submit and fills every ref in order. Values go browser → daemon → page; the agent never sees them. URLs are 127.0.0.1-only, 256-bit-nonce capability links, valid 10 minutes, consumed on submit.
+
+A password field masks to `***` in the tree whatever its value, so empty → filled moves the state token but filled → *different* value does not: the masked tree is byte-identical. That is not a stale view. To confirm a secret landed, check the field went from placeholder to `***`, or use `cap`. Nothing value-derived goes in the tree — a hash would be brute-forceable for a short secret and a length leaks the length.
 ### Search / extract (8, 10, 18)
 
 | # | CLI | What |
