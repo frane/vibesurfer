@@ -108,7 +108,7 @@ Documented in [`codes.md`](codes.md). Highlights:
 | `STALE_TOKEN` | `<new_token> <reason>` | Page changed since the read the write was based on. Reasons: `nav`, `mutate`, `expired`. |
 | `ENGINE_UNSUPPORTED` | `<primitive> <engine>` | The active engine cannot service this primitive. |
 | `POLICY_DENY` | `<rule> <subject>` | A policy rule blocked the action. |
-| `TIMEOUT` | `<budget> <primitive>` | Operation exceeded its timeout. |
+| `TIMEOUT` | `<budget> <primitive> [<detail>]` | Operation exceeded its timeout. On `vs_prompt_form_wait` it means the form is still pending, not dead: park again on the same form id. |
 | `NOT_FOUND` | `ref=<n>` or `mark=<name>` | Target does not exist. |
 | `CONFIRM_REQUIRED` | `<reason> [<detail>...]` | Action requires explicit confirmation. |
 

@@ -88,6 +88,21 @@ fn cell_prompt_form_browser_flow() {
         // password input; labels are shown.
         let (status, page_html) = http(&url, "GET", None);
         assert!(status.contains("200"), "GET form: {status}");
+        // Reading the form never burns the link. The URL is relayed
+        // as text to a human, and whatever sits on that path — a link
+        // preview, a prefetcher, the human reloading — must not
+        // destroy the entry they were about to use.
+        for probe in [
+            url.clone(),
+            format!("{url}?utm_source=chat"),
+            format!("{url}/"),
+        ] {
+            let (status, _) = http(&probe, "GET", None);
+            assert!(
+                status.contains("200"),
+                "repeat/decorated GET must still serve the form: {probe} -> {status}"
+            );
+        }
         assert!(page_html.contains("Work email"), "label 1:\n{page_html}");
         assert!(page_html.contains("Password"), "label 2:\n{page_html}");
         assert!(
@@ -109,6 +124,23 @@ fn cell_prompt_form_browser_flow() {
                 .to_string()
         };
         let (id_email, id_password) = (id_for(n_email), id_for(n_password));
+
+        // A waiter that runs out of budget before the human submits
+        // must say so, and must leave the form alone. Reporting this
+        // as "cancelled, timed out, or unknown" had agents conclude
+        // the link was burned and abandon a form still waiting on a
+        // human who was simply still typing.
+        let r = ctx.vs(&["prompt-form-wait", &form_id, "--timeout-ms=200"]);
+        assert!(
+            r.stdout.contains("still waiting"),
+            "a timed-out wait must read as live, got {:?}",
+            r.stdout
+        );
+        let (status, _) = http(&url, "GET", None);
+        assert!(
+            status.contains("200"),
+            "form must survive the waiter: {status}"
+        );
 
         // Submit both values in one POST, like the browser form does.
         let post = format!("{id_email}=user%40example.com&{id_password}=hunter+2%21");
@@ -135,8 +167,15 @@ fn cell_prompt_form_browser_flow() {
         assert!(pw.contains("hunter 2!"), "password filled, got {pw:?}");
 
         // The nonce was consumed by the POST; replay and guessing die.
-        let (status, _) = http(&url, "GET", None);
+        // A spent link says it was already submitted, an unknown one
+        // says it is not valid here — the human can tell "you are
+        // done" from "that address is wrong".
+        let (status, spent_html) = http(&url, "GET", None);
         assert!(status.contains("410"), "used nonce must be gone: {status}");
+        assert!(
+            spent_html.contains("already submitted"),
+            "spent nonce page:\n{spent_html}"
+        );
         let base = url.rsplit_once('/').expect("nonce path").0;
         let (status, _) = http(&format!("{base}/nonexistent"), "GET", None);
         assert!(status.contains("410"), "unknown nonce: {status}");
