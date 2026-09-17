@@ -173,3 +173,56 @@ jobs:
         with:
           files: staging/checksums.txt
           tag_name: ${{ steps.ver.outputs.version }}
+
+  # npm is the one channel a release cannot finish on its own. The
+  # launcher in npm/ downloads the release assets by tag, so publishing
+  # before they exist makes `npx vibesurfer` 404 — hence `needs:
+  # checksums`, which only completes once every asset is uploaded.
+  #
+  # Publishing has been a manual step, and manual is why 0.2.4, 0.2.5
+  # and 0.2.6 all shipped everywhere except npm: the maintainer's local
+  # token had been revoked months earlier and `npm whoami` still
+  # resolved, so nothing looked wrong until a publish was attempted.
+  # With an NPM_TOKEN secret configured this job removes the step from
+  # the critical path entirely. Without one it skips and says so, so
+  # adding the secret is the only action needed, once.
+  npm:
+    name: npm publish
+    needs: checksums
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "NPM_TOKEN is not configured; skipping npm publish."
+            echo "Add a granular token with write access to the vibesurfer"
+            echo "package as the NPM_TOKEN repository secret, and releases"
+            echo "will publish to npm on their own from then on."
+            exit 0
+          fi
+          # The tag is the source of truth. A package.json that drifted
+          # from it would publish a version nobody tagged, so fail loudly
+          # rather than guess which one was meant.
+          tag_version="${{ steps.ver.outputs.version }}"
+          pkg_version="v$(node -p "require('./npm/package.json').version")"
+          if [ "${tag_version}" != "${pkg_version}" ]; then
+            echo "tag ${tag_version} does not match npm/package.json ${pkg_version}"
+            exit 1
+          fi
+          cd npm
+          npm publish
