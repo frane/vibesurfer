@@ -279,7 +279,11 @@ impl Engine for WpeBackend {
                 primitive: "navigate",
             });
         }
-        match slot.borrow_mut().take() {
+        // Taken out of the RefCell before the match, not inside it:
+        // as the function's tail expression the borrow guard would
+        // otherwise outlive `slot` itself.
+        let result = slot.borrow_mut().take();
+        match result {
             Some(Ok(())) => Ok(()),
             Some(Err(msg)) => Err(EngineError::Other(format!("navigation failed: {msg}"))),
             None => Err(EngineError::Other(
