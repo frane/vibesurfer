@@ -831,6 +831,16 @@ impl Daemon {
                 )))
             }
         };
+        // A fill can still fail after the human has typed: the ref may
+        // be gone, the page may have navigated, the caller may have
+        // addressed the wrong session. `wait_form` has already taken
+        // the form out of the queue by now, so without this copy that
+        // failure destroyed the values — the human's password was gone
+        // and the agent's retry was told the form was unknown, which
+        // reads as "you imagined it". Their typing is the one thing
+        // here that cannot be recreated, so it goes back on any error
+        // and the retry can pick up where this left off.
+        let held = values.clone();
         let mut token: Option<StateToken> = None;
         for (entry, value) in values {
             let before_token: StateToken = match token {
@@ -862,7 +872,7 @@ impl Daemon {
                     .current_token(session_id, &entry.page)
                     .unwrap_or(StateToken::ZERO),
             };
-            let resp = self.act(ActCall {
+            let resp = match self.act(ActCall {
                 session_id: session_id.to_string(),
                 page_id: entry.page.clone(),
                 target: EngineActTarget::Ref(vs_protocol::Ref(entry.r)),
@@ -872,7 +882,18 @@ impl Daemon {
                 args_redacted: "fill ***".into(),
                 mode: vs_engine_webkit::engine::InputMode::Careful,
                 group_label: entry.group.clone(),
-            })?;
+            }) {
+                Ok(resp) => resp,
+                Err(e) => {
+                    // Hand the values back and report the real error.
+                    // Re-filling a field this loop already wrote is
+                    // harmless — a fill is idempotent — and it keeps
+                    // the retry a plain repeat of the whole form
+                    // rather than a partial resume.
+                    self.inner.pending.restore(held);
+                    return Err(e);
+                }
+            };
             token = Some(resp.token);
         }
         token.ok_or_else(|| DaemonError::BadRequest("vs_prompt_form: empty form".into()))

@@ -182,6 +182,84 @@ fn cell_prompt_form_browser_flow() {
     }
 }
 
+/// A fill that fails after the human has typed must not destroy what
+/// they typed.
+///
+/// `wait_form` takes the form out of the queue before the fills run,
+/// so a failing fill used to take the values with it: the human's
+/// password was gone, and the agent's retry was told the form was
+/// unknown. Here the first wait is misaddressed on purpose; the
+/// second one, addressed correctly, still lands the value without the
+/// human touching anything.
+#[test]
+fn cell_prompt_form_survives_a_failed_fill() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (session, page, _t) = open_fixture(&ctx, "/form.html");
+        let r = ctx.vs(&["view", &page, "--full"]);
+        let body = body_rest(&r);
+        let token = token_of(&r);
+        let n_email: u32 = body
+            .lines()
+            .find_map(|l| {
+                let mut it = l.trim_start().splitn(3, ' ');
+                let n = it.next()?.parse::<u32>().ok()?;
+                (it.next()? == "tf").then_some(n)
+            })
+            .expect("a text field");
+
+        let r = ctx.vs(&[
+            "prompt-form",
+            &page,
+            &format!("--field={n_email}=Work email"),
+            &format!("--token={token}"),
+            "--no-wait",
+        ]);
+        assert_ok("prompt-form enqueue", &r);
+        let enqueue_body = body_rest(&r);
+        let form_id = body_kv(&enqueue_body, "form");
+        let url = body_kv(&enqueue_body, "url");
+
+        // The human types and submits.
+        let r = ctx.vs(&["pending", "list"]);
+        let id = body_rest(&r)
+            .lines()
+            .next()
+            .and_then(|l| l.split('\t').next())
+            .expect("one pending entry")
+            .to_string();
+        let (status, _) = http(&url, "POST", Some(&format!("{id}=user%40example.com")));
+        assert!(status.contains("200"), "POST form: {status}");
+
+        // The agent addresses the wrong session. The fill fails.
+        let r = ctx.vs(&[
+            "prompt-form-wait",
+            &form_id,
+            "--session=s_definitely_not_a_session",
+            "--timeout-ms=5000",
+        ]);
+        assert!(
+            !r.stdout.contains("unknown"),
+            "a failed fill must not report the form as unknown: {:?}",
+            r.stdout
+        );
+
+        // Addressed correctly, the same values still fill the field.
+        let r = ctx.vs(&[
+            "prompt-form-wait",
+            &form_id,
+            &format!("--session={session}"),
+            "--timeout-ms=15000",
+        ]);
+        assert_ok("prompt-form wait after a failed fill", &r);
+        let email = eval_js(&ctx, &page, "document.getElementById('email').value");
+        assert!(
+            email.contains("user@example.com"),
+            "value survived the failed fill, got {email:?}"
+        );
+    }
+}
+
 /// `vs pending url` mints a URL even with nothing queued, and the
 /// page says so instead of erroring.
 #[test]

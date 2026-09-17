@@ -4,6 +4,11 @@ All notable changes to vibesurfer are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- A `vs_prompt_form_wait` fill that fails no longer destroys what the human typed. `wait_form` takes the form out of the queue before the fills run, so any error in the fill loop — a ref that has gone, a page that navigated, a caller addressing the wrong session — took the values with it. The human's password was gone, and the agent's retry was told the form was unknown, which reads as "you imagined it"; the only way back was to ask them to type it again. Their typing is the one thing here that cannot be recreated, so it now goes back in the queue on any error and the retry picks up where the failed call left off, without the human touching anything. The error reported is still the real one (`WRONG_SESSION`, `NOT_FOUND`), because that is what the caller has to fix. Cell `cell_prompt_form_survives_a_failed_fill`.
+
 ## [0.2.4] - 2026-09-17
 
 ### Fixed

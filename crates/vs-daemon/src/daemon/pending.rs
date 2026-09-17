@@ -192,6 +192,27 @@ impl PendingQueue {
         }
     }
 
+    /// Put a collected form's entries back, values and all.
+    ///
+    /// [`Self::wait_form`] takes a fulfilled form out of the queue, so
+    /// until this existed a caller that failed to *use* the values
+    /// destroyed them: the human's password was gone and their only
+    /// way back was to type it again. The values are the one thing in
+    /// this system that cannot be recreated, so a caller that cannot
+    /// complete hands them back instead.
+    ///
+    /// Entries come back `Fulfilled`, so the next `wait_form` on that
+    /// form returns them immediately rather than parking. They are
+    /// still subject to [`ORPHAN_TTL`], which bounds how long a form
+    /// nobody can complete keeps a secret in memory.
+    pub fn restore(&self, entries: Vec<(PendingEntry, String)>) {
+        let mut guard = self.inner.lock().unwrap();
+        for (entry, value) in entries {
+            guard.insert(entry.id.clone(), (entry, FulfillState::Fulfilled(value)));
+        }
+        self.cv.notify_all();
+    }
+
     /// Drop entries past [`ORPHAN_TTL`]. This is the only thing that
     /// reaps a form nobody fulfilled or cancelled — a waiter timing
     /// out deliberately leaves the entries alone (see [`Self::wait_form`]).
@@ -363,6 +384,31 @@ mod tests {
             FormWait::StillPending
         ));
         assert_eq!(q.list().len(), 1);
+    }
+
+    /// A caller that collects a form and then fails to use the
+    /// values hands them back. Losing them means the human types
+    /// their password a second time because the agent addressed the
+    /// wrong session, which is not a cost they should pay.
+    #[test]
+    fn restored_form_is_collectable_again() {
+        let q = PendingQueue::new();
+        q.enqueue(entry("a", Some("f_6"), 0));
+        q.enqueue(entry("b", Some("f_6"), 1));
+        assert!(q.fulfill("a", "one".into()));
+        assert!(q.fulfill("b", "two".into()));
+
+        let got = ready(q.wait_form("f_6", Duration::from_secs(1)));
+        assert!(q.list().is_empty(), "collected form leaves the queue");
+
+        // The caller could not use them: put them back.
+        q.restore(got);
+
+        // A second waiter gets the same values, in the same order,
+        // without parking and without the human doing anything.
+        let again = ready(q.wait_form("f_6", Duration::from_millis(50)));
+        let values: Vec<_> = again.iter().map(|(_, v)| v.as_str()).collect();
+        assert_eq!(values, ["one", "two"]);
     }
 
     /// A waiter timing out must not take the form down with it.
