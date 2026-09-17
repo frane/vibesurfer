@@ -6,3 +6,8 @@
 /target-linux
 /.claude
 /.agented
+
+# Editor swap files
+*.swp
+*.swo
+*~
