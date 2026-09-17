@@ -4,6 +4,12 @@ All notable changes to vibesurfer are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- A `vs prompt-form` entry URL survives the trip to the human. Two separate things made a live link look burned. The surface matched the nonce against the raw request target, so `/entry/<nonce>?utm_source=…` or a trailing slash missed the map and answered 410 — and the 410 page said "used or expired", which reads as "the nonce was spent". Anything that decorates a URL in transit (a chat client, an opener, a paste that picked up a trailing character) produced that. The path is now normalised: query string and fragment dropped, one trailing slash tolerated. A GET never consumed the nonce and still does not; the reported prefetch theory was wrong, but the symptom was real. The two dead-link pages are also distinct now: a spent link says the values were already submitted, an unknown one says the address is not valid here, so a human can tell "you are done" from "that address is wrong". HEAD is answered like GET with the body stripped, instead of 404, because link checkers HEAD before a human ever clicks. (Reported via `#vibesurfer`.)
+- `vs_prompt_form_wait` says which of the three things happened. One message covered all of them — "form <id> cancelled, timed out, or unknown" — and the common case by far is the harmless one: the MCP host caps the tool call below the wait budget while the human is still typing. Agents read that as a dead form, told the human the link was burned, and started over or gave up, for a form that was still live and still waiting for them. A waiter running out of budget now returns `! TIMEOUT <budget> vs_prompt_form_wait "form <id> still waiting on the human…"`, a code a caller can branch on; cancellation and an unknown form stay `BAD_REQUEST` and say which they are. The queue already left a timed-out form alone (0.2.3); this makes the wire say so. The MCP tool description and SKILL.md carry the same rule. (Reported via `#vibesurfer`.)
+
 ## [0.2.3] - 2026-09-01
 
 ### Fixed

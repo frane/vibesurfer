@@ -82,7 +82,7 @@ fn base_tools() -> Vec<Value> {
             ("token", str_prop("State token from the most recent read.", true)),
             ("group", str_prop("Optional audit-group label.", false)),
         ])),
-        tool("vs_prompt_form", "Ask the human for several values at once (e.g. a full login) via a browser form. Returns `form\\t<id>` and `url\\t<single-use localhost URL>` immediately. Relay the URL to the user verbatim, then call vs_prompt_form_wait with the form id. The daemon fills each ref on submit; you never see the values.", obj(&[
+        tool("vs_prompt_form", "Ask the human for several values at once (e.g. a full login) via a browser form. Returns `form\\t<id>` and `url\\t<localhost URL, valid 10 min, single submit>` immediately. Relay the URL to the user verbatim, then call vs_prompt_form_wait with the form id. Opening or reloading the URL does not use it up, so a link preview cannot break it. The daemon fills each ref on submit; you never see the values.", obj(&[
             ("page", str_prop("Page id.", true)),
             ("fields", json!({
                 "type": "array",
@@ -101,7 +101,7 @@ fn base_tools() -> Vec<Value> {
             ("token", str_prop("State token from the most recent read.", true)),
             ("group", str_prop("Optional audit-group label.", false)),
         ])),
-        tool("vs_prompt_form_wait", "Park until the vs_prompt_form form is submitted, then fill the refs in order. Returns the new state token. Call right after relaying the URL.", obj(&[
+        tool("vs_prompt_form_wait", "Park until the vs_prompt_form form is submitted, then fill the refs in order. Returns the new state token. Call right after relaying the URL. `! TIMEOUT` (\\\"still waiting\\\") means the form and its URL are live and the human has not finished: call again with the same form id, do not mint a new form or tell the user the link is dead. Only `cancelled` and `unknown` are dead.", obj(&[
             ("form", str_prop("Form id from vs_prompt_form.", true)),
             ("timeout_ms", uint_prop("How long to wait, in milliseconds. Default 300000 (5 min).", false)),
         ])),

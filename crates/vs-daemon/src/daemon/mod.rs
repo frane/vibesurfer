@@ -796,21 +796,41 @@ impl Daemon {
     /// in declaration order and return the final state token. The
     /// first fill validates against the token captured at enqueue;
     /// later fills chain the token forward.
+    ///
+    /// The three failure modes are reported separately, and a waiter
+    /// that merely ran out of budget gets its own wire code
+    /// ([`DaemonError::PromptFormPending`] -> `TIMEOUT`). Lumping them
+    /// into one "cancelled, timed out, or unknown" string cost more
+    /// than it saved: an agent whose wait ran out of budget read that
+    /// as a dead form, told the human the link was burned, and
+    /// abandoned a form that was still live and still waiting for them
+    /// to finish typing.
     pub fn prompt_form_wait(
         &self,
         session_id: &str,
         form_id: &str,
         timeout: std::time::Duration,
     ) -> Result<StateToken> {
-        let values = self
-            .inner
-            .pending
-            .wait_form(form_id, timeout)
-            .ok_or_else(|| {
-                DaemonError::BadRequest(format!(
-                    "vs_prompt_form: form {form_id} cancelled, timed out, or unknown"
-                ))
-            })?;
+        let values = match self.inner.pending.wait_form(form_id, timeout) {
+            pending::FormWait::Ready(v) => v,
+            pending::FormWait::StillPending => {
+                return Err(DaemonError::PromptFormPending {
+                    form: form_id.to_string(),
+                    budget_ms: timeout.as_millis(),
+                })
+            }
+            pending::FormWait::Cancelled => {
+                return Err(DaemonError::BadRequest(format!(
+                    "vs_prompt_form: form {form_id} was cancelled"
+                )))
+            }
+            pending::FormWait::Unknown => {
+                return Err(DaemonError::BadRequest(format!(
+                    "vs_prompt_form: form {form_id} unknown: already collected by an \
+                     earlier wait, or expired. Enqueue a new form."
+                )))
+            }
+        };
         let mut token: Option<StateToken> = None;
         for (entry, value) in values {
             let before_token: StateToken = match token {

@@ -51,6 +51,24 @@ pub enum FulfillState {
     Cancelled,
 }
 
+/// Why a [`PendingQueue::wait_form`] call came back. The three
+/// not-ready cases are kept apart because they need opposite things
+/// from the caller: `StillPending` means park again, `Cancelled` and
+/// `Unknown` mean stop.
+#[derive(Debug)]
+pub enum FormWait {
+    /// Every field fulfilled, sorted by `form_index`.
+    Ready(Vec<(PendingEntry, String)>),
+    /// The wait budget elapsed with fields still open. The form is
+    /// untouched and a later waiter can still collect it.
+    StillPending,
+    /// A field was cancelled; the form's entries are gone.
+    Cancelled,
+    /// No entries carry this form id: never enqueued, already
+    /// collected, or reaped by [`ORPHAN_TTL`].
+    Unknown,
+}
+
 /// The queue itself. `Inner.queue` holds the registry; `Inner.cv` is
 /// the wake signal for parked `vs_prompt_input` calls. Wrapped in
 /// `Arc<Mutex>` so multiple daemon threads can share it.
@@ -113,9 +131,9 @@ impl PendingQueue {
     }
 
     /// Block until every entry of `form` is fulfilled, all are
-    /// cancelled, or `timeout` elapses. On full fulfillment returns
-    /// the entries with their values, sorted by `form_index`; on
-    /// cancellation or timeout returns `None`.
+    /// cancelled, or `timeout` elapses. The four outcomes are
+    /// distinct (see [`FormWait`]) because a timeout and a dead form
+    /// call for opposite handling by the caller.
     ///
     /// Fulfillment and cancellation take the form's entries out of the
     /// queue. A **timeout does not** — the waiter's budget is not the
@@ -123,7 +141,7 @@ impl PendingQueue {
     /// form after their transport cut the first wait short. Entries
     /// nobody ever comes back for are reaped by [`ORPHAN_TTL`].
     #[must_use]
-    pub fn wait_form(&self, form: &str, timeout: Duration) -> Option<Vec<(PendingEntry, String)>> {
+    pub fn wait_form(&self, form: &str, timeout: Duration) -> FormWait {
         let deadline = Instant::now() + timeout;
         let mut guard = self.inner.lock().unwrap();
         loop {
@@ -141,14 +159,17 @@ impl PendingQueue {
                 }
             }
             let total = done.len() + open;
-            if cancelled || total == 0 {
+            if cancelled {
                 guard.retain(|_, (e, _)| e.form.as_deref() != Some(form));
-                return None;
+                return FormWait::Cancelled;
+            }
+            if total == 0 {
+                return FormWait::Unknown;
             }
             if open == 0 {
                 guard.retain(|_, (e, _)| e.form.as_deref() != Some(form));
                 done.sort_by_key(|(e, _)| e.form_index);
-                return Some(done);
+                return FormWait::Ready(done);
             }
             let remaining = match deadline.checked_duration_since(Instant::now()) {
                 Some(r) if !r.is_zero() => r,
@@ -164,7 +185,7 @@ impl PendingQueue {
                 // form that was still perfectly live. A form now
                 // outlives any number of waiters and is reaped only by
                 // cancel, by completion, or by ORPHAN_TTL.
-                _ => return None,
+                _ => return FormWait::StillPending,
             };
             let (g, _) = self.cv.wait_timeout(guard, remaining).unwrap();
             guard = g;
@@ -263,6 +284,15 @@ fn fresh_id(prefix: &str) -> String {
 mod tests {
     use super::*;
 
+    /// The collected values of a `Ready` wait, or a panic naming the
+    /// outcome we got instead.
+    fn ready(w: FormWait) -> Vec<(PendingEntry, String)> {
+        match w {
+            FormWait::Ready(v) => v,
+            other => panic!("expected Ready, got {other:?}"),
+        }
+    }
+
     fn entry(id: &str, form: Option<&str>, idx: u32) -> PendingEntry {
         PendingEntry {
             id: id.into(),
@@ -286,7 +316,7 @@ mod tests {
         // Fulfill before the wait even starts, in reverse order.
         assert!(q.fulfill("b", "two".into()));
         assert!(q.fulfill("a", "one".into()));
-        let got = q.wait_form("f_1", Duration::from_secs(1)).unwrap();
+        let got = ready(q.wait_form("f_1", Duration::from_secs(1)));
         let values: Vec<_> = got.iter().map(|(_, v)| v.as_str()).collect();
         assert_eq!(values, ["one", "two"]);
         assert!(q.list().is_empty(), "form entries must leave the queue");
@@ -302,19 +332,37 @@ mod tests {
         let waiter = std::thread::spawn(move || q2.wait_form("f_2", Duration::from_secs(5)));
         std::thread::sleep(Duration::from_millis(100));
         assert!(q.fulfill("b", "y".into()));
-        let got = waiter.join().unwrap().expect("form fulfilled");
+        let got = ready(waiter.join().unwrap());
         assert_eq!(got.len(), 2);
     }
 
+    /// The three not-ready outcomes are told apart. They read the
+    /// same to a human and mean opposite things to a caller: park
+    /// again, or give up.
     #[test]
-    fn wait_form_cancel_and_timeout_return_none() {
+    fn wait_form_distinguishes_cancel_timeout_and_unknown() {
         let q = PendingQueue::new();
         q.enqueue(entry("a", Some("f_3"), 0));
         assert!(q.cancel("a"));
-        assert!(q.wait_form("f_3", Duration::from_secs(1)).is_none());
+        assert!(matches!(
+            q.wait_form("f_3", Duration::from_secs(1)),
+            FormWait::Cancelled
+        ));
         assert!(q.list().is_empty(), "cancelled form must be cleaned up");
+
         // Unknown form: nothing to wait on.
-        assert!(q.wait_form("f_nope", Duration::from_millis(50)).is_none());
+        assert!(matches!(
+            q.wait_form("f_nope", Duration::from_millis(50)),
+            FormWait::Unknown
+        ));
+
+        // Live form, waiter out of budget: still pending, not dead.
+        q.enqueue(entry("b", Some("f_4"), 0));
+        assert!(matches!(
+            q.wait_form("f_4", Duration::from_millis(50)),
+            FormWait::StillPending
+        ));
+        assert_eq!(q.list().len(), 1);
     }
 
     /// A waiter timing out must not take the form down with it.
@@ -332,7 +380,10 @@ mod tests {
         q.enqueue(entry("b", Some("f_5"), 1));
 
         // First waiter gives up before the human submits.
-        assert!(q.wait_form("f_5", Duration::from_millis(50)).is_none());
+        assert!(matches!(
+            q.wait_form("f_5", Duration::from_millis(50)),
+            FormWait::StillPending
+        ));
         assert_eq!(
             q.list().len(),
             2,
@@ -342,7 +393,7 @@ mod tests {
         // The human submits; a second waiter collects everything.
         assert!(q.fulfill("a", "one".into()));
         assert!(q.fulfill("b", "two".into()));
-        let got = q.wait_form("f_5", Duration::from_secs(1)).expect("form");
+        let got = ready(q.wait_form("f_5", Duration::from_secs(1)));
         let values: Vec<_> = got.iter().map(|(_, v)| v.as_str()).collect();
         assert_eq!(values, ["one", "two"]);
         assert!(q.list().is_empty(), "collected form must leave the queue");

@@ -66,6 +66,14 @@ pub enum DaemonError {
     #[error("bad request: {0}")]
     BadRequest(String),
 
+    /// A `vs_prompt_form_wait` ran out of budget with the form still
+    /// pending. Its own code, because the caller's correct response is
+    /// the opposite of the other two ways a wait ends without values:
+    /// the human is simply still typing, the form and its URL are
+    /// live, and the fix is to park again on the same form id.
+    #[error("form {form} still waiting on the human after {budget_ms}ms")]
+    PromptFormPending { form: String, budget_ms: u128 },
+
     /// Engine's capability set excludes this primitive on this platform.
     #[error("unsupported on this engine: {primitive} ({engine})")]
     Unsupported {
@@ -100,6 +108,17 @@ impl DaemonError {
             ),
             Self::UnknownRef(r) => (ErrorCode::NotFound, vec![format!("ref={r}")]),
             Self::BadRequest(msg) => (ErrorCode::BadRequest, vec![msg.clone()]),
+            Self::PromptFormPending { form, budget_ms } => (
+                ErrorCode::Timeout,
+                vec![
+                    format!("{budget_ms}ms"),
+                    "vs_prompt_form_wait".into(),
+                    format!(
+                        "form {form} still waiting on the human; the form and its URL \
+                         are live, call vs_prompt_form_wait again with the same form id"
+                    ),
+                ],
+            ),
             Self::Unsupported { engine, primitive }
             | Self::Engine(vs_engine_webkit::EngineError::Unsupported { engine, primitive }) => (
                 ErrorCode::EngineUnsupported,

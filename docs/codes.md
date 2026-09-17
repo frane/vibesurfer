@@ -76,7 +76,7 @@ Used by `vs_viewport <preset>`. DPR defaults to 2; override per call.
 | `STALE_TOKEN`       | `<new_token> <reason>`   | Pre-image token did not match. Reasons: `nav`, `mutate`, `expired`. |
 | `ENGINE_UNSUPPORTED`| `<primitive> <engine>`   | The active engine cannot service this primitive. |
 | `POLICY_DENY`       | `<rule> <subject>`       | Policy blocked the action. |
-| `TIMEOUT`           | `<budget> <primitive>`   | Timeout fired before completion. |
+| `TIMEOUT`           | `<budget> <primitive> [<detail>]` | Timeout fired before completion. `vs_prompt_form_wait` uses it for a wait that ran out of budget while the human is still typing: the form and its URL are live and the caller should park again on the same form id. |
 | `NOT_FOUND`         | `ref=<n>` or `mark=<name>` | Target does not exist. |
 | `CONFIRM_REQUIRED`  | `<reason> [<detail>...]` | Action requires explicit confirmation. |
 | `DAEMON_START_FAILED` | —                      | CLI could not start or reach the daemon. |
