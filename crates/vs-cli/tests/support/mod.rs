@@ -113,6 +113,12 @@ pub fn spawn_daemon_with_env(home: &Path, env: &[(&str, &str)]) -> DaemonGuard {
     let log_clone = log_file.try_clone().expect("clone daemon log fd");
     let mut cmd = Command::new(VS_BIN);
     cmd.env("RUST_BACKTRACE", "1")
+        // A CI runner building three engines and running eighty cells
+        // back to back can take longer than the 15s a person would
+        // wait to open a page, and `! TIMEOUT 15000ms open` from a
+        // loaded machine says nothing about the cell under test. Cells
+        // that mean to assert on a timeout set their own budget.
+        .env("VS_NAV_BUDGET_MS", "45000")
         .arg(format!("--home={}", home.display()))
         .arg("serve")
         .stdin(Stdio::null())

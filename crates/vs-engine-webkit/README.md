@@ -228,6 +228,7 @@ Two of those exist for the humans next to the agents. `vs prompt-form` asks for 
 | `VS_THUMBS=1` | On `vs mcp`: attach a screenshot thumbnail to every act/open result |
 | `VS_HOME` | Override the vibesurfer home directory |
 | `VS_DISABLE_INSPECTOR=1` | Skip inspector hooks (testing only) |
+| `VS_NAV_BUDGET_MS` | How long `open`/`goto` wait for a navigation (default 15000) |
 | `VS_DAEMON_BIN` | Override the binary used for daemon auto-spawn (tests) |
 
 ## Build from source

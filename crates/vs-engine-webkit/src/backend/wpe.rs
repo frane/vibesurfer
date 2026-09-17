@@ -206,10 +206,8 @@ impl Engine for WpeBackend {
         });
 
         let slot_check = slot.clone();
-        let ok = run_loop_until(
-            move || slot_check.borrow().is_some(),
-            Duration::from_secs(15),
-        );
+        let budget = super::common::nav_budget();
+        let ok = run_loop_until(move || slot_check.borrow().is_some(), budget);
 
         // Disconnect signal handlers — the WebView outlives this scope.
         web_view.disconnect(signal_id);
@@ -217,7 +215,7 @@ impl Engine for WpeBackend {
 
         if !ok {
             return Err(EngineError::Timeout {
-                budget: Duration::from_secs(15),
+                budget,
                 primitive: "open",
             });
         }
