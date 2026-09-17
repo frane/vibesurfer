@@ -203,8 +203,18 @@ fn cell_act_submit() {
             &format!("--token={token}"),
         ]);
         assert_ok("act submit", &r);
-        let _ = ctx.vs(&["wait", &page, "stable", "--timeout=2000"]);
-        let title = eval_js(&ctx, &page, "document.title");
+        // What this cell is about is whether submit navigates, not how
+        // quickly. A single settle followed by one read asserted the
+        // speed too, and failed a macOS CI run on a navigation that
+        // was merely slow under load. Poll to a deadline instead.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let title = loop {
+            let t = eval_js(&ctx, &page, "document.title");
+            if t.contains("Dashboard") || std::time::Instant::now() > deadline {
+                break t;
+            }
+            let _ = ctx.vs(&["wait", &page, "stable", "--timeout=500"]);
+        };
         assert!(
             title.contains("Dashboard"),
             "submit should navigate to Dashboard; got {title:?}"

@@ -392,13 +392,11 @@ impl Engine for WkBackend {
         let _ = unsafe { web_view.loadRequest(&request) };
 
         let slot_check = slot.clone();
-        let ok = run_loop_until(
-            move || slot_check.borrow().is_some(),
-            Duration::from_secs(15),
-        );
+        let budget = super::common::nav_budget();
+        let ok = run_loop_until(move || slot_check.borrow().is_some(), budget);
         if !ok {
             return Err(EngineError::Timeout {
-                budget: Duration::from_secs(15),
+                budget,
                 primitive: "open",
             });
         }
@@ -446,13 +444,11 @@ impl Engine for WkBackend {
         let request = NSURLRequest::requestWithURL(&ns_url);
         let _ = unsafe { web_view.loadRequest(&request) };
         let slot_check = slot.clone();
-        let ok = run_loop_until(
-            move || slot_check.borrow().is_some(),
-            Duration::from_secs(15),
-        );
+        let budget = super::common::nav_budget();
+        let ok = run_loop_until(move || slot_check.borrow().is_some(), budget);
         if !ok {
             return Err(EngineError::Timeout {
-                budget: Duration::from_secs(15),
+                budget,
                 primitive: "navigate",
             });
         }
