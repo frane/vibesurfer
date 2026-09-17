@@ -4,10 +4,16 @@ All notable changes to vibesurfer are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.5] - 2026-09-17
+
+### Added
+- Trusted typing on Linux and Windows. `vs type` has been macOS-only since v0.1.27; the other two engines returned `ENGINE_UNSUPPORTED`, so "verified on all three engines" held for every primitive except the one that puts text into a framework-controlled editor, which is the case `act fill` cannot serve and the reason the primitive exists. Linux goes through the same dispatcher the cursor primitives use: XTest names keycodes rather than characters, so instead of hunting for the keycode that happens to produce a character on this layout and working out its modifiers, it borrows a keycode the keymap leaves empty, binds it, and gives it back afterwards, including when a run fails halfway. Two details decide whether that works at all: the press has to be preceded by pumping GLib rather than sleeping, because the toolkit learns about the new keymap by processing an event on the same thread the call runs on; and X routes keys by focus, which a headless session with no window manager never sets, so the window under the pointer is focused first. Wayland sessions use the RemoteDesktop portal's `notify_keyboard_keysym` and now ask for a keyboard alongside the pointer. Windows uses the DevTools protocol: WebView2's visual hosting has `SendMouseInput` but no keyboard equivalent, and expects the host to forward Win32 key messages, which a headless daemon with no focused window cannot do. `cell_type_trusted_into_contenteditable` loses its macOS gate, so all three are held to the fixture's `isTrusted`-only mirror.
 
 ### Fixed
 - A `vs_prompt_form_wait` fill that fails no longer destroys what the human typed. `wait_form` takes the form out of the queue before the fills run, so any error in the fill loop — a ref that has gone, a page that navigated, a caller addressing the wrong session — took the values with it. The human's password was gone, and the agent's retry was told the form was unknown, which reads as "you imagined it"; the only way back was to ask them to type it again. Their typing is the one thing here that cannot be recreated, so it now goes back in the queue on any error and the retry picks up where the failed call left off, without the human touching anything. The error reported is still the real one (`WRONG_SESSION`, `NOT_FOUND`), because that is what the caller has to fix. Cell `cell_prompt_form_survives_a_failed_fill`.
+
+### Changed
+- `open` and `goto` read `VS_NAV_BUDGET_MS` for how long they wait on a navigation, default unchanged at 15000. Three m6 cells were failing on timing rather than behaviour, one of them on the v0.2.4 release commit itself: a cold engine start on a runner building three engines and running eighty cells back to back genuinely exceeds the budget a person waiting on a page should get. Raising the default would make a truly hung page take longer to report for everyone, so the m6 harness buys itself 45s instead. `cell_act_submit` also settled for 2s and then read the title once, asserting how quickly the navigation committed as well as whether it did; it polls to a deadline now. macOS and Linux only, because Windows bounds no navigation at all — it waits on `NavigationCompleted` with no deadline, which is an older and separate gap.
 
 ## [0.2.4] - 2026-09-17
 

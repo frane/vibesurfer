@@ -45,6 +45,7 @@ regression on any of them turns the badge red.
 | vs_act submit | yes | yes | yes |
 | vs_act hover | yes | yes | yes |
 | vs_act focus | yes | yes | yes |
+| vs_type (trusted keys) | yes | yes | yes |
 | vs_find | yes | yes | yes |
 | vs_wait stable | yes | yes | yes |
 | vs_wait net-idle | yes | yes | yes |
@@ -92,6 +93,13 @@ against the host's real `WKWebView` via the `vs serve` subprocess.
 Mac runs the largest set — a few cells are `cfg`'d off on the other
 two backends — and is the slowest, because trusted input goes through
 real `NSEvent` dispatch and the responder chain.
+
+`vs_type` joined the matrix in v0.2.5, cited from engine-tests run
+[35242053354](https://github.com/frane/vibesurfer/actions/runs/35242053354):
+`cell_type_trusted_into_contenteditable` passes on all three, against
+a fixture whose mirror records only `isTrusted` beforeinput data. It
+had been macOS-only since v0.1.27, and the cell was `cfg`'d to macOS
+for exactly as long, which is why it never showed up here as a gap.
 
 Sequential execution required (Cocoa main-thread constraint):
 
