@@ -663,11 +663,32 @@ impl Engine for Webview2Backend {
         Ok(handle)
     }
 
-    fn navigate(&mut self, _page: PageHandle, _url: &str) -> EngineResult<()> {
-        Err(EngineError::NotImplemented {
-            engine: "webview2",
-            primitive: "navigate",
-        })
+    fn navigate(&mut self, page: PageHandle, url: &str) -> EngineResult<()> {
+        // Step 4 of `open`, against a WebView that already exists. The
+        // document-start scripts survive the navigation, so this only
+        // has to navigate and wait for the completion event.
+        let web_view = self.page_mut(page)?.web_view.clone();
+        let (tx, rx) = mpsc::channel();
+        let handler = NavigationCompletedEventHandler::create(Box::new(move |_sender, _args| {
+            let _ = tx.send(());
+            Ok(())
+        }));
+        let mut token: i64 = 0;
+        unsafe { web_view.add_NavigationCompleted(&handler, &raw mut token) }
+            .map_err(|e| EngineError::Other(format!("add_NavigationCompleted: {e}")))?;
+        let url_pwstr = pwstr_from_str(url);
+        let navigated = unsafe { web_view.Navigate(windows::core::PCWSTR(url_pwstr.0)) }
+            .map_err(|e| EngineError::Other(format!("Navigate: {e}")));
+        let waited = navigated.and_then(|()| {
+            webview2_com::wait_with_pump(rx)
+                .map_err(|e| EngineError::Other(format!("wait_with_pump: {e:?}")))
+        });
+        // Unsubscribe whether or not the navigation worked, so a
+        // failed goto does not leave a handler on the page firing into
+        // a dropped channel for every later navigation.
+        unsafe { web_view.remove_NavigationCompleted(token) }
+            .map_err(|e| EngineError::Other(format!("remove_NavigationCompleted: {e}")))?;
+        waited
     }
 
     fn enable_webauthn(&mut self, _page: PageHandle) -> EngineResult<()> {

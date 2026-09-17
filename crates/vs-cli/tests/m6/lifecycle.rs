@@ -181,9 +181,11 @@ fn cell_status() {
 
 // vs_goto navigates a page in place: same page id, new document,
 // fresh refs. Much cheaper than open (reuses the web view).
-// goto is implemented on the Cocoa backend; wpe/webview2 return
-// ENGINE_UNSUPPORTED, so this cell is macOS-only for now.
-#[cfg(target_os = "macos")]
+//
+// All three engines since v0.2.6. It was macOS-only before that, and
+// the cell was gated to macOS for as long, which is why a primitive
+// the docs sell as the fast path for successive navigations went two
+// engines without one.
 #[test]
 fn cell_goto_navigates_in_place() {
     for _ in each_available_backend() {

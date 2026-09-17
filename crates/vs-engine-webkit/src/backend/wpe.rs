@@ -245,11 +245,47 @@ impl Engine for WpeBackend {
         Ok(handle)
     }
 
-    fn navigate(&mut self, _page: PageHandle, _url: &str) -> EngineResult<()> {
-        Err(EngineError::NotImplemented {
-            engine: "wpe",
-            primitive: "navigate",
-        })
+    fn navigate(&mut self, page: PageHandle, url: &str) -> EngineResult<()> {
+        // Same wait as `open`, on a WebView that already exists. The
+        // inspector bridge and download shim were installed at
+        // document-start and survive the navigation, so this only has
+        // to load and wait.
+        let web_view = self.page_mut(page)?.web_view.clone();
+        web_view.load_uri(url);
+
+        let slot: Rc<RefCell<Option<Result<(), String>>>> = Rc::new(RefCell::new(None));
+        let slot_for_signal = slot.clone();
+        let signal_id = web_view.connect_load_changed(move |_view, event| {
+            if event == LoadEvent::Finished {
+                *slot_for_signal.borrow_mut() = Some(Ok(()));
+            }
+        });
+        let slot_fail = slot.clone();
+        let fail_id = web_view.connect_load_failed(move |_view, _event, _uri, err| {
+            *slot_fail.borrow_mut() = Some(Err(err.message().to_string()));
+            true
+        });
+
+        let slot_check = slot.clone();
+        let budget = super::common::nav_budget();
+        let ok = run_loop_until(move || slot_check.borrow().is_some(), budget);
+
+        web_view.disconnect(signal_id);
+        web_view.disconnect(fail_id);
+
+        if !ok {
+            return Err(EngineError::Timeout {
+                budget,
+                primitive: "navigate",
+            });
+        }
+        match slot.borrow_mut().take() {
+            Some(Ok(())) => Ok(()),
+            Some(Err(msg)) => Err(EngineError::Other(format!("navigation failed: {msg}"))),
+            None => Err(EngineError::Other(
+                "navigation completed without a result".into(),
+            )),
+        }
     }
 
     fn enable_webauthn(&mut self, _page: PageHandle) -> EngineResult<()> {
