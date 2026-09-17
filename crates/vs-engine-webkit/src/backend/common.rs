@@ -157,6 +157,12 @@ pub(crate) const DOWNLOAD_SHIM_JS: &str = include_str!("download_shim.js");
 /// `! TIMEOUT 15000ms open` says nothing about the code under test.
 /// `VS_NAV_BUDGET_MS` lets such a caller buy more patience without
 /// making a truly hung page take longer to report for everyone else.
+///
+/// macOS and Linux only, because those are the backends that bound a
+/// navigation at all. Windows waits on `NavigationCompleted` through
+/// `wait_with_pump` with no deadline, so a hung navigation hangs the
+/// call there — a real gap, but an older and separate one than this.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn nav_budget() -> std::time::Duration {
     const DEFAULT_MS: u64 = 15_000;
     let ms = std::env::var("VS_NAV_BUDGET_MS")
