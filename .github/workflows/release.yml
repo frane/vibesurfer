@@ -109,6 +109,8 @@ jobs:
           echo "archive=${archive}" >> "$GITHUB_OUTPUT"
 
       - name: Upload to release
+        id: upload
+        continue-on-error: true
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.stage.outputs.archive }}
@@ -118,6 +120,31 @@ jobs:
           # a manual run is a full release, not just an artifact drop.
           target_commitish: ${{ github.sha }}
           fail_on_unmatched_files: true
+
+      # The upload above failed three times across two releases on one
+      # day, each time with GitHub's HTML error page rather than an API
+      # error — infrastructure, not the payload. A failed upload also
+      # skips the checksums job, so the release is left incomplete and
+      # somebody has to notice and re-run it by hand. Retry here
+      # instead. The tag exists by this point on a tag-triggered run,
+      # so a plain upload is enough; --clobber makes a retry after a
+      # partial success idempotent.
+      - name: Retry upload if it failed
+        if: steps.upload.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in 1 2 3; do
+            if gh release upload "${{ steps.ver.outputs.version }}" \
+                 "${{ steps.stage.outputs.archive }}" --clobber; then
+              echo "uploaded on attempt ${attempt}"
+              exit 0
+            fi
+            echo "upload attempt ${attempt} failed; retrying"
+            sleep $((attempt * 15))
+          done
+          echo "upload still failing after 3 retries"
+          exit 1
 
   checksums:
     name: checksums
