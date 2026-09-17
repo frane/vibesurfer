@@ -4,7 +4,7 @@ All notable changes to vibesurfer are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.4] - 2026-09-17
 
 ### Fixed
 - A `vs prompt-form` entry URL survives the trip to the human. Two separate things made a live link look burned. The surface matched the nonce against the raw request target, so `/entry/<nonce>?utm_source=…` or a trailing slash missed the map and answered 410 — and the 410 page said "used or expired", which reads as "the nonce was spent". Anything that decorates a URL in transit (a chat client, an opener, a paste that picked up a trailing character) produced that. The path is now normalised: query string and fragment dropped, one trailing slash tolerated. A GET never consumed the nonce and still does not; the reported prefetch theory was wrong, but the symptom was real. The two dead-link pages are also distinct now: a spent link says the values were already submitted, an unknown one says the address is not valid here, so a human can tell "you are done" from "that address is wrong". HEAD is answered like GET with the body stripped, instead of 404, because link checkers HEAD before a human ever clicks. (Reported via `#vibesurfer`.)
