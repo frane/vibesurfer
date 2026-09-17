@@ -11,10 +11,12 @@
 //!
 //! Security model: the URL is the auth. Nonces are 256-bit random,
 //! base64url, expire after [`NONCE_TTL`], and are consumed by the
-//! POST that submits values. The listener binds loopback only and is
-//! started lazily on the first URL mint; with no live nonce the
-//! surface answers 404 to everything, so an idle listener is inert.
-//! Values never appear in responses or logs. This is the same trust
+//! POST that submits values, never by a GET, so the link survives
+//! being opened, reloaded, or probed by whatever sits on the path
+//! between the agent and the human. The listener binds loopback only
+//! and is started lazily on the first URL mint; with no live nonce
+//! the surface answers 404 to everything, so an idle listener is
+//! inert. Values never appear in responses or logs. This is the same trust
 //! boundary as the daemon's Unix socket — the local user — with the
 //! nonce guarding against other local processes probing the port.
 //!
@@ -61,8 +63,25 @@ pub struct WebEntry {
     queue: Arc<PendingQueue>,
     frame: FrameFn,
     port: u16,
-    nonces: Mutex<HashMap<String, Instant>>,
+    nonces: Mutex<HashMap<String, Nonce>>,
     live: Mutex<HashMap<String, (String, Instant)>>,
+}
+
+/// A minted entry nonce. `spent` is kept rather than dropping the
+/// row so a second visit can say "already submitted" instead of the
+/// same 410 an unknown nonce gets — the difference between "the
+/// human is done" and "this link was never yours".
+struct Nonce {
+    expires: Instant,
+    spent: bool,
+}
+
+/// What a nonce lookup found.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NonceState {
+    Live,
+    Spent,
+    Gone,
 }
 
 impl WebEntry {
@@ -89,8 +108,14 @@ impl WebEntry {
         let nonce = fresh_nonce();
         {
             let mut guard = self.nonces.lock().unwrap();
-            guard.retain(|_, exp| *exp > Instant::now());
-            guard.insert(nonce.clone(), Instant::now() + NONCE_TTL);
+            guard.retain(|_, n| n.expires > Instant::now());
+            guard.insert(
+                nonce.clone(),
+                Nonce {
+                    expires: Instant::now() + NONCE_TTL,
+                    spent: false,
+                },
+            );
         }
         format!("http://127.0.0.1:{}/entry/{nonce}", self.port)
     }
@@ -128,21 +153,26 @@ impl WebEntry {
         }
     }
 
-    /// Check `nonce` is live; `consume` removes it (POST path).
-    fn nonce_ok(&self, nonce: &str, consume: bool) -> bool {
+    /// Look `nonce` up; `consume` marks a live one spent (POST path).
+    /// A GET passes `false` — reading the form must never burn the
+    /// link, or anything that follows a URL on the way to the human
+    /// (a chat client's link preview, a prefetcher, a curl to check
+    /// it works) destroys the entry the human was about to use.
+    fn nonce_state(&self, nonce: &str, consume: bool) -> NonceState {
         let mut guard = self.nonces.lock().unwrap();
-        match guard.get(nonce) {
-            Some(exp) if *exp > Instant::now() => {
-                if consume {
-                    guard.remove(nonce);
-                }
-                true
-            }
-            Some(_) => {
+        match guard.get_mut(nonce) {
+            Some(n) if n.expires <= Instant::now() => {
                 guard.remove(nonce);
-                false
+                NonceState::Gone
             }
-            None => false,
+            Some(n) if n.spent => NonceState::Spent,
+            Some(n) => {
+                if consume {
+                    n.spent = true;
+                }
+                NonceState::Live
+            }
+            None => NonceState::Gone,
         }
     }
 
@@ -154,7 +184,7 @@ impl WebEntry {
         reader.read_line(&mut request_line)?;
         let mut parts = request_line.split_whitespace();
         let method = parts.next().unwrap_or("").to_string();
-        let path = parts.next().unwrap_or("").to_string();
+        let path = normalize_path(parts.next().unwrap_or(""));
 
         // Drain headers; the only one we act on is Content-Length.
         let mut content_length = 0usize;
@@ -176,26 +206,38 @@ impl WebEntry {
             }
         }
 
-        let response: Vec<u8> = match (method.as_str(), path.strip_prefix("/entry/")) {
-            ("GET", Some(nonce)) if self.nonce_ok(nonce, false) => {
-                self.render_form(nonce).into_bytes()
-            }
+        // HEAD is answered like GET (headers only, stripped below):
+        // link checkers HEAD before a human ever clicks, and a 404
+        // there reads as a broken link.
+        let head_only = method == "HEAD";
+        let read_method = if head_only { "GET" } else { method.as_str() };
+
+        let response: Vec<u8> = match (read_method, path.strip_prefix("/entry/")) {
+            ("GET", Some(nonce)) => match self.nonce_state(nonce, false) {
+                NonceState::Live => self.render_form(nonce).into_bytes(),
+                NonceState::Spent => spent_page().into_bytes(),
+                NonceState::Gone => unknown_page().into_bytes(),
+            },
             ("POST", Some(nonce)) => {
                 if content_length > MAX_BODY {
                     http_page(413, "Too large", "<p>Form body too large.</p>").into_bytes()
                 } else {
                     let mut body = vec![0u8; content_length];
                     reader.read_exact(&mut body)?;
-                    if self.nonce_ok(nonce, true) {
-                        self.submit(&body).into_bytes()
-                    } else {
-                        expired_page().into_bytes()
+                    match self.nonce_state(nonce, true) {
+                        NonceState::Live => self.submit(&body).into_bytes(),
+                        NonceState::Spent => spent_page().into_bytes(),
+                        NonceState::Gone => unknown_page().into_bytes(),
                     }
                 }
             }
-            ("GET", Some(_)) => expired_page().into_bytes(),
             ("GET", None) if path.starts_with("/live/") => self.handle_live(&path),
             _ => http_page(404, "Not found", "<p>Nothing here.</p>").into_bytes(),
+        };
+        let response = if head_only {
+            strip_body(&response)
+        } else {
+            response
         };
         stream.write_all(&response)?;
         stream.flush()
@@ -209,7 +251,7 @@ impl WebEntry {
             None => (rest, false),
         };
         let Some(page) = self.live_page(nonce) else {
-            return expired_page().into_bytes();
+            return unknown_page().into_bytes();
         };
         if !is_frame {
             return viewer_page(nonce).into_bytes();
@@ -356,12 +398,55 @@ fn escape_html(s: &str) -> String {
     out
 }
 
-fn expired_page() -> String {
+/// Request target -> the path we route on: query string and fragment
+/// dropped, one trailing slash tolerated.
+///
+/// Both matter because the entry URL is relayed as text through
+/// whatever sits between the agent and the human, and things on that
+/// path decorate URLs — a tracking parameter appended by a chat
+/// client, a trailing slash added by an opener. The nonce then failed
+/// to match and the human was told their fresh link was already used,
+/// which is how this looked like a burnt nonce rather than a parsing
+/// bug.
+fn normalize_path(target: &str) -> String {
+    let cut = target
+        .split_once(['?', '#'])
+        .map_or(target, |(before, _)| before);
+    match cut.strip_suffix('/') {
+        Some(trimmed) if !trimmed.is_empty() => trimmed.to_string(),
+        _ => cut.to_string(),
+    }
+}
+
+/// HEAD: the response head of the equivalent GET, no body. The
+/// Content-Length stays as-is, which is what HEAD is defined to do.
+fn strip_body(response: &[u8]) -> Vec<u8> {
+    response
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map_or_else(|| response.to_vec(), |i| response[..i + 4].to_vec())
+}
+
+/// The nonce is not one we hold: never minted here, or expired.
+fn unknown_page() -> String {
     http_page(
         410,
-        "vibesurfer — link expired",
-        "<p>This entry link is no longer valid (used or expired). Ask the agent for a \
-         fresh one — or run <code>vs pending url</code>.</p>",
+        "vibesurfer — link not valid",
+        "<p>This entry link is not valid here. It may have expired (links last 10 \
+         minutes), or the address may have been altered in transit — try copying it \
+         again, whole. Otherwise ask the agent for a fresh one, or run \
+         <code>vs pending url</code>.</p>",
+    )
+}
+
+/// The nonce was minted and already submitted through.
+fn spent_page() -> String {
+    http_page(
+        410,
+        "vibesurfer — already submitted",
+        "<p>These values were already submitted through this link; it is single-use. \
+         The agent has them. If you need to enter something again, ask for a fresh \
+         link.</p>",
     )
 }
 
@@ -470,6 +555,68 @@ mod tests {
     #[test]
     fn html_escaping() {
         assert_eq!(escape_html("<b>&\"'x"), "&lt;b&gt;&amp;&quot;&#39;x");
+    }
+
+    /// A decorated URL must still route to the nonce. The entry link
+    /// travels as text through the agent to the human, and things on
+    /// that path append query parameters or a trailing slash; matching
+    /// on the raw request target turned a live link into "not valid".
+    #[test]
+    fn path_normalization_survives_decorated_urls() {
+        assert_eq!(normalize_path("/entry/abc"), "/entry/abc");
+        assert_eq!(normalize_path("/entry/abc?utm_source=chat"), "/entry/abc");
+        assert_eq!(normalize_path("/entry/abc/"), "/entry/abc");
+        assert_eq!(normalize_path("/entry/abc#top"), "/entry/abc");
+        assert_eq!(normalize_path("/entry/abc/?x=1"), "/entry/abc");
+        assert_eq!(normalize_path("/"), "/");
+    }
+
+    #[test]
+    fn head_response_keeps_the_head_and_drops_the_body() {
+        let full = http_page(200, "t", "<p>body</p>").into_bytes();
+        let head = strip_body(&full);
+        let text = String::from_utf8(head).unwrap();
+        assert!(text.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(text.ends_with("\r\n\r\n"), "no body after the head");
+        assert!(text.contains("Content-Length:"));
+    }
+
+    /// GETs never burn a nonce; the POST does, once, and afterwards
+    /// the nonce reads as spent rather than as never-seen.
+    #[test]
+    fn nonce_survives_reads_and_is_spent_by_one_submit() {
+        let surface = WebEntry {
+            queue: PendingQueue::new(),
+            frame: Arc::new(|_| Err("no engine".into())),
+            port: 0,
+            nonces: Mutex::new(HashMap::new()),
+            live: Mutex::new(HashMap::new()),
+        };
+        let url = surface.mint();
+        let nonce = url.rsplit('/').next().unwrap().to_string();
+
+        for _ in 0..3 {
+            assert!(matches!(
+                surface.nonce_state(&nonce, false),
+                NonceState::Live
+            ));
+        }
+        assert!(matches!(
+            surface.nonce_state(&nonce, true),
+            NonceState::Live
+        ));
+        assert!(matches!(
+            surface.nonce_state(&nonce, false),
+            NonceState::Spent
+        ));
+        assert!(matches!(
+            surface.nonce_state(&nonce, true),
+            NonceState::Spent
+        ));
+        assert!(matches!(
+            surface.nonce_state("nope", false),
+            NonceState::Gone
+        ));
     }
 
     #[test]
