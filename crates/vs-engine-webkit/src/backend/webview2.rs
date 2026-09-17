@@ -300,33 +300,40 @@ fn call_cdp(web_view: &ICoreWebView2, method: &str, params_json: &str) -> Engine
         .map_err(|_| EngineError::Other("CallDevToolsProtocolMethod: channel closed".into()))
 }
 
-/// Escape `s` for a JSON string body.
-fn json_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out
+/// How one character is spelled to `Input.dispatchKeyEvent`.
+///
+/// A printable character identifies itself and is inserted because of
+/// `text`. A named key must not carry text, or the renderer inserts a
+/// character instead of acting on the key; Enter is the exception,
+/// where the text is what submits a form.
+struct CdpKey {
+    key: String,
+    code: Option<&'static str>,
+    virtual_key: u32,
+    text: String,
 }
 
-/// The CDP `key`, `code` and Windows virtual key code for `ch`, for
-/// the characters that need naming rather than inserting. Printable
-/// characters carry themselves in `text` and need none of this.
-fn cdp_key_names(ch: char) -> Option<(&'static str, &'static str, u32)> {
-    match ch {
-        '\n' | '\r' => Some(("Enter", "Enter", 13)),
-        '\t' => Some(("Tab", "Tab", 9)),
-        '\u{8}' => Some(("Backspace", "Backspace", 8)),
-        '\u{1b}' => Some(("Escape", "Escape", 27)),
+fn cdp_key(ch: char) -> CdpKey {
+    let named = match ch {
+        '\n' | '\r' => Some(("Enter", "Enter", 13_u32, "\r")),
+        '\t' => Some(("Tab", "Tab", 9, "")),
+        '\u{8}' => Some(("Backspace", "Backspace", 8, "")),
+        '\u{1b}' => Some(("Escape", "Escape", 27, "")),
         _ => None,
+    };
+    match named {
+        Some((key, code, virtual_key, text)) => CdpKey {
+            key: key.to_string(),
+            code: Some(code),
+            virtual_key,
+            text: text.to_string(),
+        },
+        None => CdpKey {
+            key: ch.to_string(),
+            code: None,
+            virtual_key: 0,
+            text: ch.to_string(),
+        },
     }
 }
 
@@ -1009,36 +1016,27 @@ impl Engine for Webview2Backend {
             | 1;
 
         for ch in text.chars() {
-            let s = ch.to_string();
-            let text_field = json_escape(&s);
-            // A printable character identifies itself and is inserted
-            // because of `text`. A named key must NOT carry text, or
-            // the renderer inserts a character instead of acting on
-            // the key — Enter is the exception, where the text is what
-            // submits a form.
-            let (key, code, vk, text_field) = match cdp_key_names(ch) {
-                Some((k, c, v)) => {
-                    let text = if v == 13 {
-                        "\\r".to_string()
-                    } else {
-                        String::new()
-                    };
-                    (k.to_string(), format!(", \"code\": \"{c}\""), v, text)
-                }
-                None => (text_field.clone(), String::new(), 0, text_field),
-            };
-            let down = format!(
-                "{{\"type\": \"keyDown\", \"key\": \"{key}\", \"text\": \"{text_field}\", \
-                 \"unmodifiedText\": \"{text_field}\", \"windowsVirtualKeyCode\": {vk}{code}}}"
-            );
-            call_cdp(&web_view, "Input.dispatchKeyEvent", &down)?;
+            let spelling = cdp_key(ch);
+            let mut down = serde_json::json!({
+                "type": "keyDown",
+                "key": spelling.key,
+                "text": spelling.text,
+                "unmodifiedText": spelling.text,
+                "windowsVirtualKeyCode": spelling.virtual_key,
+            });
+            let mut up = serde_json::json!({
+                "type": "keyUp",
+                "key": spelling.key,
+                "windowsVirtualKeyCode": spelling.virtual_key,
+            });
+            if let Some(code) = spelling.code {
+                down["code"] = serde_json::Value::from(code);
+                up["code"] = serde_json::Value::from(code);
+            }
+            call_cdp(&web_view, "Input.dispatchKeyEvent", &down.to_string())?;
             let hold = if base_delay == 0 { 1 } else { base_delay / 3 };
             std::thread::sleep(Duration::from_millis(hold.max(1)));
-            let up = format!(
-                "{{\"type\": \"keyUp\", \"key\": \"{key}\", \
-                 \"windowsVirtualKeyCode\": {vk}{code}}}"
-            );
-            call_cdp(&web_view, "Input.dispatchKeyEvent", &up)?;
+            call_cdp(&web_view, "Input.dispatchKeyEvent", &up.to_string())?;
             if base_delay > 0 {
                 jitter ^= jitter << 13;
                 jitter ^= jitter >> 7;
