@@ -43,7 +43,8 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
 };
 use webview2_com::{
     pwstr_from_str, take_pwstr, AddScriptToExecuteOnDocumentCreatedCompletedHandler,
-    CapturePreviewCompletedHandler, CreateCoreWebView2CompositionControllerCompletedHandler,
+    CallDevToolsProtocolMethodCompletedHandler, CapturePreviewCompletedHandler,
+    CreateCoreWebView2CompositionControllerCompletedHandler,
     CreateCoreWebView2EnvironmentCompletedHandler, ExecuteScriptCompletedHandler,
     NavigationCompletedEventHandler, WebMessageReceivedEventHandler,
 };
@@ -258,6 +259,82 @@ fn execute_script(web_view: &ICoreWebView2, js: &str) -> EngineResult<String> {
         .recv()
         .map_err(|_| EngineError::Other("ExecuteScript: channel closed".into()))?;
     Ok(json)
+}
+
+/// Call a DevTools Protocol method on `web_view` and return its JSON
+/// result.
+///
+/// This is how keyboard input reaches the page on Windows. WebView2's
+/// visual hosting has `SendMouseInput` but no keyboard equivalent —
+/// in that mode the host is expected to forward Win32 key messages,
+/// which a headless daemon with no focused window cannot do. The
+/// DevTools protocol dispatches straight into the renderer instead,
+/// producing `isTrusted=true` key events without needing window
+/// focus, which is what the primitive is for.
+fn call_cdp(web_view: &ICoreWebView2, method: &str, params_json: &str) -> EngineResult<String> {
+    let (tx, rx) = mpsc::channel();
+    let method_owned = method.to_string();
+    let params_owned = params_json.to_string();
+    let web_view_owned: ICoreWebView2 = web_view.clone();
+    CallDevToolsProtocolMethodCompletedHandler::wait_for_async_operation(
+        Box::new(move |handler| {
+            let m = pwstr_from_str(&method_owned);
+            let p = pwstr_from_str(&params_owned);
+            unsafe {
+                web_view_owned.CallDevToolsProtocolMethod(
+                    windows::core::PCWSTR(m.0),
+                    windows::core::PCWSTR(p.0),
+                    &handler,
+                )
+            }
+            .map_err(webview2_com::Error::WindowsError)
+        }),
+        Box::new(move |error_code, result_json| {
+            error_code?;
+            let _ = tx.send(result_json);
+            Ok(())
+        }),
+    )
+    .map_err(|e| EngineError::Other(format!("CallDevToolsProtocolMethod({method}): {e:?}")))?;
+    rx.recv()
+        .map_err(|_| EngineError::Other("CallDevToolsProtocolMethod: channel closed".into()))
+}
+
+/// How one character is spelled to `Input.dispatchKeyEvent`.
+///
+/// A printable character identifies itself and is inserted because of
+/// `text`. A named key must not carry text, or the renderer inserts a
+/// character instead of acting on the key; Enter is the exception,
+/// where the text is what submits a form.
+struct CdpKey {
+    key: String,
+    code: Option<&'static str>,
+    virtual_key: u32,
+    text: String,
+}
+
+fn cdp_key(ch: char) -> CdpKey {
+    let named = match ch {
+        '\n' | '\r' => Some(("Enter", "Enter", 13_u32, "\r")),
+        '\t' => Some(("Tab", "Tab", 9, "")),
+        '\u{8}' => Some(("Backspace", "Backspace", 8, "")),
+        '\u{1b}' => Some(("Escape", "Escape", 27, "")),
+        _ => None,
+    };
+    match named {
+        Some((key, code, virtual_key, text)) => CdpKey {
+            key: key.to_string(),
+            code: Some(code),
+            virtual_key,
+            text: text.to_string(),
+        },
+        None => CdpKey {
+            key: ch.to_string(),
+            code: None,
+            virtual_key: 0,
+            text: ch.to_string(),
+        },
+    }
 }
 
 /// Add `js` to the document-start initializer for `web_view`.
@@ -922,6 +999,58 @@ impl Engine for Webview2Backend {
         let events = super::common::diff_cookies(previous.as_deref(), &current, &mut seq);
         *p.cookie_baseline.borrow_mut() = Some(current);
         Ok(events)
+    }
+
+    fn type_text(&mut self, page: PageHandle, text: &str, mode: InputMode) -> EngineResult<()> {
+        let p = self.page_mut(page)?;
+        let web_view = p.web_view.clone();
+        let (base_delay, span) = match mode {
+            InputMode::Robotic => (0_u64, 0_u64),
+            InputMode::Careful => (120, 0),
+            InputMode::Human => (45, 18),
+        };
+        let mut jitter = text
+            .chars()
+            .map(|c| c as u64)
+            .fold(0x9e37_79b9_u64, |a, c| a.wrapping_mul(31).wrapping_add(c))
+            | 1;
+
+        for ch in text.chars() {
+            let spelling = cdp_key(ch);
+            let mut down = serde_json::json!({
+                "type": "keyDown",
+                "key": spelling.key,
+                "text": spelling.text,
+                "unmodifiedText": spelling.text,
+                "windowsVirtualKeyCode": spelling.virtual_key,
+            });
+            let mut up = serde_json::json!({
+                "type": "keyUp",
+                "key": spelling.key,
+                "windowsVirtualKeyCode": spelling.virtual_key,
+            });
+            if let Some(code) = spelling.code {
+                down["code"] = serde_json::Value::from(code);
+                up["code"] = serde_json::Value::from(code);
+            }
+            call_cdp(&web_view, "Input.dispatchKeyEvent", &down.to_string())?;
+            let hold = if base_delay == 0 { 1 } else { base_delay / 3 };
+            std::thread::sleep(Duration::from_millis(hold.max(1)));
+            call_cdp(&web_view, "Input.dispatchKeyEvent", &up.to_string())?;
+            if base_delay > 0 {
+                jitter ^= jitter << 13;
+                jitter ^= jitter >> 7;
+                jitter ^= jitter << 17;
+                let extra = if span == 0 {
+                    0
+                } else {
+                    jitter % (span * 2 + 1)
+                };
+                let wait = base_delay.saturating_sub(span).saturating_add(extra);
+                std::thread::sleep(Duration::from_millis(wait.max(1)));
+            }
+        }
+        Ok(())
     }
 
     fn cursor_op(&mut self, page: PageHandle, op: CursorOp, mode: InputMode) -> EngineResult<()> {

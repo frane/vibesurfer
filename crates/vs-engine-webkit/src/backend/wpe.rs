@@ -546,6 +546,82 @@ impl Engine for WpeBackend {
         Ok(events)
     }
 
+    fn type_text(&mut self, page: PageHandle, text: &str, mode: InputMode) -> EngineResult<()> {
+        // Addressing the page validates it and keeps the error shape
+        // the same as every other page op, even though the keys go to
+        // whatever holds focus rather than to a page handle.
+        let cursor = self.page_mut(page)?.last_mouse.get();
+        let dispatcher = super::wpe_input::dispatcher()?;
+        // Pump GLib rather than sleep: this runs on the main thread,
+        // so a plain sleep would stop WebKit processing the very keys
+        // we are sending.
+        let settle = |d: Duration| {
+            let _ = run_loop_until(|| false, d);
+        };
+        // Put the pointer where we believe it already is before asking
+        // for focus. X hands keys to the focused window, and a
+        // headless session has no window manager to focus anything, so
+        // the pointer is what we have to go on. The caller has
+        // normally just clicked to place the caret, which means the
+        // right window is already under it.
+        #[allow(clippy::cast_possible_truncation)]
+        let at = super::wpe_input::ScreenPoint {
+            x: cursor.x as i32,
+            y: cursor.y as i32,
+        };
+        let _ = dispatcher.dispatch(super::wpe_input::InputEvent::Move(at));
+        let _ = dispatcher.flush();
+        dispatcher.focus_pointer_window();
+
+        let (base_delay, span) = match mode {
+            InputMode::Robotic => (0_u64, 0_u64),
+            InputMode::Careful => (120, 0),
+            // ±40% of base, so repeated typing is not metronomic.
+            InputMode::Human => (45, 18),
+        };
+        let mut jitter = text
+            .chars()
+            .map(|c| c as u64)
+            .fold(0x9e37_79b9_u64, |a, c| a.wrapping_mul(31).wrapping_add(c))
+            | 1;
+
+        let typed = (|| -> EngineResult<()> {
+            for ch in text.chars() {
+                let hold = if base_delay == 0 { 1 } else { base_delay / 3 };
+                dispatcher.key_down(ch, &settle)?;
+                settle(Duration::from_millis(hold.max(1)));
+                dispatcher.key_up(ch)?;
+                if base_delay > 0 {
+                    jitter ^= jitter << 13;
+                    jitter ^= jitter >> 7;
+                    jitter ^= jitter << 17;
+                    let extra = if span == 0 {
+                        0
+                    } else {
+                        jitter % (span * 2 + 1)
+                    };
+                    let wait = base_delay.saturating_sub(span).saturating_add(extra);
+                    settle(Duration::from_millis(wait.max(1)));
+                } else {
+                    settle(Duration::from_millis(1));
+                }
+            }
+            Ok(())
+        })();
+
+        // Give the borrowed keycode back whether the run finished or
+        // failed halfway: a stray binding would change what the user's
+        // own keyboard does for the rest of the session.
+        let restored = dispatcher.end_typing();
+        typed?;
+        restored?;
+
+        // Let the last keyUp turn into beforeinput/input before the
+        // caller reads the page back.
+        let _ = run_loop_until(|| false, Duration::from_millis(150));
+        Ok(())
+    }
+
     fn cursor_op(&mut self, page: PageHandle, op: CursorOp, mode: InputMode) -> EngineResult<()> {
         let p = self.page_mut(page)?;
         let dispatcher = super::wpe_input::dispatcher()?;
