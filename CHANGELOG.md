@@ -4,6 +4,15 @@ All notable changes to vibesurfer are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6] - 2026-09-17
+
+### Added
+- `vs goto` works on Linux and Windows. It was implemented on the Cocoa backend only; the other two returned `NOT_IMPLEMENTED`, while the docs sold it as the fast path for successive navigations — it reuses the web view instead of spinning up a browser — so on two of three engines an agent following the docs got an error and fell back to `open`. Both new implementations are the navigation half of that backend's own `open`, against a WebView that already exists; document-start scripts survive a navigation, so neither reinstalls the inspector bridge or the download shim. Windows unsubscribes its `NavigationCompleted` handler whether or not the navigation worked, since returning early on failure would leave a handler firing into a dropped channel for every later navigation. `cell_goto_navigates_in_place` loses its macOS gate.
+
+### Fixed
+- One more m6 cell stopped asserting on speed. `cell_wait_token_change_pre_wait_and_navigation` gave a real navigation plus a fresh document 5s to move the token, and failed about one run in two on a loaded machine. It asserts that token-change survives a document being replaced, not how quickly, so it gets 15s. Same reasoning as the three cells fixed in 0.2.5.
+- WebAuthn is verified again, on every runner. `cell_auth_webauthn_virtual_authenticator` had been skipped on CI for a year, documented as the hosted macOS runner's WebKit never completing the authenticator's `crypto.subtle` sign/verify. The flow never reached `crypto.subtle`: it failed at `create()` with "the effective domain of the document is not a valid domain", because the fixture server is addressed by IP and a WebAuthn relying-party id has to be a registrable domain. macOS 27 forced the issue by rejecting `127.0.0.1` where earlier WebKit allowed it, which broke the cell on a real Mac too — the one place the docs said to verify the feature by hand, leaving it unverified everywhere. The cell asks for the fixture as `localhost` now, passes in under 3s where it timed out at 20s, and runs unskipped on all three runners. The "known CI-only gaps" section of REALITY_CHECK.md is empty as a result.
+
 ## [0.2.5] - 2026-09-17
 
 ### Added

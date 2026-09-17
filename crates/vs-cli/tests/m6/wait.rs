@@ -151,7 +151,12 @@ fn cell_wait_token_change_pre_wait_and_navigation() {
             &format!("--token={t3}"),
         ]);
         assert_ok("click navigation link", &r);
-        let r = ctx.vs(&["wait", &page, "token-change", "--timeout=5000"]);
+        // 15s, not 5s: what this asserts is that token-change survives
+        // a document being replaced, not how quickly. A real
+        // navigation plus a fresh document on a loaded machine
+        // overruns 5s often enough to fail the cell about one run in
+        // two, which says nothing about the behaviour under test.
+        let r = ctx.vs(&["wait", &page, "token-change", "--timeout=15000"]);
         assert_ok("wait survives navigation", &r);
     }
 }
