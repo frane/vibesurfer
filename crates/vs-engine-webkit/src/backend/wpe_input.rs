@@ -31,10 +31,11 @@
 //! `(window_origin_x, window_origin_y)` translation from the WebView's
 //! local rect (top-left at 0,0) into screen coordinates.
 
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
 use x11rb::connection::Connection as _;
-use x11rb::protocol::xproto::Window;
+use x11rb::protocol::xproto::{ConnectionExt as _, InputFocus, Window};
 use x11rb::protocol::xtest::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
@@ -86,6 +87,46 @@ pub(crate) trait InputDispatcher: Send + Sync {
     fn dispatch(&self, ev: InputEvent) -> EngineResult<()>;
     /// Force any buffered events to flush to the server / compositor.
     fn flush(&self) -> EngineResult<()>;
+
+    /// Press one character as a real key.
+    ///
+    /// `settle` pumps the caller's main loop for the given duration.
+    /// The dispatcher needs it because making a character typeable can
+    /// mean changing the server's keymap, and the toolkit only learns
+    /// about that by processing an event — on the same thread this
+    /// call is running on. Sleeping here instead would mean the key
+    /// arrives before anything can interpret it.
+    ///
+    /// A dispatcher that cannot reach a keyboard says so, and the wire
+    /// reports `ENGINE_UNSUPPORTED` exactly as the whole primitive did
+    /// before.
+    fn key_down(&self, _ch: char, _settle: &dyn Fn(Duration)) -> EngineResult<()> {
+        Err(EngineError::Unsupported {
+            engine: "wpe",
+            primitive: "type_text",
+        })
+    }
+
+    /// Release the character most recently pressed by [`Self::key_down`].
+    fn key_up(&self, _ch: char) -> EngineResult<()> {
+        Err(EngineError::Unsupported {
+            engine: "wpe",
+            primitive: "type_text",
+        })
+    }
+
+    /// Release any resources a run of [`Self::type_char`] set up. The
+    /// XTest path borrows a keycode from the server's keymap, so this
+    /// is where it gives it back; other paths do nothing.
+    fn end_typing(&self) -> EngineResult<()> {
+        Ok(())
+    }
+
+    /// Point the keyboard at whatever the pointer is over, if the
+    /// platform routes keys by focus rather than by position. Called
+    /// before a run of typing; best-effort, and a failure here is not
+    /// worth failing the call over.
+    fn focus_pointer_window(&self) {}
 }
 
 // =============================================================================
@@ -160,6 +201,8 @@ pub(crate) fn active_backend_name() -> Option<&'static str> {
 const XT_MOTION_NOTIFY: u8 = 6;
 const XT_BUTTON_PRESS: u8 = 4;
 const XT_BUTTON_RELEASE: u8 = 5;
+const XT_KEY_PRESS: u8 = 2;
+const XT_KEY_RELEASE: u8 = 3;
 
 /// XTest dispatcher. Holds an `x11rb::rust_connection::RustConnection`
 /// to the default display plus the root window id (used as the target
@@ -167,6 +210,22 @@ const XT_BUTTON_RELEASE: u8 = 5;
 struct XtestDispatcher {
     conn: RustConnection,
     root: Window,
+    /// The keycode borrowed from the server's keymap for typing, and
+    /// the keysym currently bound to it. See [`XtestDispatcher::bind`].
+    scratch: Mutex<Option<ScratchKey>>,
+}
+
+/// A keycode borrowed from the X server's keymap so arbitrary text
+/// can be typed through it.
+#[derive(Clone, Copy)]
+struct ScratchKey {
+    keycode: u8,
+    /// What it is bound to right now, so typing "aaa" rebinds once
+    /// rather than three times.
+    bound: u32,
+    /// How many keysyms per keycode this server's keymap uses, needed
+    /// to hand the keycode back in the shape it was found.
+    per_code: u8,
 }
 
 impl XtestDispatcher {
@@ -175,7 +234,81 @@ impl XtestDispatcher {
         // default screen — same convention every X11 client uses.
         let (conn, screen_num) = RustConnection::connect(None).ok()?;
         let root = conn.setup().roots.get(screen_num)?.root;
-        Some(Self { conn, root })
+        Some(Self {
+            conn,
+            root,
+            scratch: Mutex::new(None),
+        })
+    }
+
+    /// Find a keycode the current keymap leaves empty, so binding it
+    /// takes nothing away from the user.
+    ///
+    /// Typing arbitrary text through XTest means naming a keycode,
+    /// and a keycode only means a character because the keymap says
+    /// so. Rather than hunt for the keycode that happens to produce
+    /// `ß` on this layout — and then work out which modifiers it
+    /// needs — we borrow an unused one and bind it to whatever we are
+    /// about to type. This is what `xdotool` does for the same
+    /// reason. [`Self::end_typing`] gives it back.
+    fn find_scratch(&self) -> EngineResult<ScratchKey> {
+        let setup = self.conn.setup();
+        let (min, max) = (setup.min_keycode, setup.max_keycode);
+        let count = max - min + 1;
+        let map = self
+            .conn
+            .get_keyboard_mapping(min, count)
+            .map_err(|e| EngineError::Other(format!("GetKeyboardMapping: {e}")))?
+            .reply()
+            .map_err(|e| EngineError::Other(format!("GetKeyboardMapping reply: {e}")))?;
+        let per = map.keysyms_per_keycode as usize;
+        if per == 0 {
+            return Err(EngineError::Other("empty X keymap".into()));
+        }
+        // Scan from the top: high keycodes are where layouts leave
+        // gaps, and a low free keycode is likelier to be one the
+        // session is about to start using.
+        for i in (0..usize::from(count)).rev() {
+            let syms = &map.keysyms[i * per..(i + 1) * per];
+            if syms.iter().all(|&k| k == 0) {
+                return Ok(ScratchKey {
+                    keycode: min + u8::try_from(i).unwrap_or(0),
+                    bound: 0,
+                    per_code: map.keysyms_per_keycode,
+                });
+            }
+        }
+        Err(EngineError::Other(
+            "no free X keycode to type through".into(),
+        ))
+    }
+
+    /// Bind the scratch keycode to `keysym`, if it is not already.
+    fn bind(&self, keysym: u32, settle: &dyn Fn(Duration)) -> EngineResult<u8> {
+        let mut guard = self.scratch.lock().unwrap();
+        let mut key = match *guard {
+            Some(k) => k,
+            None => self.find_scratch()?,
+        };
+        if key.bound != keysym {
+            // Every level gets the same keysym, so the character
+            // arrives whatever the modifier state happens to be.
+            let syms = vec![keysym; usize::from(key.per_code)];
+            self.conn
+                .change_keyboard_mapping(1, key.keycode, key.per_code, &syms)
+                .map_err(|e| EngineError::Other(format!("ChangeKeyboardMapping: {e}")))?
+                .check()
+                .map_err(|e| EngineError::Other(format!("ChangeKeyboardMapping check: {e}")))?;
+            // Clients learn the new mapping from a MappingNotify, and
+            // the toolkit only sees that by running its event loop —
+            // which is this thread. Pumping rather than sleeping is
+            // the difference between the key arriving as the character
+            // we just bound and arriving as whatever was there before.
+            settle(Duration::from_millis(12));
+            key.bound = keysym;
+            *guard = Some(key);
+        }
+        Ok(key.keycode)
     }
 }
 
@@ -208,6 +341,93 @@ impl InputDispatcher for XtestDispatcher {
             .sync()
             .map_err(|e| EngineError::Other(format!("XSync: {e}")))?;
         Ok(())
+    }
+
+    fn key_down(&self, ch: char, settle: &dyn Fn(Duration)) -> EngineResult<()> {
+        let keycode = self.bind(keysym_for(ch), settle)?;
+        self.conn
+            .xtest_fake_input(XT_KEY_PRESS, keycode, CURRENT_TIME, self.root, 0, 0, 0)
+            .map_err(|e| EngineError::Other(format!("xtest key press: {e}")))?
+            .ignore_error();
+        self.flush()
+    }
+
+    fn key_up(&self, _ch: char) -> EngineResult<()> {
+        // The binding from `key_down` is still in place, so the
+        // release names the same keycode.
+        let keycode = match *self.scratch.lock().unwrap() {
+            Some(k) => k.keycode,
+            None => return Ok(()),
+        };
+        self.conn
+            .xtest_fake_input(XT_KEY_RELEASE, keycode, CURRENT_TIME, self.root, 0, 0, 0)
+            .map_err(|e| EngineError::Other(format!("xtest key release: {e}")))?
+            .ignore_error();
+        self.flush()
+    }
+
+    fn end_typing(&self) -> EngineResult<()> {
+        let mut guard = self.scratch.lock().unwrap();
+        let Some(key) = guard.take() else {
+            return Ok(());
+        };
+        // Hand the keycode back empty, the way it was found. Leaving
+        // a stray binding behind would change what the user's own
+        // keyboard does with that keycode for the rest of the session.
+        let syms = vec![0_u32; usize::from(key.per_code)];
+        self.conn
+            .change_keyboard_mapping(1, key.keycode, key.per_code, &syms)
+            .map_err(|e| EngineError::Other(format!("ChangeKeyboardMapping restore: {e}")))?
+            .check()
+            .map_err(|e| EngineError::Other(format!("ChangeKeyboardMapping restore check: {e}")))?;
+        Ok(())
+    }
+
+    fn focus_pointer_window(&self) {
+        // X routes keys by focus, not by pointer position, and a
+        // headless session under xvfb has no window manager to set
+        // focus for us. The caller has just clicked to place the
+        // caret, so the window under the pointer is the one that
+        // should hear the typing. Entirely best-effort: on a session
+        // that does have a WM, focus is already where it belongs.
+        let Ok(reply) = self.conn.query_pointer(self.root) else {
+            return;
+        };
+        let Ok(reply) = reply.reply() else { return };
+        if reply.child == x11rb::NONE {
+            return;
+        }
+        if let Ok(cookie) = self
+            .conn
+            .set_input_focus(InputFocus::PARENT, reply.child, CURRENT_TIME)
+        {
+            cookie.ignore_error();
+        }
+        let _ = self.conn.flush();
+    }
+}
+
+/// The X keysym that produces `ch`.
+///
+/// Latin-1 is the one range where keysyms and Unicode agree by
+/// historical accident, so it passes through. Everything else uses the
+/// Unicode escape range the X protocol reserves for exactly this. The
+/// few control characters worth typing have named keysyms and no
+/// printable form, so they are spelled out.
+fn keysym_for(ch: char) -> u32 {
+    match ch {
+        '\u{8}' => 0xff08,     // BackSpace
+        '\t' => 0xff09,        // Tab
+        '\n' | '\r' => 0xff0d, // Return
+        '\u{1b}' => 0xff1b,    // Escape
+        _ => {
+            let cp = ch as u32;
+            if (0x20..=0x7e).contains(&cp) || (0xa0..=0xff).contains(&cp) {
+                cp
+            } else {
+                0x0100_0000 + cp
+            }
+        }
     }
 }
 
@@ -266,6 +486,11 @@ enum LibeiCmd {
         pressed: bool,
         ack: mpsc::Sender<EngineResult<()>>,
     },
+    Keysym {
+        keysym: i32,
+        pressed: bool,
+        ack: mpsc::Sender<EngineResult<()>>,
+    },
 }
 
 impl LibeiDispatcher {
@@ -293,7 +518,10 @@ impl LibeiDispatcher {
                         let _ = init_tx.send(None);
                         return;
                     };
-                    let types: BitFlags<DeviceType> = DeviceType::Pointer.into();
+                    // Ask for a keyboard as well as a pointer. The
+                    // portal grants devices per session, so a session
+                    // opened for the pointer alone cannot type later.
+                    let types: BitFlags<DeviceType> = DeviceType::Pointer | DeviceType::Keyboard;
                     if proxy
                         .select_devices(&session, types, None, PersistMode::DoNot)
                         .await
@@ -323,6 +551,26 @@ impl LibeiDispatcher {
                                     .notify_pointer_motion_absolute(&session, 0, x, y)
                                     .await
                                     .map_err(|e| EngineError::Other(format!("ei motion: {e}")));
+                                let _ = ack.send(r);
+                            }
+                            LibeiCmd::Keysym {
+                                keysym,
+                                pressed,
+                                ack,
+                            } => {
+                                let state = if pressed {
+                                    ashpd::desktop::remote_desktop::KeyState::Pressed
+                                } else {
+                                    ashpd::desktop::remote_desktop::KeyState::Released
+                                };
+                                // The portal takes a keysym directly,
+                                // so the compositor does the keymap
+                                // work the XTest path has to do by
+                                // hand.
+                                let r = proxy
+                                    .notify_keyboard_keysym(&session, keysym, state)
+                                    .await
+                                    .map_err(|e| EngineError::Other(format!("ei keysym: {e}")));
                                 let _ = ack.send(r);
                             }
                             LibeiCmd::Button { code, pressed, ack } => {
@@ -383,6 +631,32 @@ impl InputDispatcher for LibeiDispatcher {
     }
     fn flush(&self) -> EngineResult<()> {
         Ok(())
+    }
+
+    fn key_down(&self, ch: char, _settle: &dyn Fn(Duration)) -> EngineResult<()> {
+        self.keysym(ch, true)
+    }
+
+    fn key_up(&self, ch: char) -> EngineResult<()> {
+        self.keysym(ch, false)
+    }
+}
+
+impl LibeiDispatcher {
+    fn keysym(&self, ch: char, pressed: bool) -> EngineResult<()> {
+        let (ack_tx, ack_rx) = mpsc::channel();
+        #[allow(clippy::cast_possible_wrap)]
+        let keysym = keysym_for(ch) as i32;
+        self.cmd_tx
+            .send(LibeiCmd::Keysym {
+                keysym,
+                pressed,
+                ack: ack_tx,
+            })
+            .map_err(|_| EngineError::Other("libei worker thread gone".into()))?;
+        ack_rx
+            .recv()
+            .map_err(|_| EngineError::Other("libei ack channel closed".into()))?
     }
 }
 

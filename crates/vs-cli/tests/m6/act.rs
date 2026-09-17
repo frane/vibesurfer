@@ -478,8 +478,12 @@ fn cell_act_click_zero_size_target() {
 // fixture's mirror records ONLY isTrusted beforeinput data — the
 // same gate DraftJS/contenteditable editors use — so a pass proves
 // real key events, not a programmatic value write. Requested from an
-// x.com composer flow via #vibesurfer (01KXN5). macOS-only for now.
-#[cfg(target_os = "macos")]
+// x.com composer flow via #vibesurfer (01KXN5).
+//
+// All three engines now: macOS native NSEvent, Linux XTest (or the
+// RemoteDesktop portal under Wayland), Windows through the DevTools
+// protocol. The cell is the thing that keeps "verified on all three"
+// honest, so it is deliberately not platform-gated.
 #[test]
 fn cell_type_trusted_into_contenteditable() {
     for _ in each_available_backend() {
