@@ -205,22 +205,27 @@ fn cell_auth_import_and_load() {
 #[cfg(target_os = "macos")]
 #[test]
 fn cell_auth_webauthn_virtual_authenticator() {
-    // Passes locally but the GitHub macOS runner's WebKit never completes
-    // the authenticator's crypto.subtle flow (VERIFIED never appears), so
-    // it is pending-manual-verification on CI. Runs normally off-CI.
-    if std::env::var_os("CI").is_some() {
-        eprintln!("skipping webauthn cell on CI (WebKit crypto.subtle gap; pending-manual)");
-        return;
-    }
     for _ in each_available_backend() {
         let ctx = TestContext::start();
+        // Addressed by name, not by IP. WebAuthn's relying-party id
+        // must be a registrable domain and an IP literal is not one;
+        // WebKit used to allow `127.0.0.1` and stopped (macOS 27 fails
+        // the create() outright with "the effective domain of the
+        // document is not a valid domain"). This cell was skipped on
+        // CI for a year, blamed on the runner's `crypto.subtle` never
+        // completing — the flow never got as far as crypto.subtle.
+        //
         // Load any page, enable the authenticator (installs a
         // document-start shim), then navigate to the WebAuthn fixture so
         // the shim is in place before its create()/get() run.
-        let (_s, page, _t) = open_fixture(&ctx, "/static.html");
+        let r = ctx.vs(&["session-open"]);
+        assert_ok("session-open", &r);
+        let r = ctx.vs(&["open", &ctx.url_named_host("/static.html")]);
+        assert_ok("open", &r);
+        let page = body_first(&r);
         let r = ctx.vs(&["auth", "webauthn", &page]);
         assert_ok("auth webauthn", &r);
-        let r = ctx.vs(&["goto", &page, &ctx.url("/webauthn.html")]);
+        let r = ctx.vs(&["goto", &page, &ctx.url_named_host("/webauthn.html")]);
         assert_ok("goto webauthn fixture", &r);
         // 20s: WebCrypto ES256 sign+verify plus the wait poll is slower
         // on CI runners than locally; 8s flaked on the macOS runner.
