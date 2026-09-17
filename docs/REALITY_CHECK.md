@@ -131,12 +131,21 @@ for the namespace bit).
 
 ## Known CI-only gaps
 
-- **WebAuthn cell on the GitHub macOS runner.** The virtual authenticator
-  passes locally on a real Mac (VERIFIED in ~5s) but the hosted
-  `macos-latest` runner's WebKit never completes the `crypto.subtle`
-  sign/verify, so `cell_auth_webauthn_virtual_authenticator` is skipped
-  when `CI` is set (pending-manual-verification). Run it locally to
-  verify the feature.
+None at present.
+
+The one that used to live here — `cell_auth_webauthn_virtual_authenticator`
+skipped on the hosted macOS runner, blamed on WebKit never completing the
+authenticator's `crypto.subtle` sign/verify — was a misdiagnosis. The flow
+never reached `crypto.subtle`. It failed at `create()` with "the effective
+domain of the document is not a valid domain", because the fixture server is
+addressed by IP and a WebAuthn relying-party id has to be a registrable
+domain. Addressing the fixture as `localhost` fixed it, and the cell now runs
+unskipped on all of them (run
+[35250587754](https://github.com/frane/vibesurfer/actions/runs/35250587754)).
+
+macOS 27 is what forced the issue: WebKit used to let `127.0.0.1` through and
+now rejects it, so the cell started failing on a real Mac too — the machine
+this file told you to verify the feature on.
 
 ## Verification — Windows column
 
