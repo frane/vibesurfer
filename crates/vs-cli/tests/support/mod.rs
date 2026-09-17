@@ -302,6 +302,20 @@ impl TestContext {
         self.server.url(path)
     }
 
+    /// The same fixture, addressed by name instead of by IP.
+    ///
+    /// WebAuthn's relying-party id has to be a registrable domain, and
+    /// an IP literal is not one. WebKit used to let `127.0.0.1`
+    /// through and now does not (macOS 27 rejects it outright with
+    /// "the effective domain of the document is not a valid domain"),
+    /// so a cell that needs a real origin asks for one. `localhost`
+    /// resolves to the same loopback the fixture server is bound to.
+    pub fn url_named_host(&self, path: &str) -> String {
+        self.server
+            .url(path)
+            .replace("//127.0.0.1:", "//localhost:")
+    }
+
     pub fn vs(&self, args: &[&str]) -> CliOut {
         vs(self.home.path(), args)
     }
