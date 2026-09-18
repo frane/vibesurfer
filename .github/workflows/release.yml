@@ -23,6 +23,9 @@ on:
 
 permissions:
   contents: write
+  # npm OIDC trusted publishing needs the Actions id-token. See the
+  # `npm` job at the bottom.
+  id-token: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -179,13 +182,24 @@ jobs:
   # before they exist makes `npx vibesurfer` 404 — hence `needs:
   # checksums`, which only completes once every asset is uploaded.
   #
-  # Publishing has been a manual step, and manual is why 0.2.4, 0.2.5
-  # and 0.2.6 all shipped everywhere except npm: the maintainer's local
-  # token had been revoked months earlier and `npm whoami` still
-  # resolved, so nothing looked wrong until a publish was attempted.
-  # With an NPM_TOKEN secret configured this job removes the step from
-  # the critical path entirely. Without one it skips and says so, so
-  # adding the secret is the only action needed, once.
+  # Authentication is OIDC trusted publishing, the same shape the
+  # almyty repos use: npm authenticates with the Actions id-token
+  # against the trusted publisher configured on npmjs.com for this
+  # repo + workflow filename. No NPM_TOKEN, nothing to rotate, and
+  # --provenance attests the build to the registry.
+  #
+  # A long-lived token is what caused the problem this job exists to
+  # solve: 0.2.4, 0.2.5 and 0.2.6 shipped everywhere except npm
+  # because the maintainer's local token had been revoked months
+  # earlier while `npm whoami` still resolved off it, so nothing
+  # looked wrong until a publish was attempted. A credential that
+  # cannot silently rot is the actual fix.
+  #
+  # One-time setup: on npmjs.com, add a trusted publisher to the
+  # `vibesurfer` package for frane/vibesurfer with workflow
+  # `release.yml`. Until that exists this job fails rather than
+  # skipping — a release quietly missing from npm is the failure
+  # mode we are trying to stop repeating.
   npm:
     name: npm publish
     needs: checksums
@@ -194,7 +208,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
       - name: Resolve version
         id: ver
@@ -205,19 +219,13 @@ jobs:
             echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           fi
       - name: Publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          if [ -z "${NODE_AUTH_TOKEN}" ]; then
-            echo "NPM_TOKEN is not configured; skipping npm publish."
-            echo "Add a granular token with write access to the vibesurfer"
-            echo "package as the NPM_TOKEN repository secret, and releases"
-            echo "will publish to npm on their own from then on."
-            exit 0
-          fi
+          # Trusted publishing needs npm >= 11.5; the runner's bundled
+          # npm is older than that for a while yet.
+          npm install -g npm@latest
           # The tag is the source of truth. A package.json that drifted
-          # from it would publish a version nobody tagged, so fail loudly
-          # rather than guess which one was meant.
+          # from it would publish a version nobody tagged, so fail
+          # loudly rather than guess which one was meant.
           tag_version="${{ steps.ver.outputs.version }}"
           pkg_version="v$(node -p "require('./npm/package.json').version")"
           if [ "${tag_version}" != "${pkg_version}" ]; then
@@ -225,4 +233,4 @@ jobs:
             exit 1
           fi
           cd npm
-          npm publish
+          npm publish --access public --provenance
