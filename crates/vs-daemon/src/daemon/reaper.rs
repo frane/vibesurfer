@@ -221,7 +221,9 @@ mod tests {
     #[test]
     fn idle_pages_go_dormant_and_busy_ones_stay() {
         let now = Instant::now();
-        let old = now.checked_sub(Duration::from_secs(120)).expect("test clock");
+        let old = now
+            .checked_sub(Duration::from_secs(120))
+            .expect("test clock");
         let plan = plan(
             vec![(
                 "s_1",
@@ -244,7 +246,9 @@ mod tests {
     #[test]
     fn a_busy_page_keeps_its_session() {
         let now = Instant::now();
-        let ancient = now.checked_sub(Duration::from_secs(10_000)).expect("test clock");
+        let ancient = now
+            .checked_sub(Duration::from_secs(10_000))
+            .expect("test clock");
         let plan = plan(
             vec![("s_1", ancient, vec![("p_busy", now, true)])],
             now,
@@ -260,7 +264,9 @@ mod tests {
     #[test]
     fn an_empty_idle_session_is_closed() {
         let now = Instant::now();
-        let old = now.checked_sub(Duration::from_secs(10_000)).expect("test clock");
+        let old = now
+            .checked_sub(Duration::from_secs(10_000))
+            .expect("test clock");
         let plan = plan(
             vec![("s_empty", old, Vec::new()), ("s_fresh", now, Vec::new())],
             now,
@@ -274,7 +280,9 @@ mod tests {
     #[test]
     fn a_closing_session_does_not_also_report_its_pages() {
         let now = Instant::now();
-        let old = now.checked_sub(Duration::from_secs(10_000)).expect("test clock");
+        let old = now
+            .checked_sub(Duration::from_secs(10_000))
+            .expect("test clock");
         let plan = plan(
             vec![("s_1", old, vec![("p_1", old, true)])],
             now,
