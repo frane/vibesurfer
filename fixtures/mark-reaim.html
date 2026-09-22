@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Mark re-aim</title>
+</head>
+<body>
+  <main>
+    <h1>Mark re-aim fixture</h1>
+    <!-- Rebuild throws the button away and builds an identical one,
+         so the element carrying the mark gets a fresh ref while its
+         role and label stay exactly the same. That is the case a mark
+         exists for: the agent's recorded number is stale, the thing
+         it named is still on the page. -->
+    <div id="host"><button id="save">Save draft</button></div>
+    <button id="rebuild">Rebuild</button>
+    <p id="status">nothing saved</p>
+  </main>
+  <script>
+    function wire() {
+      document.getElementById('save').addEventListener('click', function() {
+        document.getElementById('status').textContent = 'saved';
+      });
+    }
+    wire();
+    document.getElementById('rebuild').addEventListener('click', function() {
+      document.getElementById('host').innerHTML = '<button id="save">Save draft</button>';
+      document.getElementById('status').textContent = 'rebuilt';
+      wire();
+    });
+  </script>
+</body>
+</html>

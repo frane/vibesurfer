@@ -152,6 +152,8 @@ code_enum! {
         IdempotentHit => "idempotent_hit",
         ConsoleError => "console_error",
         HiddenTarget => "hidden_target",
+        MarkReaimed => "mark_reaimed",
+        StoragePartial => "storage_partial",
     }
 }
 

@@ -129,6 +129,83 @@ impl Daemon {
         })
     }
 
+    /// Resolve a mark name to a ref that is live on `page_id` now.
+    ///
+    /// A mark records the ref it was taken at, and refs are sticky, so
+    /// that number is usually still the element. It is not always: a
+    /// navigation or a wholesale re-render hands the same element a
+    /// new ref, and the old number then addresses nothing or, worse,
+    /// something else. So the recorded ref is a hint, checked against
+    /// the current tree by the role and label the mark was taken with,
+    /// and the tree is searched for that identity when the hint does
+    /// not hold. The caller is told when the answer moved
+    /// ([`WarningCode::MarkReaimed`]), because a mark that re-aims is
+    /// exactly when an agent should look before it clicks.
+    ///
+    /// Marks are session-scoped and page-bound: acting on one through
+    /// another page is refused rather than silently re-pointed.
+    pub(crate) fn resolve_mark(
+        &self,
+        session_id: &str,
+        page_id: &str,
+        name: &str,
+    ) -> Result<(Ref, bool)> {
+        let mark = {
+            let store = self.inner.store.lock().expect("poisoned");
+            store.get_mark(session_id, name)?
+        }
+        .ok_or_else(|| DaemonError::UnknownMark(name.to_string()))?;
+        if mark.page_id != page_id {
+            return Err(DaemonError::BadRequest(format!(
+                "mark {name} belongs to page {}, not {page_id}",
+                mark.page_id
+            )));
+        }
+        // `dom_path` is "<role>#<ref>" as written by `mark`.
+        let hint: Option<Ref> = mark
+            .dom_path
+            .rsplit_once('#')
+            .and_then(|(_, r)| r.parse().ok())
+            .map(Ref);
+
+        let sessions = self.inner.sessions.lock().expect("poisoned");
+        let page = sessions
+            .get(session_id)
+            .ok_or_else(|| DaemonError::UnknownSession(session_id.to_string()))?
+            .pages
+            .get(page_id)
+            .ok_or_else(|| DaemonError::UnknownPage(page_id.to_string()))?;
+
+        // The recorded ref is checked by role alone. A label is what
+        // an element says, not what it is: the marks fixture relabels
+        // its button every 250ms, and a live page does the same with
+        // counts, timers and validation text. Requiring the label to
+        // match would break a mark on the element it still points at.
+        let role_matches = |n: &vs_protocol::Node| {
+            mark.role
+                .as_deref()
+                .is_none_or(|role| n.role.to_string() == role)
+        };
+        if let Some(r) = hint {
+            if page.find_node(r).is_some_and(role_matches) {
+                return Ok((r, false));
+            }
+        }
+        // The ref is gone, so the tree was renumbered. Now the label
+        // is all there is to go on, and it has to match exactly:
+        // re-aiming a mark onto the wrong button is worse than
+        // failing, because the agent clicks it.
+        page.find_by(&|n: &vs_protocol::Node| {
+            role_matches(n)
+                && mark
+                    .content_excerpt
+                    .as_deref()
+                    .is_some_and(|l| n.label == l)
+        })
+        .map(|n| (n.r, true))
+        .ok_or_else(|| DaemonError::UnknownMark(format!("{name} (no matching element)")))
+    }
+
     /// Attach `(key, value)` to `target`.
     pub fn annotate(
         &self,

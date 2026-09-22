@@ -130,6 +130,63 @@ impl PendingQueue {
         guard.insert(entry.id.clone(), (entry, FulfillState::Pending));
     }
 
+    /// Cancel any pending form that a fresh, identical ask makes
+    /// dead: same page, same refs in the same order. Returns the form
+    /// ids cancelled.
+    ///
+    /// A form outlives the waiter that enqueued it, so an agent whose
+    /// `vs_prompt_form_wait` ran out of budget and asked again left
+    /// the first one queued for [`ORPHAN_TTL`]. Nobody could ever
+    /// collect it — the only caller who knew its id had moved on —
+    /// but it still showed in `vs pending list` and on the unscoped
+    /// `vs pending url` page, where the human saw the same fields
+    /// twice and could not tell which pair was live.
+    ///
+    /// A form with any fulfilled field is never superseded. Those
+    /// values are the human's typing, and [`Self::restore`] exists
+    /// precisely so that a caller that cannot use them hands them
+    /// back rather than destroying them.
+    pub fn supersede(&self, page: &str, refs: &[u32]) -> Vec<String> {
+        let mut guard = self.inner.lock().unwrap();
+        let mut forms: HashMap<String, Vec<(u32, u32)>> = HashMap::new();
+        let mut touched: Vec<String> = Vec::new();
+        for (e, s) in guard.values() {
+            let Some(form) = e.form.clone() else { continue };
+            if e.page != page {
+                continue;
+            }
+            match s {
+                FulfillState::Pending => forms.entry(form).or_default().push((e.form_index, e.r)),
+                // Fulfilled or already cancelled: leave the form be.
+                _ => touched.push(form),
+            }
+        }
+        let dead: Vec<String> = forms
+            .into_iter()
+            .filter(|(form, fields)| {
+                if touched.contains(form) {
+                    return false;
+                }
+                let mut fields = fields.clone();
+                fields.sort_unstable();
+                fields.iter().map(|(_, r)| *r).eq(refs.iter().copied())
+            })
+            .map(|(form, _)| form)
+            .collect();
+        for (e, s) in guard.values_mut() {
+            if e.form
+                .as_deref()
+                .is_some_and(|f| dead.iter().any(|d| d == f))
+            {
+                *s = FulfillState::Cancelled;
+            }
+        }
+        if !dead.is_empty() {
+            self.cv.notify_all();
+        }
+        dead
+    }
+
     /// Block until every entry of `form` is fulfilled, all are
     /// cancelled, or `timeout` elapses. The four outcomes are
     /// distinct (see [`FormWait`]) because a timeout and a dead form
@@ -384,6 +441,45 @@ mod tests {
             FormWait::StillPending
         ));
         assert_eq!(q.list().len(), 1);
+    }
+
+    /// An identical re-ask kills the form nobody can collect any
+    /// more, and leaves alone one the human has already typed into.
+    #[test]
+    fn supersede_kills_the_dead_twin_and_spares_a_typed_one() {
+        let q = PendingQueue::new();
+        q.enqueue(entry("a", Some("f_7"), 0));
+        q.enqueue(entry("b", Some("f_7"), 1));
+
+        // A different page is a different ask.
+        let mut elsewhere = entry("c", Some("f_8"), 0);
+        elsewhere.page = "p_2".into();
+        elsewhere.r = 0;
+        q.enqueue(elsewhere);
+
+        assert_eq!(q.supersede("p_1", &[0, 1]), ["f_7"]);
+        assert_eq!(
+            q.list().len(),
+            1,
+            "only the other page's form is still pending"
+        );
+        assert!(matches!(
+            q.wait_form("f_7", Duration::from_millis(50)),
+            FormWait::Cancelled
+        ));
+
+        // Same shape, but the human has typed into it: untouchable.
+        q.enqueue(entry("d", Some("f_9"), 0));
+        q.enqueue(entry("e", Some("f_9"), 1));
+        assert!(q.fulfill("d", "typed".into()));
+        assert!(
+            q.supersede("p_1", &[0, 1]).is_empty(),
+            "a form with a fulfilled field is never superseded"
+        );
+
+        // A different field set is a different ask.
+        q.enqueue(entry("f", Some("f_10"), 0));
+        assert!(q.supersede("p_1", &[0, 1, 2]).is_empty());
     }
 
     /// A caller that collects a form and then fails to use the

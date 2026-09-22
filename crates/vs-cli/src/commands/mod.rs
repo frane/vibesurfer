@@ -60,9 +60,20 @@ pub enum Command {
         #[arg(long)]
         policy: Option<String>,
     },
-    /// 2. Close the active session.
+    /// 2. Close the active session, or a whole sweep of them.
     #[command(visible_alias = "sc")]
-    SessionClose,
+    SessionClose {
+        /// Close every session in the workspace, not just this
+        /// caller's. The blunt instrument for a daemon that has
+        /// accumulated other people's leftovers.
+        #[arg(long)]
+        all: bool,
+        /// Close every session untouched for at least this long
+        /// (e.g. `2h`, `90m`, `3600s`). Implies `--all`'s reach, but
+        /// spares whatever is still in use.
+        #[arg(long, value_name = "DURATION")]
+        idle_for: Option<String>,
+    },
     /// 3. Open a page navigated to URL.
     #[command(visible_alias = "o")]
     Open { url: String },
@@ -94,8 +105,11 @@ pub enum Command {
     #[command(visible_alias = "a")]
     Act {
         page: String,
-        #[arg(value_name = "REF")]
-        r: u32,
+        /// Ref number from `vs view`, or `mark:NAME` for a mark taken
+        /// with `vs mark` — the mark resolves to whatever ref carries
+        /// it now.
+        #[arg(value_name = "REF|mark:NAME")]
+        r: String,
         op: String,
         value: Option<String>,
         #[arg(long)]
@@ -593,9 +607,16 @@ impl Command {
                 }
                 r
             }
-            Self::SessionClose => {
-                let s = require_session(session_id)?;
-                Request::new("vs_session_close").arg(s)
+            Self::SessionClose { all, idle_for } => {
+                let mut r = Request::new("vs_session_close");
+                if let Some(d) = idle_for {
+                    r = r.flag_value("idle-for", d.clone());
+                } else if *all {
+                    r = r.flag("all");
+                } else {
+                    r = r.arg(require_session(session_id)?);
+                }
+                r
             }
             Self::Open { url } => {
                 let s = require_session(session_id)?;
@@ -646,7 +667,7 @@ impl Command {
                 let s = require_session(session_id)?;
                 let mut req = Request::new("vs_act")
                     .arg(page.clone())
-                    .arg(r.to_string())
+                    .arg(r.clone())
                     .arg(op.clone());
                 if let Some(v) = value {
                     req = req.arg(v.clone());

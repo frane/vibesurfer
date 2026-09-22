@@ -32,6 +32,10 @@ pub struct PageState {
     pub force_full: bool,
     /// Refs ever seen on this page, for retire-tracking.
     pub seen_refs: HashSet<Ref>,
+    /// When a primitive last addressed this page. The reaper closes
+    /// the engine page (not the row) once this goes stale, so an
+    /// abandoned run stops costing a live web view.
+    pub last_touched: std::time::Instant,
     /// Serializes `vs_act`'s token-check → engine-act → re-snapshot
     /// window. Without it, two concurrent acts carrying the same
     /// `before_token` would both pass the stale-token check before
@@ -51,6 +55,7 @@ impl PageState {
             last_token: None,
             force_full: true,
             seen_refs: HashSet::new(),
+            last_touched: std::time::Instant::now(),
             mutate_lock: Arc::new(Mutex::new(())),
         }
     }
@@ -67,6 +72,7 @@ impl PageState {
             last_token: None,
             force_full: true,
             seen_refs: HashSet::new(),
+            last_touched: std::time::Instant::now(),
             mutate_lock: Arc::new(Mutex::new(())),
         }
     }
@@ -113,6 +119,15 @@ impl PageState {
         self.last_tree
             .as_ref()
             .and_then(|t| t.iter().find(|n| n.r == r))
+    }
+
+    /// First node in the most recent tree matching `pred`. Used to
+    /// re-aim a mark whose recorded ref no longer holds.
+    #[must_use]
+    pub fn find_by(&self, pred: &dyn Fn(&vs_protocol::Node) -> bool) -> Option<&vs_protocol::Node> {
+        self.last_tree
+            .as_ref()
+            .and_then(|t| t.iter().find(|n| pred(n)))
     }
 }
 

@@ -313,7 +313,7 @@ pub fn run(cli: &Cli) -> Result<Response> {
                 let _ = save_caller_session(&paths, key, line.trim());
             }
         }
-        (Command::SessionClose, vs_protocol::Envelope::Success(_)) => {
+        (Command::SessionClose { .. }, vs_protocol::Envelope::Success(_)) => {
             if let Some(key) = caller_key.as_ref() {
                 let _ = mark_caller_closed(&paths, key);
             }

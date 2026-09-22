@@ -44,43 +44,46 @@ fn is_sensitive(name: &str) -> bool {
 /// loose so casually-pasted credentials don't survive the audit log.
 #[must_use]
 pub fn redact_string(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+    const KEYWORDS: [&str; 6] = [
+        "bearer ",
+        "authorization:",
+        "x-api-key:",
+        "secret",
+        "password",
+        "token",
+    ];
+    // Every index here is a char boundary: the keywords are ASCII, the
+    // delimiter search returns a boundary, and the fallback advances by
+    // one whole char. Walking raw bytes instead panicked the dispatch
+    // task on any non-ASCII expression — an em-dash in a comment, an
+    // accented string literal — and surfaced as `! ENGINE_CRASH`, and
+    // the bytes that did not panic came out as mojibake.
+    //
+    // ASCII-only lowercasing preserves byte offsets, so an index found
+    // in `lower` is valid in `s`.
     let lower = s.to_ascii_lowercase();
-    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
     let mut i = 0;
-    while i < bytes.len() {
-        // Look for the start of one of the keywords.
-        let rest = &lower[i..];
-        let mut hit = None;
-        for kw in [
-            "bearer ",
-            "authorization:",
-            "x-api-key:",
-            "secret",
-            "password",
-            "token",
-        ] {
-            if rest.starts_with(kw) {
-                hit = Some(kw.len());
-                break;
-            }
-        }
-        if let Some(kw_len) = hit {
+    while i < s.len() {
+        if let Some(kw_len) = KEYWORDS
+            .iter()
+            .find(|kw| lower[i..].starts_with(**kw))
+            .map(|kw| kw.len())
+        {
             out.push_str(&s[i..i + kw_len]);
-            // Skip until the next quote/semicolon/whitespace boundary.
-            let mut j = i + kw_len;
-            while j < bytes.len() && !matches!(bytes[j], b'"' | b'\'' | b';' | b'\n' | b'}' | b')')
-            {
-                j += 1;
-            }
-            if j > i + kw_len {
+            let after = i + kw_len;
+            let end = s[after..]
+                .find(['"', '\'', ';', '\n', '}', ')'])
+                .map_or(s.len(), |off| after + off);
+            if end > after {
                 out.push_str("***");
             }
-            i = j;
+            i = end;
             continue;
         }
-        out.push(s.as_bytes()[i] as char);
-        i += 1;
+        let c = s[i..].chars().next().expect("index is a char boundary");
+        out.push(c);
+        i += c.len_utf8();
     }
     out
 }
@@ -88,6 +91,26 @@ pub fn redact_string(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Non-ASCII input must survive intact. Indexing this string by
+    /// byte panicked mid-codepoint, and a panic in an engine job
+    /// comes back to the agent as `! ENGINE_CRASH` on a call that was
+    /// perfectly valid — an eval whose only sin was a comment with an
+    /// em-dash in it.
+    #[test]
+    fn non_ascii_survives_and_does_not_panic() {
+        let s = "// pick the — dash — and the café ☕\nreturn 1";
+        assert_eq!(redact_string(s), s);
+        // Same, with a secret after the multi-byte run: still redacted.
+        let got = redact_string("café token=abc123;");
+        assert_eq!(got, "café token***;");
+    }
+
+    #[test]
+    fn keyword_without_a_value_is_left_alone() {
+        assert_eq!(redact_string("token"), "token");
+        assert_eq!(redact_string("token;"), "token;");
+    }
 
     #[test]
     fn no_flags_is_just_args() {

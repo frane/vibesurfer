@@ -1,6 +1,6 @@
 ---
 name: vibesurfer
-version: 0.2.6
+version: 0.2.7
 binary: vs
 description: Agent-native headless browser. 26 primitives over a Unix-socket wire protocol. Real WKWebView (macOS), WebKitGTK 6 (Linux), or WebView2 (Windows) — all three engines verified per-commit by a real-browser integration suite. Optimistic concurrency via state tokens; tree-delta wire format; durable session/page/auth state in SQLite.
 ---
@@ -37,7 +37,7 @@ Wire form is `vs_<name>` (over the socket); CLI subcommand is `<name>` with hyph
 | # | CLI | What |
 |---|-----|------|
 | 1 | `vs session-open [--policy=NAME]` | Create a session. Writes `~/.vibesurfer/active-session`. |
-| 2 | `vs session-close` | Close the active session. |
+| 2 | `vs session-close [--all\|--idle-for=2h]` | Close the active session, or sweep the workspace: `--all`, or only what has been untouched that long. |
 | 3 | `vs open <URL>` | Open a page in the session. |
 | - | `vs goto <PAGE> <URL>` (`g`) | Navigate an existing page in place. Reuses the web view, so it skips browser spin-up and is much faster than open for successive navigations. Refs are fresh afterward. |
 | - | `vs flow run <FILE>` | Run a declarative flow: a JSON array of steps, each an array of `vs` args. Runs in one session; `$page` expands to the last opened/navigated page, `$token` to its current token (fetched as needed). Stops at the first failing step. |
@@ -49,16 +49,16 @@ Wire form is `vs_<name>` (over the socket); CLI subcommand is `<name>` with hyph
 |---|-----|------|
 | 5 | `vs view <PAGE> [--full]` | A11y tree. First call after `open` is full; subsequent calls are deltas. |
 | 6 | `vs read <PAGE> <REF>` | Full text of one ref. |
-| 13 | `vs status` | Active session + open pages summary. |
+| 13 | `vs status` | Sessions, pages, and `live=` — how many still hold a web view. `live` is the number that costs memory and processes. |
 | 14 | `vs log [--page=<P>] [--group=<G>] [--since=<EPOCH>] [--limit=N]` | Audit log slice. |
 
 ### Mutate (7, 9–12, 17)
 
 | # | CLI | What |
 |---|-----|------|
-| 7 | `vs act <PAGE> <REF> <OP> [VALUE] --token=<TOK> [--group=<LABEL>]` | Click / fill / scroll / key / submit / hover / focus. Token from previous read. |
+| 7 | `vs act <PAGE> <REF\|mark:NAME> <OP> [VALUE] --token=<TOK> [--group=<LABEL>]` | Click / fill / scroll / key / submit / hover / focus. Token from previous read. A mark re-resolves at act time; `? mark_reaimed ref=N` means it moved. |
 | 9 | `vs wait <PAGE> <COND> [VALUE] --timeout=<MS>` | `stable` / `text` / `ref-appears` / `ref-gone`. |
-| 11 | `vs mark <PAGE> <REF> <NAME> --token=<TOK>` | Persist a ref as a named anchor. |
+| 11 | `vs mark <PAGE> <REF> <NAME> --token=<TOK>` | Persist a ref as a named anchor. Act on it later with `mark:NAME`. |
 | 12 | `vs annotate <TARGET> <KEY> [VALUE]` | `ref:N` / `mark:NAME` / `page` annotation. |
 | 17 | `vs viewport <PAGE> <SPEC> [--dpr=N]` | Preset (`mobile` / `desktop` / etc.) or `WxH`. Re-baselines next view. |
 
@@ -99,7 +99,7 @@ But a credential YOU own is not a secret to protect from yourself: a test user y
 
 `vs prompt-scan <PAGE> [--open]` (alias `ps`) shows the human a live view of the headless page (a QR code, a 2FA screen) and blocks until they press Enter, so out-of-band steps like scanning a TOTP enrollment QR work. Over MCP, compose the existing tools instead: call `vs_watch` for the live URL, relay it, then `vs_prompt_confirm` to wait.
 
-**Browser entry (v0.1.23+):** the human alternative to the tty. `vs pending url` (`pe u`) mints a single-use loopback URL; the page lists every pending entry as one form (secret fields masked, password managers can autofill), and one submit fulfills them all. `vs prompt-form` prints such a URL automatically. Whole-login flow over MCP: call `vs_prompt_form` with all fields (`[{ref, label, secret}]`) — it returns `form` + `url` immediately; relay the URL to the user verbatim; then call `vs_prompt_form_wait` with the form id, which parks until submit and fills every ref in order. Values go browser → daemon → page; the agent never sees them. URLs are 127.0.0.1-only, 256-bit-nonce capability links, valid 10 minutes, spent by the submit and not by a GET — opening, reloading or previewing the link is safe. If the wait comes back `! TIMEOUT ... still waiting`, the form is live and the human is not done: call `vs_prompt_form_wait` again with the same form id. Only `was cancelled` and `unknown` are dead. A fill that errors (`WRONG_SESSION`, `NOT_FOUND`) puts the values back: fix what the error names and call wait again — never ask the human to retype.
+**Browser entry (v0.1.23+):** the human alternative to the tty. `vs pending url` (`pe u`) mints a single-use loopback URL; the page lists every pending entry as one form (secret fields masked, password managers can autofill), and one submit fulfills them all. `vs prompt-form` prints its own URL, scoped to that form's fields. Whole-login flow over MCP: call `vs_prompt_form` with all fields (`[{ref, label, secret}]`) — it returns `form` + `url` immediately; relay the URL to the user verbatim; then call `vs_prompt_form_wait` with the form id, which parks until submit and fills every ref in order. Values go browser → daemon → page; the agent never sees them. URLs are 127.0.0.1-only, 256-bit-nonce capability links, valid 10 minutes, spent by the submit and not by a GET — opening, reloading or previewing the link is safe. If the wait comes back `! TIMEOUT ... still waiting`, the form is live and the human is not done: call `vs_prompt_form_wait` again with the same form id. Only `was cancelled` and `unknown` are dead. A fill that errors (`WRONG_SESSION`, `NOT_FOUND`) puts the values back: fix what the error names and call wait again — never ask the human to retype.
 
 A password field masks to `***` in the tree whatever its value, so empty → filled moves the state token but filled → *different* value does not: the masked tree is byte-identical. That is not a stale view. To confirm a secret landed, check the field went from placeholder to `***`, or use `cap`. Nothing value-derived goes in the tree — a hash would be brute-forceable for a short secret and a length leaks the length.
 ### Search / extract (8, 10, 18)
@@ -160,14 +160,14 @@ In MCP Apps hosts (Claude Desktop, ChatGPT, VS Code Copilot), calling `vs_watch`
 
 
 Over MCP, `vs_act` and `vs_open` take `capture: true` to attach a ~400px JPEG thumbnail image block to the result (~100 vision tokens) — visual confirmation without a separate capture round-trip. `VS_THUMBS=1` on the `vs mcp` process forces it on for every act/open (set it in the MCP server config for a visual transcript; costs tokens per action). CLI equivalent: chain `vs capture` when needed.
-| 19 | `vs auth save\|load\|list\|clear <PAGE> <NAME>` | Per-origin cookie+storage blob, AES-256-GCM at rest. |
+| 19 | `vs auth save\|load\|list\|clear <PAGE> <NAME>` | Per-origin blob: cookies (incl. HttpOnly), local + session storage, IndexedDB. AES-256-GCM at rest. `? storage_partial` means a record could not be carried. |
 | - | `vs auth import <NAME> <FILE>` | Import a session captured elsewhere (passkey fallback): log in with a passkey in a real browser, export cookies + local/session storage as a v2 auth-blob JSON, import it, then `auth load` injects it into a headless page. |
 | - | `vs auth webauthn <PAGE>` | Install a virtual WebAuthn authenticator on the page: a pure-JS ES256 software authenticator (no CDP) so passkey registration and login work headlessly. Enable it, then navigate/act as normal; the site's own create()/get() succeed. |
 
 
 ## Optimistic concurrency
 
-Interactive refs the walker cannot see or hit (invisible / zero-size — sites keep hidden duplicates of buttons) carry `hid=1` in the tree; acting on one warns `? hidden_target ref=N`. Prefer the visible duplicate. Sessions and pages survive daemon restarts (rebuilt from SQLite at startup; engine pages recreated lazily on first use; re-`view` for a fresh baseline). Set `VS_CALLER=<stable-name>` in your env to keep the same session across YOUR restarts too — without it, session affinity is keyed to your process id and dies with it.
+Interactive refs the walker cannot see or hit (invisible / zero-size — sites keep hidden duplicates of buttons) carry `hid=1` in the tree; acting on one warns `? hidden_target ref=N`. Prefer the visible duplicate. Sessions and pages survive daemon restarts (rebuilt from SQLite at startup; engine pages recreated lazily on first use; re-`view` for a fresh baseline). The daemon reaps what agents abandon: a page untouched for 30 min drops its web view and goes dormant (the row stays; the next call rebuilds it), and a session untouched for 24 h is closed. Tune with `VS_PAGE_IDLE_SECS` / `VS_SESSION_TTL_SECS`, or `VS_REAP=0` to switch it off. Set `VS_CALLER=<stable-name>` in your env to keep the same session across YOUR restarts too — without it, session affinity is keyed to your process id and dies with it.
 
 Every read returns a state token. Mutations require the token in `--token=<TOK>`. Stale token → `! STALE_TOKEN <new> <reason>`; you re-read and retry. There is no manual locking primitive. Don't bash-batch mutations against the same page without re-reading between them.
 
@@ -182,7 +182,7 @@ If you re-issue the *exact* same `vs act` (same ref, same op, same value, same b
 vs session-open
 PAGE=$(vs open https://app.example.com)
 # ...log in via the page...
-vs auth save "$PAGE" example-prod    # persists cookies + localStorage
+vs auth save "$PAGE" example-prod    # cookies + local/session storage + IndexedDB
 
 # Tomorrow
 vs session-open

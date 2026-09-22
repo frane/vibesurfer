@@ -1,7 +1,7 @@
 //! Lifecycle cells: vs_session_open, vs_session_close, vs_open,
 //! vs_close, vs_view, vs_read, vs_status.
 
-use crate::helpers::{open_fixture, ref_for};
+use crate::helpers::{open_fixture, ref_for, settle};
 use crate::support::{
     assert_ok, body_first, body_rest, each_available_backend, token_of, TestContext,
 };
@@ -350,5 +350,90 @@ fn cell_session_survives_command_substitution() {
             stdout.contains("doc"),
             "expected a tree from view, got:\n{stdout}"
         );
+    }
+}
+
+/// A page nobody is using loses its web view, and comes back when
+/// someone wants it again.
+///
+/// The daemon is auto-spawned and long-lived, and agents die without
+/// calling `session-close` — that is the ordinary way an agent run
+/// ends. One host reached 48 sessions and 162 open pages over four
+/// days, 173 WebKit processes and ~8.6 GB, and the only thing that
+/// ever brought it down was a human noticing the fans.
+#[test]
+fn cell_idle_pages_are_reaped_and_recreated() {
+    for _ in each_available_backend() {
+        // Seconds, not the shipped half-hour: same code path, budget a
+        // cell can wait for.
+        let ctx =
+            TestContext::start_with_env(&[("VS_PAGE_IDLE_SECS", "2"), ("VS_REAP_SWEEP_SECS", "1")]);
+        let (session, page, _t) = open_fixture(&ctx, "/static.html");
+
+        let r = ctx.vs(&["status"]);
+        assert_ok("status", &r);
+        assert!(
+            body_rest(&r).contains("live=1"),
+            "a fresh page holds a web view:\n{}",
+            body_rest(&r)
+        );
+
+        // Wait out the idle window without touching the page.
+        settle(4500);
+        let r = ctx.vs(&["status"]);
+        let body = body_rest(&r);
+        assert!(
+            body.contains("pages=1") && body.contains("live=0"),
+            "the idle page must go dormant, keeping its row:\n{body}"
+        );
+
+        // Dormant is not gone: the next call rebuilds the web view and
+        // the agent sees the page it left.
+        let r = ctx.vs(&["--session", &session, "view", &page, "--full"]);
+        assert_ok("view after reap", &r);
+        assert!(
+            body_rest(&r).contains("Static fixture"),
+            "the rebuilt page is the same page:\n{}",
+            body_rest(&r)
+        );
+        let r = ctx.vs(&["status"]);
+        assert!(
+            body_rest(&r).contains("live=1"),
+            "using it brings the web view back:\n{}",
+            body_rest(&r)
+        );
+    }
+}
+
+/// `vs session-close --idle-for` sweeps what agents left behind, and
+/// spares what is still in use.
+#[test]
+fn cell_session_close_sweeps_idle_sessions() {
+    for _ in each_available_backend() {
+        // Reaping off: this cell is about the manual remedy.
+        let ctx = TestContext::start_with_env(&[("VS_REAP", "0")]);
+        let (stale, _page, _t) = open_fixture(&ctx, "/static.html");
+        settle(2500);
+        // A second session, touched just now.
+        let r = ctx.vs(&["session-open"]);
+        assert_ok("session-open", &r);
+        let fresh = body_first(&r);
+
+        let r = ctx.vs(&["session-close", "--idle-for=2s"]);
+        assert_ok("session-close --idle-for", &r);
+        let swept = body_rest(&r);
+        assert!(
+            swept.contains(&stale),
+            "the idle session must be closed:\n{swept}"
+        );
+        assert!(
+            !swept.contains(&fresh),
+            "a session touched a moment ago must survive:\n{swept}"
+        );
+
+        let r = ctx.vs(&["status"]);
+        let body = body_rest(&r);
+        assert!(!body.contains(&stale), "closed session is gone:\n{body}");
+        assert!(body.contains(&fresh), "live session remains:\n{body}");
     }
 }

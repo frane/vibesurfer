@@ -47,12 +47,14 @@ pub const DEFAULT_USER_AGENT: &str = "";
 pub struct PageHandle(pub u64);
 
 /// What [`Engine::act`] targets on a page.
+///
+/// Only refs reach the engine. A mark is a store concept, scoped to a
+/// session the engine knows nothing about, so the daemon resolves one
+/// to the ref that carries it now before calling in.
 #[derive(Debug, Clone)]
 pub enum ActTarget {
     /// A live ref from the most recent snapshot.
     Ref(Ref),
-    /// A persistent mark, identified by name.
-    Mark(String),
 }
 
 /// Coordinate-addressed input operations: `vs move-to`, `vs click-at`,

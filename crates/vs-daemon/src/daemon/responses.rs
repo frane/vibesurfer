@@ -163,6 +163,10 @@ pub struct LayoutResponse {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthSaveResponse {
     pub name: String,
+    /// Non-empty when the blob is missing something the page had —
+    /// today, IndexedDB records JSON cannot carry. A caller that is
+    /// about to rely on this session should know before it does.
+    pub warnings: Vec<Warning>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

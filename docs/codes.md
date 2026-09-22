@@ -93,3 +93,5 @@ Used by `vs_viewport <preset>`. DPR defaults to 2; override per call.
 | `viewport_changed` | `<W>x<H>`         | Viewport changed; baseline reset. |
 | `idempotent_hit`   | —                 | Repeat call on same `(page, token, args)` returned cached result. |
 | `hidden_target`    | `ref=<N>`         | Acted on a ref the last snapshot marked `hid=1` (invisible or zero-size); the event still dispatched, but re-aim if nothing happened. |
+| `mark_reaimed`     | `ref=<N>`         | `vs_act mark:NAME` found the mark's recorded ref stale and matched the element by role and label instead; the action ran against `ref=N`. Look before the next click. |
+| `storage_partial`  | `indexeddb_records=<N>` | `vs_auth save` could not carry N IndexedDB records into the blob (a Blob, a File, a typed array — JSON has no shape for them). Everything else was saved; a restore of this blob will be missing those records. |

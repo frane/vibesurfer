@@ -44,7 +44,10 @@ fn base_tools() -> Vec<Value> {
         tool("vs_session_open", "Create a vibesurfer session. Writes the active-session pointer.", obj(&[
             ("policy", str_prop("Optional policy id (e.g. \"strict\", \"default\").", false)),
         ])),
-        tool("vs_session_close", "Close the active session.", obj(&[])),
+        tool("vs_session_close", "Close the active session. `all` closes every session in the workspace and `idle_for` (e.g. \"2h\") closes only those untouched that long — the cleanup for sessions left behind by agents that died without closing.", obj(&[
+            ("all", bool_prop("Close every session, not just this caller's.", false)),
+            ("idle_for", str_prop("Close sessions untouched for at least this long (2h, 90m, 30s).", false)),
+        ])),
         tool("vs_open", "Open a page in the active session.", obj(&[
             ("url", str_prop("URL to navigate to.", true)),
             ("capture", bool_prop("Attach a screenshot image block to the result. Default false; VS_THUMBS=1 forces on.", false)),
@@ -64,9 +67,10 @@ fn base_tools() -> Vec<Value> {
             ("page", str_prop("Page id.", true)),
             ("ref", uint_prop("Ref number from a previous vs_view.", true)),
         ])),
-        tool("vs_act", "Perform an action on a ref. Requires the state token from the most recent vs_view (optimistic concurrency).", obj(&[
+        tool("vs_act", "Perform an action on a ref, or on a mark taken earlier with vs_mark. Requires the state token from the most recent vs_view (optimistic concurrency).", obj(&[
             ("page", str_prop("Page id.", true)),
-            ("ref", uint_prop("Ref number.", true)),
+            ("ref", uint_prop("Ref number. Give this or `mark`.", false)),
+            ("mark", str_prop("Mark name, instead of `ref`. Resolves to whatever ref carries the mark now, so it survives a re-render; warns `mark_reaimed` when the ref moved.", false)),
             ("op", str_prop("One of: click, fill, scroll, key, submit, hover, focus.", true)),
             ("value", str_prop("Optional value (text for fill, key chord for key, etc.).", false)),
             ("token", str_prop("State token from the most recent read.", true)),
@@ -256,7 +260,10 @@ pub fn build_cli(name: &str, args: &Value) -> Result<(Cli, CallOpts)> {
         "vs_session_open" => Command::SessionOpen {
             policy: opt_str(args, "policy"),
         },
-        "vs_session_close" => Command::SessionClose,
+        "vs_session_close" => Command::SessionClose {
+            all: opt_bool(args, "all").unwrap_or(false),
+            idle_for: opt_str(args, "idle_for"),
+        },
         "vs_open" => Command::Open {
             url: req_str(args, "url")?,
         },
@@ -277,7 +284,11 @@ pub fn build_cli(name: &str, args: &Value) -> Result<(Cli, CallOpts)> {
         },
         "vs_act" => Command::Act {
             page: req_str(args, "page")?,
-            r: req_u32(args, "ref")?,
+            // Either addressing works; `mark` wins if both are given.
+            r: match opt_str(args, "mark") {
+                Some(name) => format!("mark:{name}"),
+                None => req_u32(args, "ref")?.to_string(),
+            },
             op: req_str(args, "op")?,
             value: opt_str(args, "value"),
             token: req_str(args, "token")?,
