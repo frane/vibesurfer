@@ -62,6 +62,11 @@ pub enum DaemonError {
     #[error("unknown ref: {0}")]
     UnknownRef(u32),
 
+    /// No mark of this name in the session, or its element is no
+    /// longer on the page.
+    #[error("unknown mark: {0}")]
+    UnknownMark(String),
+
     /// The wire request was malformed.
     #[error("bad request: {0}")]
     BadRequest(String),
@@ -107,6 +112,7 @@ impl DaemonError {
                 ],
             ),
             Self::UnknownRef(r) => (ErrorCode::NotFound, vec![format!("ref={r}")]),
+            Self::UnknownMark(name) => (ErrorCode::NotFound, vec![format!("mark={name}")]),
             Self::BadRequest(msg) => (ErrorCode::BadRequest, vec![msg.clone()]),
             Self::PromptFormPending { form, budget_ms } => (
                 ErrorCode::Timeout,

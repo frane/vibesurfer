@@ -5,9 +5,10 @@
 //! no password manager, one field at a time. This module serves a
 //! browser form instead: the daemon listens on `127.0.0.1:<random>`,
 //! mints single-use capability URLs (`/entry/<nonce>`), and a GET
-//! renders every currently-pending entry as one HTML form. Submit
-//! fulfills them all through the same [`PendingQueue`] path the tty
-//! uses.
+//! renders the entries that URL was minted for as one HTML form.
+//! Submit fulfills them through the same [`PendingQueue`] path the
+//! tty uses. A `vs_prompt_form` link is bound to its own form; only
+//! the unscoped `vs pending url` renders whatever is pending.
 //!
 //! Security model: the URL is the auth. Nonces are 256-bit random,
 //! base64url, expire after [`NONCE_TTL`], and are consumed by the
@@ -71,15 +72,21 @@ pub struct WebEntry {
 /// row so a second visit can say "already submitted" instead of the
 /// same 410 an unknown nonce gets — the difference between "the
 /// human is done" and "this link was never yours".
+///
+/// `scope` is the form the link was minted for. A link minted by
+/// `vs_prompt_form` shows that form and nothing else; only the
+/// unscoped `vs pending url` shows whatever is pending.
 struct Nonce {
     expires: Instant,
     spent: bool,
+    scope: Option<String>,
 }
 
 /// What a nonce lookup found.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 enum NonceState {
-    Live,
+    /// Usable. `Some(form)` limits the page to that form's entries.
+    Live(Option<String>),
     Spent,
     Gone,
 }
@@ -103,8 +110,24 @@ impl WebEntry {
         Ok(surface)
     }
 
-    /// Mint a fresh capability URL for this surface.
+    /// Mint a fresh capability URL for whatever is pending.
     pub fn mint(&self) -> String {
+        self.mint_scoped(None)
+    }
+
+    /// Mint a capability URL for one form's entries.
+    ///
+    /// Scoping matters because a form's entries outlive the waiter
+    /// that enqueued them (see [`PendingQueue::wait_form`]). An agent
+    /// that re-enqueues after its wait ran out leaves the first
+    /// form's entries in the queue, and an unscoped page rendered
+    /// those too — the human reopened the link and saw the same
+    /// fields twice, then three times.
+    pub fn mint_form(&self, form: &str) -> String {
+        self.mint_scoped(Some(form.to_string()))
+    }
+
+    fn mint_scoped(&self, scope: Option<String>) -> String {
         let nonce = fresh_nonce();
         {
             let mut guard = self.nonces.lock().unwrap();
@@ -114,6 +137,7 @@ impl WebEntry {
                 Nonce {
                     expires: Instant::now() + NONCE_TTL,
                     spent: false,
+                    scope,
                 },
             );
         }
@@ -170,7 +194,7 @@ impl WebEntry {
                 if consume {
                     n.spent = true;
                 }
-                NonceState::Live
+                NonceState::Live(n.scope.clone())
             }
             None => NonceState::Gone,
         }
@@ -214,7 +238,7 @@ impl WebEntry {
 
         let response: Vec<u8> = match (read_method, path.strip_prefix("/entry/")) {
             ("GET", Some(nonce)) => match self.nonce_state(nonce, false) {
-                NonceState::Live => self.render_form(nonce).into_bytes(),
+                NonceState::Live(scope) => self.render_form(nonce, scope.as_deref()).into_bytes(),
                 NonceState::Spent => spent_page().into_bytes(),
                 NonceState::Gone => unknown_page().into_bytes(),
             },
@@ -225,7 +249,9 @@ impl WebEntry {
                     let mut body = vec![0u8; content_length];
                     reader.read_exact(&mut body)?;
                     match self.nonce_state(nonce, true) {
-                        NonceState::Live => self.submit(&body).into_bytes(),
+                        NonceState::Live(scope) => {
+                            self.submit(&body, scope.as_deref()).into_bytes()
+                        }
                         NonceState::Spent => spent_page().into_bytes(),
                         NonceState::Gone => unknown_page().into_bytes(),
                     }
@@ -263,11 +289,16 @@ impl WebEntry {
         }
     }
 
-    /// GET: every pending entry, one form. Non-secret fields get
-    /// plain text inputs; secret fields get password inputs with
-    /// autocomplete hints so password managers offer to fill them.
-    fn render_form(&self, nonce: &str) -> String {
-        let entries = self.queue.list();
+    /// GET: the entries this link was minted for, one form — one
+    /// form's fields for a scoped link, everything pending for an
+    /// unscoped one. Non-secret fields get plain text inputs; secret
+    /// fields get password inputs with autocomplete hints so password
+    /// managers offer to fill them.
+    fn render_form(&self, nonce: &str, scope: Option<&str>) -> String {
+        let mut entries = self.queue.list();
+        if let Some(form) = scope {
+            entries.retain(|e| e.form.as_deref() == Some(form));
+        }
         if entries.is_empty() {
             return http_page(
                 200,
@@ -291,21 +322,40 @@ impl WebEntry {
                  <input id=\"{id}\" name=\"{id}\" type=\"{ty}\" autocomplete=\"{ac}\" required>\n"
             );
         }
+        // `formnovalidate` on cancel, or the browser's own "please
+        // fill this in" would block the one button whose whole point
+        // is that the human does not want to fill it in.
         let body = format!(
             "<p>An agent is waiting on the value{} below. Values go straight to the local \
              vibesurfer daemon and are filled into the page there — the agent never sees \
              what you type.</p>\n\
              <form method=\"post\" action=\"/entry/{nonce}\" autocomplete=\"on\">\n\
-             {rows}<button type=\"submit\">Submit</button>\n</form>",
+             {rows}<button type=\"submit\">Submit</button>\n\
+             <button type=\"submit\" name=\"{CANCEL_FIELD}\" value=\"1\" formnovalidate \
+             class=\"secondary\">Cancel</button>\n</form>",
             if entries.len() == 1 { "" } else { "s" },
         );
         http_page(200, "vibesurfer — input requested", &body)
     }
 
-    /// POST: fulfill each `id=value` pair that names a live entry.
-    fn submit(&self, body: &[u8]) -> String {
+    /// POST: fulfill each `id=value` pair that names a live entry
+    /// this link covers, or cancel those entries if the human pressed
+    /// Cancel. A scoped link touches only its own form, so a
+    /// submitted id from some other form is ignored rather than
+    /// answered with values the human was not shown.
+    fn submit(&self, body: &[u8], scope: Option<&str>) -> String {
+        let pairs = parse_form_urlencoded(body);
+        if pairs.iter().any(|(k, _)| k == CANCEL_FIELD) {
+            return self.cancel_scope(scope);
+        }
         let mut fulfilled = 0usize;
-        for (key, value) in parse_form_urlencoded(body) {
+        for (key, value) in pairs {
+            if let Some(form) = scope {
+                match self.queue.peek(&key) {
+                    Some(e) if e.form.as_deref() == Some(form) => {}
+                    _ => continue,
+                }
+            }
             if self.queue.fulfill(&key, value) {
                 fulfilled += 1;
             }
@@ -329,7 +379,47 @@ impl WebEntry {
             )
         }
     }
+
+    /// Cancel the entries this link covers, and tell the agent now.
+    ///
+    /// Without this the human's only way out of a form they did not
+    /// want to fill was to close the tab, which says nothing to
+    /// anyone: the agent stayed parked until its budget ran out and
+    /// then could not tell a human who had walked away from one still
+    /// typing, and the entries sat in the queue for [`ORPHAN_TTL`].
+    /// A cancelled form fails `vs_prompt_form_wait` immediately with
+    /// an answer the agent can act on.
+    fn cancel_scope(&self, scope: Option<&str>) -> String {
+        let mut cancelled = 0usize;
+        for e in self.queue.list() {
+            if scope.is_some_and(|form| e.form.as_deref() != Some(form)) {
+                continue;
+            }
+            if self.queue.cancel(&e.id) {
+                cancelled += 1;
+            }
+        }
+        if cancelled == 0 {
+            return http_page(
+                200,
+                "vibesurfer — nothing to cancel",
+                "<p>Those entries were no longer pending (already fulfilled, cancelled, \
+                 or timed out).</p>",
+            );
+        }
+        http_page(
+            200,
+            "vibesurfer — cancelled",
+            "<p>Nothing was sent. The agent has been told you cancelled — you can close \
+             this tab.</p>",
+        )
+    }
 }
+
+/// The Cancel button's field name. `p_`-prefixed entry ids cannot
+/// collide with it, so a submitted field can never be mistaken for
+/// the cancel signal.
+const CANCEL_FIELD: &str = "__vs_cancel";
 
 fn fresh_nonce() -> String {
     let mut buf = [0u8; 32];
@@ -514,6 +604,8 @@ fn http_page(status: u16, title: &str, body_html: &str) -> String {
          label{{display:block;margin:1rem 0 .25rem;font-weight:600}}\
          input{{width:100%;padding:.5rem;font-size:1rem;border:1px solid #bbb;border-radius:4px;box-sizing:border-box}}\
          button{{margin-top:1.25rem;padding:.5rem 1.5rem;font-size:1rem}}\
+         button.secondary{{margin-left:.5rem;background:none;border:1px solid #bbb;\
+         border-radius:4px;color:inherit}}\
          </style></head><body><h1 style=\"font-size:1.2rem\">{title}</h1>{body_html}</body></html>",
         title = escape_html(title),
     );
@@ -598,12 +690,12 @@ mod tests {
         for _ in 0..3 {
             assert!(matches!(
                 surface.nonce_state(&nonce, false),
-                NonceState::Live
+                NonceState::Live(None)
             ));
         }
         assert!(matches!(
             surface.nonce_state(&nonce, true),
-            NonceState::Live
+            NonceState::Live(None)
         ));
         assert!(matches!(
             surface.nonce_state(&nonce, false),
@@ -617,6 +709,62 @@ mod tests {
             surface.nonce_state("nope", false),
             NonceState::Gone
         ));
+    }
+
+    /// A form link shows its own fields and no others.
+    ///
+    /// Entries survive a waiter that ran out of budget, so an agent
+    /// that re-asks leaves the earlier form's entries pending. The
+    /// unscoped page rendered the whole queue, and the human watched
+    /// the same two fields pile up every time they reopened the link.
+    #[test]
+    fn a_form_link_renders_only_its_own_fields() {
+        let queue = PendingQueue::new();
+        let surface = WebEntry {
+            queue: queue.clone(),
+            frame: Arc::new(|_| Err("no engine".into())),
+            port: 0,
+            nonces: Mutex::new(HashMap::new()),
+            live: Mutex::new(HashMap::new()),
+        };
+        let entry = |id: &str, form: &str, label: &str| {
+            queue.enqueue(super::super::pending::PendingEntry {
+                id: id.into(),
+                page: "p_1".into(),
+                r: 1,
+                message: label.into(),
+                secret: false,
+                token: "0000000000000000".into(),
+                group: None,
+                form: Some(form.into()),
+                form_index: 0,
+                created_at: Instant::now(),
+            });
+        };
+        entry("a", "f_old", "Account number (stale)");
+        entry("b", "f_new", "Account number");
+
+        let html = surface.render_form("n", Some("f_new"));
+        assert!(html.contains("Account number"), "own field:\n{html}");
+        assert!(
+            !html.contains("stale"),
+            "another form's field must not appear:\n{html}"
+        );
+
+        // The unscoped link (`vs pending url`) still shows the lot.
+        let all = surface.render_form("n", None);
+        assert!(all.contains("stale"), "unscoped page:\n{all}");
+
+        // A scoped submit ignores an id outside its form.
+        let done = surface.submit(b"a=leak", Some("f_new"));
+        assert!(done.contains("nothing submitted"), "submit page:\n{done}");
+        assert!(queue.peek("a").is_some(), "other form's entry untouched");
+
+        // So does a cancel: it ends its own form and no one else's.
+        let page = surface.submit(b"__vs_cancel=1", Some("f_new"));
+        assert!(page.contains("cancelled"), "cancel page:\n{page}");
+        assert!(queue.peek("b").is_none(), "own form cancelled");
+        assert!(queue.peek("a").is_some(), "other form still pending");
     }
 
     #[test]

@@ -182,12 +182,6 @@ impl Engine for TestEngine {
                     });
                 }
             }
-            ActTarget::Mark(name) => {
-                return Err(EngineError::NotFound {
-                    kind: "mark",
-                    id: name,
-                });
-            }
         }
         // TestEngine doesn't actually mutate anything in response to
         // actions; it just acknowledges the call. `Fill` and `Key` carry

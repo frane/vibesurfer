@@ -1,6 +1,8 @@
 //! Session and page lifecycle: `vs_session_open`, `vs_session_close`,
 //! `vs_open`, `vs_close`.
 
+use std::time::Instant;
+
 use vs_protocol::StateToken;
 
 use super::audit::AuditCtx;
@@ -69,6 +71,50 @@ impl Daemon {
             }
             Ok(SessionCloseResponse)
         })
+    }
+
+    /// Close every session, or every session untouched for at least
+    /// `idle_for`. Returns the ids closed.
+    ///
+    /// The single-session close assumes a caller tidying up after
+    /// itself, which is exactly what a crashed agent never does. This
+    /// is the remedy for what they leave behind, and it is a remedy a
+    /// human can aim: `--idle-for=2h` spares whatever is still in use,
+    /// where the previous answer — kill the daemon — took live
+    /// authenticated pages with it.
+    pub fn session_close_sweep(
+        &self,
+        idle_for: Option<std::time::Duration>,
+    ) -> Result<Vec<String>> {
+        let now = Instant::now();
+        let targets: Vec<String> = {
+            let sessions = self.inner.sessions.lock().expect("poisoned");
+            sessions
+                .iter()
+                .filter(|(_, s)| {
+                    idle_for.is_none_or(|d| {
+                        let newest = s
+                            .pages
+                            .values()
+                            .map(|p| p.last_touched)
+                            .fold(s.last_touched, Instant::max);
+                        now.saturating_duration_since(newest) >= d
+                    })
+                })
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        let mut closed = Vec::new();
+        for id in targets {
+            match self.session_close(&id) {
+                Ok(_) => closed.push(id),
+                // One wedged session must not stop the sweep; the
+                // caller is reaching for this because things are
+                // already in a bad state.
+                Err(e) => tracing::warn!(session = %id, error = %e, "sweep close failed"),
+            }
+        }
+        Ok(closed)
     }
 
     pub fn open(&self, session_id: &str, url: &str) -> Result<OpenResponse> {

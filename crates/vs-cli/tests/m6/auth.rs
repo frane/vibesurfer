@@ -238,3 +238,175 @@ fn cell_auth_webauthn_virtual_authenticator() {
         );
     }
 }
+
+/// 36b. `vs auth save` / `load` carry IndexedDB.
+///
+/// The blob held cookies plus local and session storage, and nothing
+/// else. A site that keeps its session in IndexedDB — a local-first
+/// store, a Firebase or Supabase client — restored as logged out on a
+/// blob that looked complete, which is the worst shape for this to
+/// fail in: `auth load` said ok and the next call acted as though it
+/// had a session. The storage fixture writes one record into
+/// `vibesurfer_demo_db`; it has to come back on a page that never saw
+/// the fixture's script.
+#[test]
+fn cell_auth_carries_indexeddb() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start_with_env(&[("VS_IDB_TRACE", "1")]);
+        let (_s, page, _t) = open_fixture(&ctx, "/storage.html");
+        // The fixture's write is async; it flags itself when done.
+        // Wait on that and prove the record is really there, because a
+        // save that runs first captures an origin with no databases
+        // and every later step then fails somewhere else entirely.
+        assert_ok(
+            "wait for the fixture's write",
+            &ctx.vs(&["wait", &page, "text", "Storage ready.", "--timeout=15000"]),
+        );
+        let written = read_idb_item(&ctx, &page);
+        assert!(
+            written.contains("first item"),
+            "fixture must have written the record before the save, got {written:?}"
+        );
+
+        let r = ctx.vs(&["auth", "save", &page, "idb-fixture"]);
+        assert_ok("auth save", &r);
+        // A blob that quietly left the databases out is the failure
+        // this cell exists to catch, and it says so on the way out.
+        assert!(
+            !r.stdout.contains("storage_partial"),
+            "the save must carry the database, got {:?}",
+            r.stdout
+        );
+
+        // IndexedDB is per-origin and the fixture server is one
+        // origin, so a second page would simply still see the
+        // database. Close the writer (it holds a connection, which
+        // blocks a delete) and wipe it: what comes back after that can
+        // only have come back through the blob.
+        assert_ok("close writer", &ctx.vs(&["close", &page]));
+        let r = ctx.vs(&["open", &ctx.url("/static.html")]);
+        assert_ok("open plain page", &r);
+        let plain = body_first(&r);
+        delete_idb(&ctx, &plain);
+        let before = read_idb_item(&ctx, &plain);
+        assert!(
+            before.contains("none"),
+            "the database must be gone before the load, got {before:?}"
+        );
+
+        let r = ctx.vs(&["auth", "load", &plain, "idb-fixture"]);
+        assert_ok("auth load", &r);
+        // Each read opens its own connection, and on a loaded machine
+        // a freshly committed write is not always visible to the next
+        // one immediately, so give it a few attempts before calling it
+        // a lost record.
+        let mut after = String::new();
+        for _ in 0..10 {
+            after = read_idb_item(&ctx, &plain);
+            if after.contains("first item") {
+                break;
+            }
+        }
+        assert!(
+            after.contains("first item"),
+            "the restored record must be readable, got {after:?}; load said {:?}; origin has {}; daemon log: {}",
+            r.stdout,
+            describe_idb(&ctx, &plain),
+            std::fs::read_to_string(ctx.home_path().join("daemon.log"))
+                .unwrap_or_default()
+                .lines()
+                .filter(|l| l.contains("idb"))
+                .collect::<Vec<_>>()
+                .join(" | ")
+        );
+    }
+}
+
+/// Delete the fixture's database and wait for the delete to land.
+fn delete_idb(ctx: &TestContext, page: &str) {
+    let out = poll_idb(
+        ctx,
+        page,
+        "del",
+        "\
+          var rq = indexedDB.deleteDatabase('vibesurfer_demo_db');\
+          rq.onsuccess = function(){ done('gone'); };\
+          rq.onerror = function(){ done('gone'); };\
+          rq.onblocked = function(){ done('blocked'); };",
+    );
+    assert!(
+        !out.contains("blocked"),
+        "delete blocked by a live connection"
+    );
+}
+
+/// Read `items` key 1 out of the fixture's database. `open` with no
+/// version would create the database if it were missing, so a missing
+/// store reports "none" rather than pretending.
+fn read_idb_item(ctx: &TestContext, page: &str) -> String {
+    poll_idb(ctx, page, "read", "\
+          var rq = indexedDB.open('vibesurfer_demo_db');\
+          rq.onerror = function(){ done('none'); };\
+          rq.onsuccess = function(){\
+            var db = rq.result;\
+            if (!db.objectStoreNames.contains('items')) { done('none'); db.close(); return; }\
+            var g = db.transaction('items','readonly').objectStore('items').get(1);\
+            g.onsuccess = function(){ done(g.result ? JSON.stringify(g.result) : 'none'); db.close(); };\
+            g.onerror = function(){ done('none'); db.close(); };\
+          };")
+}
+
+/// Run an async IndexedDB snippet on the page and poll for its answer.
+///
+/// The engines cannot await inside one eval, so the snippet parks its
+/// result on a page global and later evals read it. Each call gets its
+/// own global: sharing one meant a later read could pick up an earlier
+/// call's answer, which reads exactly like a restore that did not
+/// happen.
+fn poll_idb(ctx: &TestContext, page: &str, kind: &str, snippet: &str) -> String {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let slot = format!("__vsProbe_{kind}_{}", SEQ.fetch_add(1, Ordering::Relaxed));
+    let js = format!(
+        "(function(){{\
+            if (!window.{slot}) {{\
+              window.{slot} = 'pending';\
+              var done = function(v){{ window.{slot} = v; }};\
+              {snippet}\
+            }}\
+            return window.{slot};\
+        }})()"
+    );
+    for _ in 0..40 {
+        let out = eval_js(ctx, page, &js);
+        if !out.contains("pending") {
+            return out;
+        }
+    }
+    "pending".into()
+}
+
+/// What the origin actually holds, for a failure message: database
+/// names, versions, and each one's object stores.
+fn describe_idb(ctx: &TestContext, page: &str) -> String {
+    poll_idb(
+        ctx,
+        page,
+        "desc",
+        "\
+          indexedDB.databases().then(function(list){\
+            var out = [], left = list.length;\
+            if (!left) { done('no databases'); return; }\
+            list.forEach(function(d){\
+              var rq = indexedDB.open(d.name);\
+              rq.onsuccess = function(){\
+                out.push(d.name + '@v' + rq.result.version + ' stores=' + \
+                  Array.prototype.slice.call(rq.result.objectStoreNames).join(','));\
+                rq.result.close();\
+                if (--left === 0) done(out.join(' | '));\
+              };\
+              rq.onerror = function(){ if (--left === 0) done(out.join(' | ')); };\
+            });\
+          }).catch(function(e){ done('databases() failed: ' + e); });",
+    )
+}

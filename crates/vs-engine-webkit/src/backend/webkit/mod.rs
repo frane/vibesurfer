@@ -716,15 +716,21 @@ impl Engine for WkBackend {
         // dropped them). localStorage/sessionStorage: JS shim, which
         // is the right surface for those.
         let cookies = cookie_store::get_all_cookies(&web_view)?;
-        let storage = super::common::run_save_storage_only(move |js, budget| {
-            eval_js_string(&web_view, js, budget)
-        })?;
+        let storage = super::common::run_save_storage_only(
+            move |js, budget| eval_js_string(&web_view, js, budget),
+            || {
+                let _ = run_loop_until(|| false, Duration::from_millis(50));
+            },
+        )?;
         let blob = super::auth::AuthBlobV2 {
             version: 2,
             url: storage.url,
             origin: storage.origin,
             cookies,
             local_storage: storage.local_storage,
+            indexed_db: storage.indexed_db,
+            indexed_db_skipped: storage.indexed_db_skipped,
+            indexed_db_incomplete: storage.indexed_db_incomplete,
             session_storage: storage.session_storage,
         };
         super::auth::encode(&blob)
@@ -741,6 +747,10 @@ impl Engine for WkBackend {
             move |js, budget| eval_js_string(&web_view, js, budget),
             &parsed.local_storage,
             &parsed.session_storage,
+            &parsed.indexed_db,
+            || {
+                let _ = run_loop_until(|| false, Duration::from_millis(50));
+            },
         )
     }
 

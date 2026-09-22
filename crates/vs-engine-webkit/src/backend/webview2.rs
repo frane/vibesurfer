@@ -891,14 +891,32 @@ impl Engine for Webview2Backend {
         // HttpOnly entries are captured. localStorage/sessionStorage:
         // JS shim.
         let cookies = wv2_cookies::get_all_cookies(&web_view)?;
-        let storage =
-            super::common::run_save_storage_only(move |js, _budget| execute_script(&web_view, js))?;
+        let storage = super::common::run_save_storage_only(
+            move |js, _budget| execute_script(&web_view, js),
+            || {
+                // Same pump as `run_wait`: WebView2's callbacks only
+                // run when this thread dispatches its messages.
+                use windows::Win32::UI::WindowsAndMessaging::{
+                    DispatchMessageW, PeekMessageW, MSG, PM_REMOVE,
+                };
+                let mut msg = MSG::default();
+                unsafe {
+                    while PeekMessageW(&raw mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                        DispatchMessageW(&raw const msg);
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            },
+        )?;
         let blob = super::auth::AuthBlobV2 {
             version: 2,
             url: storage.url,
             origin: storage.origin,
             cookies,
             local_storage: storage.local_storage,
+            indexed_db: storage.indexed_db,
+            indexed_db_skipped: storage.indexed_db_skipped,
+            indexed_db_incomplete: storage.indexed_db_incomplete,
             session_storage: storage.session_storage,
         };
         super::auth::encode(&blob)
@@ -913,6 +931,21 @@ impl Engine for Webview2Backend {
             move |js, _budget| execute_script(&web_view, js),
             &parsed.local_storage,
             &parsed.session_storage,
+            &parsed.indexed_db,
+            || {
+                // Same pump as `run_wait`: WebView2's callbacks only
+                // run when this thread dispatches its messages.
+                use windows::Win32::UI::WindowsAndMessaging::{
+                    DispatchMessageW, PeekMessageW, MSG, PM_REMOVE,
+                };
+                let mut msg = MSG::default();
+                unsafe {
+                    while PeekMessageW(&raw mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                        DispatchMessageW(&raw const msg);
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            },
         )
     }
 

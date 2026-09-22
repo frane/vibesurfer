@@ -161,21 +161,20 @@ impl Daemon {
             // duplicate — the click still dispatches (JS path), but
             // warn so the agent knows to re-aim if nothing happens.
             let mut warnings = Vec::new();
-            if let vs_engine_webkit::ActTarget::Ref(r) = &target {
-                let hidden = {
-                    let sessions = self.inner.sessions.lock().expect("poisoned");
-                    sessions
-                        .get(&session_id)
-                        .and_then(|s| s.pages.get(&page_id))
-                        .and_then(|p| p.find_node(*r))
-                        .is_some_and(|n| n.attrs.get("hid").is_some_and(|v| v == "1"))
-                };
-                if hidden {
-                    warnings.push(Warning::with_args(
-                        WarningCode::HiddenTarget,
-                        vec![format!("ref={}", r.0)],
-                    ));
-                }
+            let vs_engine_webkit::ActTarget::Ref(r) = &target;
+            let hidden = {
+                let sessions = self.inner.sessions.lock().expect("poisoned");
+                sessions
+                    .get(&session_id)
+                    .and_then(|s| s.pages.get(&page_id))
+                    .and_then(|p| p.find_node(*r))
+                    .is_some_and(|n| n.attrs.get("hid").is_some_and(|v| v == "1"))
+            };
+            if hidden {
+                warnings.push(Warning::with_args(
+                    WarningCode::HiddenTarget,
+                    vec![format!("ref={}", r.0)],
+                ));
             }
             let tree = self
                 .inner
@@ -351,19 +350,59 @@ impl Daemon {
             let s = sessions
                 .get(sid)
                 .ok_or_else(|| DaemonError::UnknownSession(sid.to_string()))?;
-            writeln!(out, "session\t{sid}\tpages={}", s.pages.len()).ok();
+            writeln!(
+                out,
+                "session\t{sid}\tpages={}\tlive={}",
+                s.pages.len(),
+                live_pages(s)
+            )
+            .ok();
             for (page_id, page) in &s.pages {
                 let token = page.last_token.map(|t| t.to_string()).unwrap_or_default();
-                writeln!(out, "page\t{page_id}\turl={}\ttoken={token}", page.url).ok();
+                writeln!(
+                    out,
+                    "page\t{page_id}\turl={}\ttoken={token}\tlive={}\tidle={}s",
+                    page.url,
+                    u8::from(page.engine_handle.is_some()),
+                    page.last_touched.elapsed().as_secs()
+                )
+                .ok();
             }
         } else {
-            writeln!(out, "workspace\tsessions={}", sessions.len()).ok();
+            // `live` is the number that costs: every live page is a web
+            // view and its processes. Workspaces reached 48 sessions
+            // and 162 pages on a machine nobody could work on, and
+            // `sessions=48` on its own read as an ordinary number.
+            let pages: usize = sessions.values().map(|s| s.pages.len()).sum();
+            let live: usize = sessions.values().map(live_pages).sum();
+            writeln!(
+                out,
+                "workspace\tsessions={}\tpages={pages}\tlive={live}",
+                sessions.len()
+            )
+            .ok();
             for (id, s) in sessions.iter() {
-                writeln!(out, "session\t{id}\tpages={}", s.pages.len()).ok();
+                writeln!(
+                    out,
+                    "session\t{id}\tpages={}\tlive={}\tidle={}s",
+                    s.pages.len(),
+                    live_pages(s),
+                    s.last_touched.elapsed().as_secs()
+                )
+                .ok();
             }
         }
         Ok(out)
     }
+}
+
+/// How many of a session's pages still hold a web view. The rest are
+/// dormant: rows the daemon can rebuild on demand, costing nothing.
+fn live_pages(s: &crate::daemon::SessionState) -> usize {
+    s.pages
+        .values()
+        .filter(|p| p.engine_handle.is_some())
+        .count()
 }
 
 /// First bot-challenge node in `tree`, as `(provider, state)`.

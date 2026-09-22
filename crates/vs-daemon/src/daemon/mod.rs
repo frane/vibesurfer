@@ -18,6 +18,7 @@ mod engine_ops;
 mod lifecycle;
 mod page_ops;
 pub mod pending;
+pub(crate) mod reaper;
 mod record;
 mod store_ops;
 pub mod webentry;
@@ -47,12 +48,16 @@ pub use responses::{
 #[derive(Debug)]
 pub(crate) struct SessionState {
     pub(crate) pages: HashMap<String, PageState>,
+    /// When a primitive last addressed this session. The reaper reads
+    /// it; a session with no pages has nothing else to go on.
+    pub(crate) last_touched: Instant,
 }
 
 impl SessionState {
     pub(crate) fn new() -> Self {
         Self {
             pages: HashMap::new(),
+            last_touched: Instant::now(),
         }
     }
 }
@@ -242,6 +247,9 @@ impl Daemon {
         session_id: &str,
         page_id: &str,
     ) -> Result<vs_engine_webkit::PageHandle> {
+        // Every engine-touching primitive comes through here, so this
+        // is where "still in use" is recorded for the reaper.
+        self.touch(session_id, Some(page_id));
         let url = {
             let sessions = self.inner.sessions.lock().expect("poisoned");
             let session = sessions
@@ -295,6 +303,9 @@ impl Daemon {
     }
 
     pub(crate) fn current_token(&self, session_id: &str, page_id: &str) -> Result<StateToken> {
+        // The other choke point: store-only primitives read a token
+        // without ever asking the engine for a handle.
+        self.touch(session_id, Some(page_id));
         let sessions = self.inner.sessions.lock().expect("poisoned");
         let page = sessions
             .get(session_id)
@@ -683,9 +694,11 @@ impl Daemon {
         Ok(resp.token)
     }
 
-    /// Mint a browser entry URL for the pending queue, starting the
-    /// loopback web surface on first use. The page at the URL renders
-    /// every pending entry as a form; submitting fulfills them.
+    /// Mint an unscoped browser entry URL for the pending queue,
+    /// starting the loopback web surface on first use. The page at
+    /// the URL renders every pending entry as a form; submitting
+    /// fulfills them. Form links are scoped instead
+    /// ([`webentry::WebEntry::mint_form`]).
     pub fn web_entry_url(&self) -> Result<String> {
         Ok(self.web_surface()?.mint())
     }
@@ -772,6 +785,12 @@ impl Daemon {
         if fields.is_empty() {
             return Err(DaemonError::BadRequest("vs_prompt_form: no fields".into()));
         }
+        // An identical ask on the same page supersedes the earlier
+        // one: its waiter gave up, nobody else holds its id, and
+        // leaving it queued put a second copy of the same fields in
+        // front of the human with nothing to tell them apart.
+        let refs: Vec<u32> = fields.iter().map(|(r, _, _)| r.0).collect();
+        self.inner.pending.supersede(page_id, &refs);
         let form_id = pending::new_form_id();
         for (i, (r, label, secret)) in fields.into_iter().enumerate() {
             self.inner.pending.enqueue(pending::PendingEntry {
@@ -787,7 +806,11 @@ impl Daemon {
                 created_at: std::time::Instant::now(),
             });
         }
-        let url = self.web_entry_url()?;
+        // Scoped to this form: the previous form's entries stay in
+        // the queue until they are collected or reaped, and an
+        // unscoped link rendered those too — every re-enqueue grew
+        // the page by another copy of the fields.
+        let url = self.web_surface()?.mint_form(&form_id);
         Ok((form_id, url))
     }
 

@@ -21,7 +21,11 @@ jobs:
   mac:
     name: Mac (real WKWebView)
     runs-on: macos-latest
-    timeout-minutes: 20
+    # 30, matching Linux. The suite grew past what 20 allowed: the Mac
+    # job ran the whole 89-cell WKWebView pass and was then cut off
+    # mid-"Workspace tests", which reads as a cancelled gate rather
+    # than as the clock it actually was.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: ilammy/setup-nasm@v1  # openh264 (vs-record) builds from source

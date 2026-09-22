@@ -73,6 +73,11 @@ pub async fn serve(
     }
     tracing::info!(?path, "vibesurfer daemon listening");
 
+    // Callers die without closing anything — a crashed or killed agent
+    // never reaches `vs_session_close` — so the daemon reaps what they
+    // leave behind. See `daemon::reaper`.
+    crate::daemon::reaper::spawn(&daemon);
+
     let daemon = Arc::new(daemon);
     loop {
         tokio::select! {

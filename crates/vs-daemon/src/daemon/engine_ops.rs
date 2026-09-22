@@ -322,10 +322,35 @@ impl Daemon {
             let key = self.require_master_key()?;
             let engine_handle = self.engine_handle_for(session_id, page_id)?;
             let blob = self.inner.engine.save_auth(engine_handle)?;
+            // The engine counts what it could not carry out of
+            // IndexedDB (a Blob, a typed array). Read it back off the
+            // blob rather than widening the engine's return type.
+            let meta = serde_json::from_slice::<serde_json::Value>(&blob.bytes).ok();
+            let field = |k: &str| meta.as_ref().and_then(|v| v.get(k).cloned());
+            let skipped = field("indexedDbSkipped")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let incomplete = field("indexedDbIncomplete")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let mut store = self.inner.store.lock().expect("poisoned");
             store.save_auth(name, key, &blob.bytes)?;
+            let mut warnings = Vec::new();
+            if skipped > 0 {
+                warnings.push(Warning::with_args(
+                    WarningCode::StoragePartial,
+                    vec![format!("indexeddb_records={skipped}")],
+                ));
+            }
+            if incomplete {
+                warnings.push(Warning::with_args(
+                    WarningCode::StoragePartial,
+                    vec!["indexeddb=unfinished".into()],
+                ));
+            }
             Ok(AuthSaveResponse {
                 name: name.to_string(),
+                warnings,
             })
         })
     }
@@ -348,6 +373,7 @@ impl Daemon {
             self.inner.engine.enable_webauthn(engine_handle)?;
             Ok(AuthSaveResponse {
                 name: "webauthn".to_string(),
+                warnings: Vec::new(),
             })
         })
     }
@@ -378,6 +404,7 @@ impl Daemon {
             store.save_auth(name, key, &bytes)?;
             Ok(AuthSaveResponse {
                 name: name.to_string(),
+                warnings: Vec::new(),
             })
         })
     }

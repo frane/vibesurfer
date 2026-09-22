@@ -260,6 +260,153 @@ fn cell_prompt_form_survives_a_failed_fill() {
     }
 }
 
+/// A form link shows its own fields and nothing else.
+///
+/// A form outlives a waiter that ran out of budget, so an agent that
+/// asks again leaves the first form's entries pending. While the
+/// entry page rendered the whole queue, each re-ask grew the page by
+/// another copy of the fields: the human reopened the link and found
+/// the same two inputs twice, then three times, with no way to tell
+/// which pair the agent was waiting on.
+#[test]
+fn cell_prompt_form_link_is_scoped_to_its_form() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/form.html");
+        let r = ctx.vs(&["view", &page, "--full"]);
+        let body = body_rest(&r);
+        let token = token_of(&r);
+        let tf_refs: Vec<u32> = body
+            .lines()
+            .filter_map(|l| {
+                let mut it = l.trim_start().splitn(3, ' ');
+                let n = it.next()?.parse::<u32>().ok()?;
+                (it.next()? == "tf").then_some(n)
+            })
+            .collect();
+        let (n_email, n_password) = (tf_refs[0], tf_refs[1]);
+
+        let enqueue = || {
+            let r = ctx.vs(&[
+                "prompt-form",
+                &page,
+                &format!("--field={n_email}=Work email"),
+                &format!("--field={n_password}=Password,secret"),
+                &format!("--token={token}"),
+                "--no-wait",
+            ]);
+            assert_ok("prompt-form enqueue", &r);
+            let b = body_rest(&r);
+            (body_kv(&b, "form"), body_kv(&b, "url"))
+        };
+        let inputs = |html: &str| html.matches("<input ").count();
+
+        let (form_one, first) = enqueue();
+        let (_, html) = http(&first, "GET", None);
+        assert_eq!(inputs(&html), 2, "first form page:\n{html}");
+
+        // The agent's wait ran out and it asked again. The new link
+        // shows its own two fields and nothing else.
+        let (_, second) = enqueue();
+        let (_, html) = http(&second, "GET", None);
+        assert_eq!(inputs(&html), 2, "re-asked form page:\n{html}");
+
+        // The superseded form is gone rather than lingering for its
+        // orphan TTL: it is off the pending list, its link says so,
+        // and the id reads as cancelled instead of still waiting.
+        let r = ctx.vs(&["pending", "list"]);
+        assert_ok("pending list", &r);
+        let rows = body_rest(&r).lines().filter(|l| !l.is_empty()).count();
+        assert_eq!(rows, 2, "only the live form is queued:\n{}", body_rest(&r));
+        let (_, html) = http(&first, "GET", None);
+        assert!(
+            html.contains("No input is currently requested"),
+            "superseded link:\n{html}"
+        );
+        let r = ctx.vs(&["prompt-form-wait", &form_one, "--timeout-ms=200"]);
+        assert!(
+            r.stdout.contains("cancelled"),
+            "superseded form must read as cancelled, got {:?}",
+            r.stdout
+        );
+
+        // The unscoped `vs pending url` page agrees: two fields, not
+        // four. It is the other door onto the same queue.
+        let r = ctx.vs(&["pending", "url"]);
+        assert_ok("pending url", &r);
+        let (_, html) = http(&body_kv(&body_rest(&r), "url"), "GET", None);
+        assert_eq!(inputs(&html), 2, "unscoped page after a re-ask:\n{html}");
+    }
+}
+
+/// The human can say no from the browser, and the agent hears it.
+///
+/// Closing the tab told nobody anything: the agent stayed parked
+/// until its budget ran out, unable to tell a human who had walked
+/// away from one still typing, and the entries sat in the queue for
+/// their orphan TTL. Cancel ends the form at once, and the wait comes
+/// back `cancelled` rather than `still waiting`.
+#[test]
+fn cell_prompt_form_cancel_from_the_browser() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/form.html");
+        let r = ctx.vs(&["view", &page, "--full"]);
+        let body = body_rest(&r);
+        let token = token_of(&r);
+        let tf_refs: Vec<u32> = body
+            .lines()
+            .filter_map(|l| {
+                let mut it = l.trim_start().splitn(3, ' ');
+                let n = it.next()?.parse::<u32>().ok()?;
+                (it.next()? == "tf").then_some(n)
+            })
+            .collect();
+
+        let r = ctx.vs(&[
+            "prompt-form",
+            &page,
+            &format!("--field={}=Work email", tf_refs[0]),
+            &format!("--field={}=Password,secret", tf_refs[1]),
+            &format!("--token={token}"),
+            "--no-wait",
+        ]);
+        assert_ok("prompt-form enqueue", &r);
+        let b = body_rest(&r);
+        let (form_id, url) = (body_kv(&b, "form"), body_kv(&b, "url"));
+
+        let (_, html) = http(&url, "GET", None);
+        assert!(
+            html.contains("Cancel"),
+            "form page offers a way out:\n{html}"
+        );
+
+        let (status, done) = http(&url, "POST", Some("__vs_cancel=1"));
+        assert!(status.contains("200"), "POST cancel: {status}");
+        assert!(done.contains("Nothing was sent"), "cancel page:\n{done}");
+
+        let r = ctx.vs(&["prompt-form-wait", &form_id, "--timeout-ms=15000"]);
+        assert!(
+            r.stdout.contains("cancelled"),
+            "wait must report the cancellation, got {:?}",
+            r.stdout
+        );
+        let r = ctx.vs(&["pending", "list"]);
+        assert!(
+            body_rest(&r).trim().is_empty(),
+            "cancelled form leaves the queue:\n{}",
+            body_rest(&r)
+        );
+
+        // Nothing was typed, so nothing was filled.
+        let email = eval_js(&ctx, &page, "document.getElementById('email').value");
+        assert!(
+            email.contains("\"\"") || email.trim().is_empty(),
+            "got {email:?}"
+        );
+    }
+}
+
 /// `vs pending url` mints a URL even with nothing queued, and the
 /// page says so instead of erroring.
 #[test]

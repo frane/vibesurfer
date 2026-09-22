@@ -427,7 +427,7 @@ pub(super) fn handle_auth(daemon: &Daemon, req: &Request) -> String {
                 );
             };
             match daemon.enable_webauthn(&session_id, &page_id) {
-                Ok(AuthSaveResponse { name }) => {
+                Ok(AuthSaveResponse { name, .. }) => {
                     format!("{}{name}\n", ResponseHead::ok(StateToken::ZERO).encode())
                 }
                 Err(e) => format_daemon_error(&e),
@@ -456,7 +456,7 @@ pub(super) fn handle_auth(daemon: &Daemon, req: &Request) -> String {
                 }
             };
             match daemon.auth_import(&session_id, &name, &blob) {
-                Ok(AuthSaveResponse { name }) => {
+                Ok(AuthSaveResponse { name, .. }) => {
                     format!("{}{name}\n", ResponseHead::ok(StateToken::ZERO).encode())
                 }
                 Err(e) => format_daemon_error(&e),
@@ -476,8 +476,10 @@ pub(super) fn handle_auth(daemon: &Daemon, req: &Request) -> String {
                 );
             };
             match daemon.auth_save(&session_id, &page_id, &name) {
-                Ok(AuthSaveResponse { name }) => {
-                    format!("{}{name}\n", ResponseHead::ok(StateToken::ZERO).encode())
+                Ok(AuthSaveResponse { name, warnings }) => {
+                    let mut head = ResponseHead::ok(StateToken::ZERO);
+                    head.warnings = warnings;
+                    format!("{}{name}\n", head.encode())
                 }
                 Err(e) => format_daemon_error(&e),
             }
@@ -781,7 +783,11 @@ fn render_request(daemon: &Daemon, session_id: &str, page_id: &str, req: &Reques
     if let Some(b) = &detail.request_body {
         let _ = writeln!(body, ">");
         let trunc = if truncate && b.len() > REQUEST_BODY_TRUNCATE {
-            format!("{}... (len={})", &b[..REQUEST_BODY_TRUNCATE], b.len())
+            format!(
+                "{}... (len={})",
+                truncate_on_boundary(b, REQUEST_BODY_TRUNCATE),
+                b.len()
+            )
         } else {
             b.clone()
         };
@@ -801,7 +807,11 @@ fn render_request(daemon: &Daemon, session_id: &str, page_id: &str, req: &Reques
     if let Some(b) = &detail.response_body {
         let _ = writeln!(body, "<");
         let trunc = if truncate && b.len() > REQUEST_BODY_TRUNCATE {
-            format!("{}... (len={})", &b[..REQUEST_BODY_TRUNCATE], b.len())
+            format!(
+                "{}... (len={})",
+                truncate_on_boundary(b, REQUEST_BODY_TRUNCATE),
+                b.len()
+            )
         } else {
             b.clone()
         };

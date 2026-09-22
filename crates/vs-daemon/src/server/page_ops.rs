@@ -204,6 +204,63 @@ pub(super) fn handle_read(daemon: &Daemon, req: &Request) -> String {
     }
 }
 
+/// Resolve `vs_act`'s second argument: a ref number, or `mark:NAME`
+/// — the same target vocabulary `vs_annotate` uses. A mark resolves
+/// to whatever ref carries it now, so a flow written against names
+/// survives the re-render that renumbers everything. The bool says
+/// the mark moved. `Err` is the wire response to send as-is.
+fn act_target(
+    daemon: &Daemon,
+    session_id: &str,
+    page_id: &str,
+    arg: Option<&String>,
+) -> std::result::Result<(Ref, bool), String> {
+    let Some(arg) = arg.map(String::as_str) else {
+        return Err(format_error(
+            ErrorCode::BadRequest,
+            vec!["vs_act: missing target".into()],
+        ));
+    };
+    if let Some(name) = arg.strip_prefix("mark:") {
+        return daemon
+            .resolve_mark(session_id, page_id, name)
+            .map_err(|e| format_daemon_error(&e));
+    }
+    arg.parse().map(|r| (r, false)).map_err(|_| {
+        format_error(
+            ErrorCode::BadRequest,
+            vec!["vs_act: bad target (use a ref number or mark:NAME)".into()],
+        )
+    })
+}
+
+/// `vs_act`'s op argument and its optional value, as an engine
+/// action. `Err` is the wire response to send as-is.
+fn act_action(req: &Request) -> std::result::Result<EngineAction, String> {
+    let op: Op = match req.args.get(2).map(|s| s.parse()) {
+        Some(Ok(o)) => o,
+        _ => {
+            return Err(format_error(
+                ErrorCode::BadRequest,
+                vec!["vs_act: bad op".into()],
+            ))
+        }
+    };
+    match (op, req.args.get(3).cloned()) {
+        (Op::Click, _) => Ok(EngineAction::Click),
+        (Op::Submit, _) => Ok(EngineAction::Submit),
+        (Op::Hover, _) => Ok(EngineAction::Hover),
+        (Op::Focus, _) => Ok(EngineAction::Focus),
+        (Op::Scroll, _) => Ok(EngineAction::Scroll),
+        (Op::Fill, Some(value)) => Ok(EngineAction::Fill { value }),
+        (Op::Key, Some(chord)) => Ok(EngineAction::Key { chord }),
+        (Op::Fill | Op::Key, None) => Err(format_error(
+            ErrorCode::BadRequest,
+            vec![format!("vs_act: {op} requires a value")],
+        )),
+    }
+}
+
 pub(super) fn handle_act(daemon: &Daemon, req: &Request) -> String {
     let session_id = match require_session(req) {
         Ok(s) => s,
@@ -215,30 +272,13 @@ pub(super) fn handle_act(daemon: &Daemon, req: &Request) -> String {
             vec!["vs_act: missing page id".into()],
         );
     };
-    let r: Ref = match req.args.get(1).map(|s| s.parse()) {
-        Some(Ok(r)) => r,
-        _ => return format_error(ErrorCode::BadRequest, vec!["vs_act: bad ref".into()]),
+    let (r, reaimed) = match act_target(daemon, &session_id, &page_id, req.args.get(1)) {
+        Ok(pair) => pair,
+        Err(wire) => return wire,
     };
-    let op: Op = match req.args.get(2).map(|s| s.parse()) {
-        Some(Ok(o)) => o,
-        _ => return format_error(ErrorCode::BadRequest, vec!["vs_act: bad op".into()]),
-    };
-    let val = req.args.get(3).cloned();
-
-    let action = match (op, val) {
-        (Op::Click, _) => EngineAction::Click,
-        (Op::Submit, _) => EngineAction::Submit,
-        (Op::Hover, _) => EngineAction::Hover,
-        (Op::Focus, _) => EngineAction::Focus,
-        (Op::Scroll, _) => EngineAction::Scroll,
-        (Op::Fill, Some(v)) => EngineAction::Fill { value: v },
-        (Op::Key, Some(v)) => EngineAction::Key { chord: v },
-        (Op::Fill | Op::Key, None) => {
-            return format_error(
-                ErrorCode::BadRequest,
-                vec![format!("vs_act: {op} requires a value")],
-            );
-        }
+    let action = match act_action(req) {
+        Ok(a) => a,
+        Err(wire) => return wire,
     };
 
     let Some(token_str) = flag_value(req, "token") else {
@@ -289,6 +329,15 @@ pub(super) fn handle_act(daemon: &Daemon, req: &Request) -> String {
         }) => {
             let mut head = ResponseHead::ok(token);
             head.warnings = warnings;
+            // The mark's recorded ref no longer held and the element
+            // was found elsewhere in the tree. Say so: a mark that
+            // moves is when an agent most wants to look first.
+            if reaimed {
+                head.warnings.push(vs_protocol::Warning::with_args(
+                    vs_protocol::WarningCode::MarkReaimed,
+                    vec![format!("ref={}", r.0)],
+                ));
+            }
             let body = match form {
                 ViewForm::Full(tree) => tree.encode(),
                 ViewForm::Delta(ops) => vs_protocol::delta::encode(&ops),

@@ -61,6 +61,69 @@ pub struct AuthBlobV2 {
     pub local_storage: std::collections::BTreeMap<String, String>,
     #[serde(default, rename = "sessionStorage")]
     pub session_storage: std::collections::BTreeMap<String, String>,
+    /// IndexedDB contents, captured per database. Sites that keep the
+    /// session there (Firebase, Supabase, anything using a local-first
+    /// store) are not restorable from cookies and web storage alone.
+    #[serde(default, rename = "indexedDb", skip_serializing_if = "Vec::is_empty")]
+    pub indexed_db: Vec<IdbDatabase>,
+    /// Records the capture could not carry (see `idb_save.js`). Kept
+    /// in the blob so a restore can say what it is missing instead of
+    /// looking complete.
+    #[serde(
+        default,
+        rename = "indexedDbSkipped",
+        skip_serializing_if = "u32_is_zero"
+    )]
+    pub indexed_db_skipped: u32,
+    /// The capture ran out of budget with databases still unread, so
+    /// this blob is missing some. Kept out of the JSON when false.
+    #[serde(
+        default,
+        rename = "indexedDbIncomplete",
+        skip_serializing_if = "not_set"
+    )]
+    pub indexed_db_incomplete: bool,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde requires &T here
+fn u32_is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde requires &T here
+fn not_set(b: &bool) -> bool {
+    !*b
+}
+
+/// One IndexedDB database, as captured from an origin.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct IdbDatabase {
+    pub name: String,
+    #[serde(default)]
+    pub version: u32,
+    #[serde(default)]
+    pub stores: Vec<IdbStore>,
+}
+
+/// One object store and its records. `key_path` is absent for an
+/// out-of-line store, where each record carries its own key.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct IdbStore {
+    pub name: String,
+    #[serde(default, rename = "keyPath")]
+    pub key_path: Option<serde_json::Value>,
+    #[serde(default, rename = "autoIncrement")]
+    pub auto_increment: bool,
+    #[serde(default)]
+    pub records: Vec<IdbRecord>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct IdbRecord {
+    #[serde(default)]
+    pub key: serde_json::Value,
+    #[serde(default)]
+    pub value: serde_json::Value,
 }
 
 /// v1 shape kept for back-compat parsing. We never write v1.
@@ -125,6 +188,10 @@ pub fn decode(blob: &AuthBlob) -> EngineResult<AuthBlobV2> {
         cookies,
         local_storage: v1.local_storage,
         session_storage: v1.session_storage,
+        // v1 predates IndexedDB capture; nothing to migrate.
+        indexed_db: Vec::new(),
+        indexed_db_skipped: 0,
+        indexed_db_incomplete: false,
     })
 }
 
@@ -163,6 +230,9 @@ mod tests {
             version: 2,
             url: "https://example.com/app".into(),
             origin: "https://example.com".into(),
+            indexed_db: Vec::new(),
+            indexed_db_skipped: 0,
+            indexed_db_incomplete: false,
             cookies: vec![CookieData {
                 name: "access_token".into(),
                 value: "abc".into(),

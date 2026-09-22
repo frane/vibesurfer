@@ -19,6 +19,35 @@ pub(super) fn handle_session_open(daemon: &Daemon, req: &Request) -> String {
 }
 
 pub(super) fn handle_session_close(daemon: &Daemon, req: &Request) -> String {
+    // `--all` / `--idle-for=<dur>` sweep the workspace; a bare id
+    // closes one session, as it always has.
+    let idle_for = match flag_value(req, "idle-for") {
+        Some(raw) => match parse_duration(&raw) {
+            Some(d) => Some(Some(d)),
+            None => {
+                return format_error(
+                    ErrorCode::BadRequest,
+                    vec![format!(
+                        "vs_session_close: bad --idle-for {raw:?} (try 2h, 90m, 30s)"
+                    )],
+                )
+            }
+        },
+        None => req.flags.contains_key("all").then_some(None),
+    };
+    if let Some(window) = idle_for {
+        return match daemon.session_close_sweep(window) {
+            Ok(closed) => {
+                let mut body = String::new();
+                for id in &closed {
+                    body.push_str(id);
+                    body.push('\n');
+                }
+                format!("{}{body}", ResponseHead::ok(StateToken::ZERO).encode())
+            }
+            Err(e) => format_daemon_error(&e),
+        };
+    }
     let Some(session_id) = req.args.first().cloned() else {
         return format_error(
             ErrorCode::BadRequest,
@@ -29,6 +58,19 @@ pub(super) fn handle_session_close(daemon: &Daemon, req: &Request) -> String {
         Ok(SessionCloseResponse) => ResponseHead::ok(StateToken::ZERO).encode(),
         Err(e) => format_daemon_error(&e),
     }
+}
+
+/// `2h` / `90m` / `30s` / a bare number of seconds.
+fn parse_duration(raw: &str) -> Option<std::time::Duration> {
+    let raw = raw.trim();
+    let (digits, mult) = match raw.as_bytes().last()? {
+        b'h' => (&raw[..raw.len() - 1], 3600),
+        b'm' => (&raw[..raw.len() - 1], 60),
+        b's' => (&raw[..raw.len() - 1], 1),
+        _ => (raw, 1),
+    };
+    let n: u64 = digits.trim().parse().ok()?;
+    Some(std::time::Duration::from_secs(n * mult))
 }
 
 pub(super) fn handle_open(daemon: &Daemon, req: &Request) -> String {
