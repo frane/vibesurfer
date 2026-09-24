@@ -306,20 +306,23 @@ async fn call_tool(params: &Value) -> Result<Value, McpError> {
     })?;
     apply_globals(&mut cli);
 
-    let resp = tokio::task::spawn_blocking(move || run_cli(&cli))
-        .await
-        .map_err(|e| McpError {
-            code: -32603,
-            message: format!("blocking task: {e}"),
-        })?
-        .map_err(|e| McpError {
-            code: -32603,
-            message: format!("vs dispatch: {e:#}"),
-        })?;
+    // A CLI failure used to leave as a JSON-RPC error. Hosts render
+    // that as "Tool execution failed" and drop `error.message`, so the
+    // agent saw an empty failure where the CLI had said "no active
+    // session". Tool errors belong in the result, `isError: true`,
+    // with the text intact. JSON-RPC stays for a malformed call.
+    let resp = match tokio::task::spawn_blocking(move || run_cli(&cli)).await {
+        Ok(Ok(text)) => text,
+        Ok(Err(e)) => return Ok(tool_error(&format!("{e:#}"))),
+        Err(e) => return Ok(tool_error(&format!("blocking task: {e}"))),
+    };
 
     // Optional action thumbnail. Failures degrade to text-only — a
     // missing screenshot must never fail the action that succeeded.
-    let thumb = if opts.thumb {
+    // A wire error (`! TIMEOUT …`) is not a success either: leaving
+    // `isError` false made the host report the tool as fine.
+    let failed = wire_failed(&resp);
+    let thumb = if opts.thumb && !failed {
         let page = opts.thumb_page.or_else(|| first_page_id(&resp));
         match page {
             Some(p) => tokio::task::spawn_blocking(move || thumb_for_page(&p))
@@ -334,8 +337,23 @@ async fn call_tool(params: &Value) -> Result<Value, McpError> {
 
     Ok(json!({
         "content": content::shape(&resp, thumb.as_deref()),
-        "isError": false,
+        "isError": failed,
     }))
+}
+
+/// Application failure as a tool result. The message is the whole
+/// point — an empty `isError` is what the host shows as "Tool
+/// execution failed" with nothing else.
+fn tool_error(message: &str) -> Value {
+    json!({
+        "content": [{ "type": "text", "text": message }],
+        "isError": true,
+    })
+}
+
+/// A rendered wire response whose envelope is `! CODE …`.
+fn wire_failed(text: &str) -> bool {
+    text.lines().any(|line| line.starts_with('!'))
 }
 
 /// First `p_…` token in a response body — how vs_open's fresh page id
@@ -387,4 +405,23 @@ fn capture_png(page: &str) -> Result<Vec<u8>> {
 fn run_cli(cli: &Cli) -> Result<String> {
     let resp = crate::commands::run(cli).context("vs_cli::commands::run")?;
     Ok(crate::commands::render(&resp, false))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{tool_error, wire_failed};
+
+    #[test]
+    fn a_wire_error_is_a_failed_tool_and_a_cli_error_keeps_its_text() {
+        assert!(!wire_failed("@abc\np_1\n"));
+        assert!(wire_failed("! TIMEOUT 15000ms open\n"));
+        assert!(wire_failed("? hidden_target ref=1\n! NOT_FOUND ref=1\n"));
+
+        let v = tool_error("no active session — run `vs session-open` or pass `--session=<id>`");
+        assert_eq!(v["isError"], true);
+        assert_eq!(
+            v["content"][0]["text"],
+            "no active session — run `vs session-open` or pass `--session=<id>`"
+        );
+    }
 }

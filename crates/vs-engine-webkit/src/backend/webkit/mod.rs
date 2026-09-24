@@ -46,7 +46,7 @@ use crate::engine::{
 };
 
 use eval::{eval_js_string, run_loop_until};
-use nav_delegate::{NavDelegate, NavSlot};
+use nav_delegate::{wait_for_navigation, NavDelegate, NavSlot, NavState};
 
 // =============================================================================
 // Per-page state
@@ -137,6 +137,24 @@ impl WkBackend {
             kind: "page",
             id: h.0.to_string(),
         })
+    }
+}
+
+/// Stop the load and break the retain cycle that keeps a web-content
+/// process alive after the Rust handles drop. Leaked offscreen windows
+/// and their WebKit processes pile up across a long session and
+/// eventually starve new navigations (`could not connect to the
+/// server`). Apple documents removing the script message handlers
+/// explicitly; without that, every open/close leaked a render process
+/// (~90 MB).
+fn abandon_view(web_view: &WKWebView, window: &NSWindow, ucc: &WKUserContentController) {
+    unsafe {
+        ucc.removeAllScriptMessageHandlers();
+        ucc.removeAllUserScripts();
+        web_view.stopLoading();
+        web_view.setNavigationDelegate(None);
+        window.setContentView(None);
+        window.close();
     }
 }
 
@@ -375,7 +393,7 @@ impl Engine for WkBackend {
         let ua = NSString::from_str(crate::engine::DEFAULT_USER_AGENT);
         unsafe { web_view.setCustomUserAgent(Some(&ua)) };
 
-        let slot: NavSlot = Rc::new(RefCell::new(None));
+        let slot: NavSlot = Rc::new(RefCell::new(NavState::default()));
         let delegate = NavDelegate::new(mtm, slot.clone());
         let proto: &ProtocolObject<dyn WKNavigationDelegate> = ProtocolObject::from_ref(&*delegate);
         unsafe { web_view.setNavigationDelegate(Some(proto)) };
@@ -391,23 +409,18 @@ impl Engine for WkBackend {
         let request = NSURLRequest::requestWithURL(&ns_url);
         let _ = unsafe { web_view.loadRequest(&request) };
 
-        let slot_check = slot.clone();
         let budget = super::common::nav_budget();
-        let ok = run_loop_until(move || slot_check.borrow().is_some(), budget);
-        if !ok {
-            return Err(EngineError::Timeout {
-                budget,
-                primitive: "open",
-            });
-        }
-        match slot.borrow_mut().take() {
-            Some(Ok(())) => {}
-            Some(Err(msg)) => return Err(EngineError::Other(format!("navigation failed: {msg}"))),
-            None => {
-                return Err(EngineError::Other(
-                    "navigation completed without a result".into(),
-                ))
+        if let Err(e) = wait_for_navigation(&slot, budget, "open") {
+            // Dropping the Retained handles does not reap the web
+            // process — that leak is what later starves the next open
+            // with "could not connect to the server". Tear down the
+            // same way `close` does, then give WebKit a few turns to
+            // actually exit the process.
+            abandon_view(&web_view, &window, &ucc);
+            for _ in 0..8 {
+                let _ = run_loop_until(|| false, Duration::from_millis(25));
             }
+            return Err(e);
         }
 
         let handle = self.alloc_handle();
@@ -437,29 +450,13 @@ impl Engine for WkBackend {
             let p = self.page_mut(page)?;
             (p.web_view.clone(), p.nav_delegate.slot())
         };
-        *slot.borrow_mut() = None;
+        slot.borrow_mut().reset();
         let ns_url_str = NSString::from_str(url);
         let ns_url = NSURL::URLWithString(&ns_url_str)
             .ok_or_else(|| EngineError::Other(format!("invalid url: {url}")))?;
         let request = NSURLRequest::requestWithURL(&ns_url);
         let _ = unsafe { web_view.loadRequest(&request) };
-        let slot_check = slot.clone();
-        let budget = super::common::nav_budget();
-        let ok = run_loop_until(move || slot_check.borrow().is_some(), budget);
-        if !ok {
-            return Err(EngineError::Timeout {
-                budget,
-                primitive: "navigate",
-            });
-        }
-        let result = slot.borrow_mut().take();
-        match result {
-            Some(Ok(())) => Ok(()),
-            Some(Err(msg)) => Err(EngineError::Other(format!("navigation failed: {msg}"))),
-            None => Err(EngineError::Other(
-                "navigation completed without a result".into(),
-            )),
-        }
+        wait_for_navigation(&slot, super::common::nav_budget(), "navigate")
     }
 
     fn enable_webauthn(&mut self, page: PageHandle) -> EngineResult<()> {
@@ -485,31 +482,7 @@ impl Engine for WkBackend {
 
     fn close(&mut self, page: PageHandle) -> EngineResult<()> {
         if let Some(p) = self.pages.remove(&page) {
-            // Tear the page down explicitly instead of relying solely on
-            // the Retained handles dropping. Stop any in-flight load,
-            // detach the navigation delegate so no late callback fires
-            // into a half-dead page, pull the webview out of its host
-            // window, and close the window. Leaked offscreen windows +
-            // their WebKit auxiliary processes were piling up across a
-            // long session and eventually starving new navigations
-            // (`could not connect to the server`); prompt teardown keeps
-            // the process-pool footprint flat.
-            unsafe {
-                // Break the WKWebView retain cycle. A
-                // WKUserContentController strongly retains its script
-                // message handlers and user scripts, and the web view
-                // retains the controller through its configuration — so
-                // leaving them attached keeps the whole web view (and its
-                // web-content process, ~90 MB) alive forever after close.
-                // Apple documents removing them explicitly; without this,
-                // every open/close leaked a render process.
-                p.ucc.removeAllScriptMessageHandlers();
-                p.ucc.removeAllUserScripts();
-                p.web_view.stopLoading();
-                p.web_view.setNavigationDelegate(None);
-                p.window.setContentView(None);
-                p.window.close();
-            }
+            abandon_view(&p.web_view, &p.window, &p.ucc);
         }
         Ok(())
     }

@@ -111,6 +111,7 @@ fn snapshot_to_png_bytes_inner(
         return Err(EngineError::Timeout {
             budget: Duration::from_secs(10),
             primitive: "capture",
+            detail: "",
         });
     }
     let result = slot.borrow_mut().take();

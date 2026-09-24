@@ -62,6 +62,7 @@ pub(super) fn eval_js_string(
         return Err(EngineError::Timeout {
             budget,
             primitive: "eval",
+            detail: "",
         });
     }
     let result = slot.borrow_mut().take();

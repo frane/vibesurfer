@@ -307,6 +307,7 @@ impl Daemon {
                             vs_engine_webkit::EngineError::Timeout {
                                 budget,
                                 primitive: "wait",
+                                detail: "",
                             },
                         ));
                     }

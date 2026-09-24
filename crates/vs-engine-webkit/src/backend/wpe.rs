@@ -217,6 +217,7 @@ impl Engine for WpeBackend {
             return Err(EngineError::Timeout {
                 budget,
                 primitive: "open",
+                detail: "",
             });
         }
         match slot.borrow_mut().take() {
@@ -277,6 +278,7 @@ impl Engine for WpeBackend {
             return Err(EngineError::Timeout {
                 budget,
                 primitive: "navigate",
+                detail: "",
             });
         }
         // Taken out of the RefCell before the match, not inside it:
@@ -427,6 +429,7 @@ impl Engine for WpeBackend {
             return Err(EngineError::Timeout {
                 budget: Duration::from_secs(10),
                 primitive: "capture",
+                detail: "",
             });
         }
         let result = slot.borrow_mut().take();
@@ -891,6 +894,7 @@ fn eval_js_string(web_view: &WebView, js: &str, budget: Duration) -> EngineResul
         return Err(EngineError::Timeout {
             budget,
             primitive: "eval",
+            detail: "",
         });
     }
     let result = slot.borrow_mut().take();
@@ -1028,6 +1032,7 @@ mod wpe_cookies {
             return Err(EngineError::Timeout {
                 budget: ASYNC_BUDGET,
                 primitive: "save_auth (all_cookies)",
+                detail: "",
             });
         }
         let result = slot.borrow_mut().take().unwrap_or_default();
@@ -1075,6 +1080,7 @@ mod wpe_cookies {
                 return Err(EngineError::Timeout {
                     budget: ASYNC_BUDGET,
                     primitive: "load_auth (add_cookie)",
+                    detail: "",
                 });
             }
         }

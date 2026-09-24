@@ -180,14 +180,21 @@ pub fn run(cli: &Cli) -> Result<Response> {
     {
         let open_req = vs_protocol::Request::new("vs_session_open");
         let open_resp = client.call(&open_req).context("auto session-open")?;
-        if let vs_protocol::Envelope::Success(_) = &open_resp.envelope {
-            if let Some(line) = open_resp.body.first() {
-                let id = line.trim().to_string();
-                if let Some(key) = caller_key.as_ref() {
-                    let _ = save_caller_session(&paths, key, &id);
+        match &open_resp.envelope {
+            vs_protocol::Envelope::Success(_) => {
+                if let Some(line) = open_resp.body.first() {
+                    let id = line.trim().to_string();
+                    if let Some(key) = caller_key.as_ref() {
+                        let _ = save_caller_session(&paths, key, &id);
+                    }
+                    session_id = Some(id);
                 }
-                session_id = Some(id);
             }
+            // The daemon refused to open a session. Returning that
+            // envelope is the whole point: falling through made
+            // `require_session` replace it with "no active session",
+            // and an MCP host then dropped even that.
+            vs_protocol::Envelope::Error { .. } => return Ok(open_resp),
         }
     }
 

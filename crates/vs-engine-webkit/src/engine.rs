@@ -327,10 +327,16 @@ pub enum EngineError {
     },
 
     /// Operation exceeded its deadline.
-    #[error("timeout after {budget:?}: {primitive}")]
+    ///
+    /// `detail` is empty for the historical two-argument wire form.
+    /// Navigation timeouts say which phase died (`web process did not
+    /// start` versus `navigation did not finish`) so a caller can tell
+    /// a cold web process from a page that hung.
+    #[error("timeout after {budget:?}: {primitive} {detail}")]
     Timeout {
         budget: Duration,
         primitive: &'static str,
+        detail: &'static str,
     },
 
     /// The named ref or mark is not present.

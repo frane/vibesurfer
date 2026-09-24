@@ -210,6 +210,7 @@ impl Engine for TestEngine {
                     Err(EngineError::Timeout {
                         budget,
                         primitive: "vs_wait",
+                        detail: "",
                     })
                 }
             }
@@ -218,6 +219,7 @@ impl Engine for TestEngine {
             | WaitCondition::RefGone(_) => Err(EngineError::Timeout {
                 budget,
                 primitive: "vs_wait",
+                detail: "",
             }),
         }
     }

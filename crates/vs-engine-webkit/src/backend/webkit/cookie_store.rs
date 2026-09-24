@@ -61,6 +61,7 @@ pub(crate) fn get_all_cookies(web_view: &Retained<WKWebView>) -> EngineResult<Ve
         return Err(EngineError::Timeout {
             budget: ASYNC_BUDGET,
             primitive: "save_auth (getAllCookies)",
+            detail: "",
         });
     }
     let result = slot.borrow_mut().take().unwrap_or_default();
@@ -95,6 +96,7 @@ pub(crate) fn set_cookies(
             return Err(EngineError::Timeout {
                 budget: ASYNC_BUDGET,
                 primitive: "load_auth (setCookie)",
+                detail: "",
             });
         }
     }

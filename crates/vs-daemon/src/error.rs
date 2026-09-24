@@ -130,13 +130,20 @@ impl DaemonError {
                 ErrorCode::EngineUnsupported,
                 vec![(*primitive).to_string(), (*engine).to_string()],
             ),
-            Self::Engine(vs_engine_webkit::EngineError::Timeout { primitive, budget }) => (
-                ErrorCode::Timeout,
-                vec![
+            Self::Engine(vs_engine_webkit::EngineError::Timeout {
+                primitive,
+                budget,
+                detail,
+            }) => {
+                let mut args = vec![
                     format!("{}ms", budget.as_millis()),
                     (*primitive).to_string(),
-                ],
-            ),
+                ];
+                if !detail.is_empty() {
+                    args.push((*detail).to_string());
+                }
+                (ErrorCode::Timeout, args)
+            }
             Self::Engine(vs_engine_webkit::EngineError::NotFound { kind, id }) => {
                 (ErrorCode::NotFound, vec![format!("{kind}={id}")])
             }

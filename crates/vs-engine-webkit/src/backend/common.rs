@@ -154,15 +154,19 @@ pub(crate) const SNAPSHOT_DOM_WALKER_JS: &str = include_str!("snapshot_dom_walke
 /// interception happens above the engine's download machinery.
 pub(crate) const DOWNLOAD_SHIM_JS: &str = include_str!("download_shim.js");
 
-/// How long `open` and `goto` wait for a navigation to commit.
+/// How long `open` and `goto` wait for a navigation to finish once it
+/// has started.
 ///
 /// 15 seconds is the right answer for a person waiting on a page, and
-/// stays the default. It is the wrong answer for a machine running
-/// three engines and an eighty-cell suite at once, where a cold engine
-/// start can genuinely take longer than that and the resulting
-/// `! TIMEOUT 15000ms open` says nothing about the code under test.
-/// `VS_NAV_BUDGET_MS` lets such a caller buy more patience without
-/// making a truly hung page take longer to report for everyone else.
+/// stays the default. It is not the web-process launch allowance: on
+/// macOS that is a separate 45s wait that ends at
+/// `didStartProvisionalNavigation`, because a cold `WKWebView` can
+/// spend longer than 15s just spawning its process. Charging the
+/// spawn against this budget produced `! TIMEOUT 15000ms open` for a
+/// navigation that had not begun. `VS_NAV_BUDGET_MS` lets a caller buy
+/// more patience for the load itself without making a truly hung page
+/// take longer to report for everyone else. The integration harness
+/// sets it to 45s.
 ///
 /// macOS and Linux only, because those are the backends that bound a
 /// navigation at all. Windows waits on `NavigationCompleted` through
@@ -477,6 +481,7 @@ where
             return Err(EngineError::Timeout {
                 budget,
                 primitive: "wait",
+                detail: "",
             });
         }
         // Budget for *this* poll's eval, distinct from how often we
@@ -705,6 +710,7 @@ where
             return Err(EngineError::Timeout {
                 budget,
                 primitive: "download",
+                detail: "",
             });
         }
         tick();
@@ -1594,6 +1600,7 @@ where
     Err(EngineError::Timeout {
         budget: IDB_SETTLE_BUDGET,
         primitive: "auth_load:indexeddb",
+        detail: "",
     })
 }
 

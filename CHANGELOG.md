@@ -4,6 +4,12 @@ All notable changes to vibesurfer are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.8] - 2026-09-24
+
+### Fixed
+- `vs open` no longer spends its 15s navigation budget on spawning the web-content process. A cold `WKWebView` — the first open after the daemon starts, or the first open after idle pages have starved the process pool — can take longer than that just to launch, and the call came back `! TIMEOUT 15000ms open` for a navigation that had not begun. The process now has 45s to accept the load, and the 15s clock starts at provisional navigation. A document that has committed is returned even if a subresource never finishes. A web view that does time out is torn down, instead of leaking a process that starves the next open. The error names the phase: `web process did not start` or `navigation did not finish`. (Reported via `#vibesurfer`, 01M37ST.)
+- `vs mcp` returns a tool error with the message intact. A CLI failure such as "no active session" was a JSON-RPC error, which hosts surface as "Tool execution failed" and drop the text. A wire error (`! TIMEOUT …`) is `isError: true` as well. An automatic session open that the daemon refuses is returned as that refusal, not replaced with "no active session" and then discarded.
+
 ## [0.2.7] - 2026-09-22
 
 ### Added

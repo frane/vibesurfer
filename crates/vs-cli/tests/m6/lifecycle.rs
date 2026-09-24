@@ -50,6 +50,28 @@ fn cell_open() {
     }
 }
 
+/// The product's 15s load budget must not include web-process launch.
+///
+/// A cold WKWebView spends the first navigation spawning its
+/// web-content process. Charging that against the load budget made
+/// the first `vs open` of a daemon return `! TIMEOUT 15000ms open`.
+/// The harness raises `VS_NAV_BUDGET_MS` to 45s so the rest of the
+/// suite is not measuring process spawn; this cell puts the product
+/// default back and still expects a page.
+#[test]
+fn cell_open_cold_process_is_not_a_load_timeout() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start_with_env(&[("VS_NAV_BUDGET_MS", "15000")]);
+        let r = ctx.vs(&["open", &ctx.url("/static.html")]);
+        assert_ok("open with the 15s load budget", &r);
+        assert!(
+            !r.stdout.contains("TIMEOUT"),
+            "a cold open must not be reported as a load timeout:\n{}",
+            r.stdout
+        );
+    }
+}
+
 // 3b. A page-addressed op on a page that lives in a *different* session
 // returns WRONG_SESSION (naming the page's real session), not a
 // misleading NOT_FOUND. Regression for the #vibesurfer report.
