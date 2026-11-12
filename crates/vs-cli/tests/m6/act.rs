@@ -591,9 +591,11 @@ fn cell_drag_native_draggable_does_not_wedge() {
             );
             let _ = tx.send(out);
         });
-        let r = rx
-            .recv_timeout(std::time::Duration::from_secs(30))
-            .expect("vs drag over a draggable element must not hang");
+        let Ok(r) = rx.recv_timeout(std::time::Duration::from_secs(30)) else {
+            let log =
+                std::fs::read_to_string(ctx.home_path().join("daemon.log")).unwrap_or_default();
+            panic!("vs drag over a draggable element must not hang\n--- daemon.log ---\n{log}");
+        };
         assert_ok("drag", &r);
         let token = token_of(&r);
         let r = ctx.vs(&["click-at", &page, "100", "320", &format!("--token={token}")]);

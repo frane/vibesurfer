@@ -105,8 +105,10 @@ pub async fn serve(
 
 /// Drive one client connection: read lines, dispatch, write responses.
 async fn handle_connection(daemon: Arc<Daemon>, stream: Stream) -> std::io::Result<()> {
-    let (read, mut write) = stream.split();
-    let mut reader = BufReader::new(read).lines();
+    // `&Stream` is both AsyncRead and AsyncWrite; `split()` is
+    // deprecated in newer interprocess releases.
+    let mut reader = BufReader::new(&stream).lines();
+    let mut write = &stream;
     while let Some(line) = reader.next_line().await? {
         if line.is_empty() {
             continue;

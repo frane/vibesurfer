@@ -245,6 +245,24 @@ fn vs_humanize_seed_for_xy(op: CursorOp) -> u64 {
     xi.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ yi
 }
 
+/// Document-start shim that cancels every trusted `dragstart`.
+///
+/// Synthesized mouse input over anything draggable (a link, an image,
+/// `draggable="true"`, selected text) can make WebKit start a real
+/// system drag, which shows a drag window on the user's screen and
+/// waits for a hardware mouse-up that never comes, wedging the daemon.
+/// A cancelled `dragstart` is the one point every WebKit version
+/// honours before starting that drag. Nobody uses this view by hand,
+/// so every trusted drag here came from vs. Pages still see the
+/// `dragstart`, and `vs drag` delivers the HTML5 chain afterwards as
+/// untrusted events, which this leaves alone. See also
+/// `headless_webview.rs`, the backstop if a drag starts anyway.
+const NO_NATIVE_DRAG_JS: &str = r"
+window.addEventListener('dragstart', function (e) {
+  if (e.isTrusted) e.preventDefault();
+}, true);
+";
+
 /// Document-start shim that lets `vs` drive `requestAnimationFrame`
 /// callbacks on demand. A headless macOS WKWebView reports the page
 /// hidden, so the web-content process pauses rAF — and rAF-deferred
@@ -323,6 +341,17 @@ impl Engine for WkBackend {
         enable_media_devices(&config);
 
         let ucc = unsafe { config.userContentController() };
+        // No native drags, in every frame (see NO_NATIVE_DRAG_JS).
+        unsafe {
+            let src = NSString::from_str(NO_NATIVE_DRAG_JS);
+            let shim = WKUserScript::initWithSource_injectionTime_forMainFrameOnly(
+                WKUserScript::alloc(mtm),
+                &src,
+                WKUserScriptInjectionTime::AtDocumentStart,
+                false,
+            );
+            ucc.addUserScript(&shim);
+        }
         // Inject the rAF-flush shim at document-start so `act` can drive
         // pending requestAnimationFrame callbacks even though a headless
         // macOS page has its frame clock paused (see RAF_SHIM_JS).
