@@ -18,6 +18,7 @@
 mod capture;
 mod cookie_store;
 mod eval;
+mod headless_webview;
 mod headless_window;
 mod input;
 mod inspector_handler;
@@ -353,9 +354,9 @@ impl Engine for WkBackend {
         // the logical size pages render at. Retina still doubles the
         // pixel density for screenshots; recordings capture at this size.
         let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1440.0, 900.0));
-        let web_view: Retained<WKWebView> = unsafe {
-            WKWebView::initWithFrame_configuration(WKWebView::alloc(mtm), frame, &config)
-        };
+        // VsHeadlessWebView refuses system drag sessions; see
+        // headless_webview.rs.
+        let web_view = headless_webview::HeadlessWebView::create(mtm, frame, &config);
 
         // Host the webview in an offscreen NSWindow so synthesized
         // `NSEvent`s have a responder chain to traverse. Borderless

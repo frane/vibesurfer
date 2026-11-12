@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Native drag</title></head>
+<body>
+<div id="src" draggable="true" style="position:absolute;left:50px;top:50px;width:100px;height:100px;background:#c33">drag me</div>
+<div id="dst" style="position:absolute;left:400px;top:50px;width:100px;height:100px;background:#33c">drop here</div>
+<button id="after" style="position:absolute;left:50px;top:300px;width:100px;height:40px">After</button>
+<script>
+  window.__vsLog = [];
+  function log(s) { window.__vsLog.push(s); }
+  document.addEventListener('dragstart', function (e) { log('dragstart'); });
+  document.addEventListener('dragend', function (e) { log('dragend'); });
+  var dst = document.getElementById('dst');
+  dst.addEventListener('dragover', function (e) { e.preventDefault(); });
+  dst.addEventListener('drop', function (e) { e.preventDefault(); log('drop'); });
+  document.getElementById('after').addEventListener('click', function (e) {
+    log(e.isTrusted ? 'click-trusted' : 'click');
+  });
+</script>
+</body>
+</html>

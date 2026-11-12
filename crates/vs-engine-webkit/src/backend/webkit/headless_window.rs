@@ -18,7 +18,8 @@
 use objc2::rc::Retained;
 use objc2::{define_class, msg_send, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSBackingStoreType, NSScreen, NSWindow, NSWindowOcclusionState, NSWindowStyleMask,
+    NSBackingStoreType, NSScreen, NSWindow, NSWindowOcclusionState, NSWindowOrderingMode,
+    NSWindowStyleMask,
 };
 use objc2_foundation::NSRect;
 
@@ -64,6 +65,28 @@ define_class!(
         fn can_become_key_window(&self) -> bool {
             true
         }
+
+        /// Refuse to be ordered on screen.
+        ///
+        /// Because this window reports itself visible, AppKit may try
+        /// to order it in by itself (it did, on macOS 27: a vs page
+        /// showed up over another app). Every public ordering call
+        /// (`orderFront:`, `makeKeyAndOrderFront:`, `orderBack:`,
+        /// `orderOut:`) goes through this primitive. Allow only
+        /// ordering out.
+        #[unsafe(method(orderWindow:relativeTo:))]
+        fn order_window(&self, place: NSWindowOrderingMode, other: isize) {
+            if place == NSWindowOrderingMode::Out {
+                unsafe {
+                    let _: () = msg_send![super(self), orderWindow: place, relativeTo: other];
+                }
+            }
+        }
+
+        /// `orderFrontRegardless` does not go through
+        /// `orderWindow:relativeTo:`; refuse it too.
+        #[unsafe(method(orderFrontRegardless))]
+        fn order_front_regardless(&self) {}
 
         /// Report a real screen for a window that is on none.
         ///

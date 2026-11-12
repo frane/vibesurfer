@@ -558,3 +558,54 @@ fn cell_act_click_robotic_still_trusted() {
         );
     }
 }
+
+// A trusted drag over a `draggable` element must not start a system
+// drag session. On macOS 27 it did: WebKit handed the drag to the
+// window server, the daemon's main thread wedged waiting for a
+// hardware mouse-up, and a drag window showed on the user's screen
+// (#vibesurfer 01M75J1S / 01M75X). The drag must return, the page
+// must see the drop, and the page must take input afterwards.
+#[cfg(target_os = "macos")]
+#[test]
+fn cell_drag_native_draggable_does_not_wedge() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, token) = open_fixture(&ctx, "/native-drag.html");
+        // Run the drag off-thread: a regression hangs the CLI call
+        // forever, and the test should fail, not hang the suite.
+        let home = ctx.home_path().to_path_buf();
+        let p = page.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let out = crate::support::vs(
+                &home,
+                &[
+                    "drag",
+                    &p,
+                    "100",
+                    "100",
+                    "450",
+                    "100",
+                    &format!("--token={token}"),
+                ],
+            );
+            let _ = tx.send(out);
+        });
+        let r = rx
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .expect("vs drag over a draggable element must not hang");
+        assert_ok("drag", &r);
+        let token = token_of(&r);
+        let r = ctx.vs(&["click-at", &page, "100", "320", &format!("--token={token}")]);
+        assert_ok("click after drag", &r);
+        let log = eval_js(&ctx, &page, "window.__vsLog.join(',')");
+        assert!(
+            log.contains("drop"),
+            "drop target must see the drop, got {log:?}"
+        );
+        assert!(
+            log.contains("click-trusted"),
+            "page must take trusted input after the drag, got {log:?}"
+        );
+    }
+}

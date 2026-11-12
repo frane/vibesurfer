@@ -284,9 +284,11 @@ fn build_act_js(r: Ref, action: &Action) -> String {
 
 /// Build the JS that fires the HTML5 drag-and-drop event chain for
 /// `vs drag`. Browsers' HTML5 dnd pipeline (dragstart → dragenter →
-/// dragover → drop → dragend on a `DataTransfer`) only fires on real
-/// hardware input — synthetic OS-level mouse events don't trip the
-/// browser's start-drag heuristic. To cover the
+/// dragover → drop → dragend on a `DataTransfer`) needs a real drag
+/// session. Synthetic OS-level mouse events can trip WebKit's
+/// start-drag heuristic (macOS 27 does), but the headless web view
+/// refuses the system drag session (see `webkit/headless_webview.rs`),
+/// so no drop ever arrives natively. To cover the
 /// `react-dnd` HTML5 backend, native `draggable="true"` widgets, and
 /// React-Flow nodes wired to HTML5 dnd, every backend's `CursorOp::Drag`
 /// runs the OS-level mouse path (for canvas / mouse-tracking widgets)

@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.8"
+version = "0.2.9"
 edition = "2021"
 rust-version = "1.85"
 license = "Apache-2.0"
@@ -28,6 +28,9 @@ module_name_repetitions = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 doc_markdown = "allow"
+# New in clippy 1.99 (pedantic): wants `assert_eq!(x, [] as [T; 0])` over
+# `assert!(x.is_empty())`, which is noisier and needs PartialEq.
+assert_is_empty = "allow"
 
 [profile.release]
 lto = "thin"

@@ -176,6 +176,7 @@ pub(super) fn click_at_rect(
     web_view.mouseDown(&down);
     let _ = run_loop_until(|| false, Duration::from_millis(down_ms));
     web_view.mouseUp(&up);
+    super::headless_webview::end_suppressed_drag(web_view, up.locationInWindow());
     let _ = run_loop_until(|| false, Duration::from_millis(up_ms));
     Ok(end)
 }
@@ -297,6 +298,7 @@ pub(super) fn click_at_xy(
     }
     let up = make(NSEventType::LeftMouseUp)?;
     web_view.mouseUp(&up);
+    super::headless_webview::end_suppressed_drag(web_view, up.locationInWindow());
     let _ = run_loop_until(|| false, Duration::from_millis(up_ms));
     if let Some((sink, mtm)) = rec {
         sink.frame(web_view, mtm, target.x, target.y, 0.2, up_ms as u32);
@@ -340,6 +342,7 @@ pub(super) fn drag_xy(
     )?;
     let up = make(NSEventType::LeftMouseUp, target)?;
     web_view.mouseUp(&up);
+    super::headless_webview::end_suppressed_drag(web_view, up.locationInWindow());
     let _ = run_loop_until(|| false, Duration::from_millis(30));
     Ok(landed)
 }
