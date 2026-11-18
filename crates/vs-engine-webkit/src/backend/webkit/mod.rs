@@ -326,11 +326,22 @@ impl WkBackend {
         Ok(())
     }
 
-    fn follow_new_window(&mut self, page: PageHandle) -> EngineResult<()> {
+    ///
+    /// WebKit can ask for the new window after the click has returned,
+    /// so after a click (`settle`) pump for up to `NEW_WINDOW_SETTLE`
+    /// first.
+    fn follow_new_window(&mut self, page: PageHandle, settle: bool) -> EngineResult<()> {
         let (web_view, delegate) = {
             let p = self.page_mut(page)?;
             (p.web_view.clone(), p.nav_delegate.clone())
         };
+        if settle {
+            let waiting = delegate.clone();
+            let _ = run_loop_until(
+                move || waiting.has_new_window(),
+                super::common::NEW_WINDOW_SETTLE,
+            );
+        }
         let Some(request) = delegate.take_new_window() else {
             return Ok(());
         };
@@ -628,7 +639,7 @@ impl Engine for WkBackend {
                 )?;
                 p.last_mouse.set(landed);
                 flush(&web_view_flush);
-                return self.follow_new_window(page);
+                return self.follow_new_window(page, true);
             }
         }
 
@@ -639,7 +650,7 @@ impl Engine for WkBackend {
         );
         flush(&web_view_flush);
         result?;
-        self.follow_new_window(page)
+        self.follow_new_window(page, super::common::may_open_window(&action))
     }
 
     fn wait(
@@ -934,7 +945,7 @@ impl Engine for WkBackend {
             "String(window.__vsFlushRAF ? window.__vsFlushRAF() : 0)",
             Duration::from_secs(2),
         );
-        self.follow_new_window(page)
+        self.follow_new_window(page, false)
     }
 
     fn cursor_op(&mut self, page: PageHandle, op: CursorOp, mode: InputMode) -> EngineResult<()> {
@@ -1000,7 +1011,7 @@ impl Engine for WkBackend {
         if let Some(p) = self.pages.get(&page) {
             p.last_mouse.set(landed);
         }
-        self.follow_new_window(page)
+        self.follow_new_window(page, matches!(op, CursorOp::ClickAt { .. }))
     }
     fn capabilities(&self) -> EngineCapabilities {
         // Inspector console + network reflect actual install-path

@@ -183,6 +183,26 @@ pub(crate) fn nav_budget() -> std::time::Duration {
     std::time::Duration::from_millis(ms)
 }
 
+/// How long a click waits for the page to ask for a new window.
+///
+/// The engine raises that request (WKUIDelegate `createWebView`,
+/// WebKitGTK `create`, WebView2 `NewWindowRequested`) over IPC from the
+/// content process, and it can land after the click has returned. On a
+/// fast runner the click came back first and the blank-target link
+/// looked like a no-op. The wait ends as soon as the request arrives,
+/// so only a click that opens nothing pays the full settle.
+pub(crate) const NEW_WINDOW_SETTLE: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Whether `action` can open a new window: a click, a submit, or Enter.
+pub(crate) fn may_open_window(action: &crate::engine::Action) -> bool {
+    use crate::engine::Action;
+    match action {
+        Action::Click | Action::Submit => true,
+        Action::Key { chord } => chord.eq_ignore_ascii_case("enter"),
+        _ => false,
+    }
+}
+
 // =============================================================================
 // Shared primitive logic — dispatched through each backend's eval_js
 // =============================================================================

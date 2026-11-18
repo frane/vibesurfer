@@ -316,7 +316,7 @@ impl Engine for WpeBackend {
             &target,
             &action,
         )?;
-        self.follow_new_window(page)
+        self.follow_new_window(page, super::common::may_open_window(&action))
     }
 
     fn wait(
@@ -658,7 +658,7 @@ impl Engine for WpeBackend {
         // Let the last keyUp turn into beforeinput/input before the
         // caller reads the page back.
         let _ = run_loop_until(|| false, Duration::from_millis(150));
-        self.follow_new_window(page)
+        self.follow_new_window(page, false)
     }
 
     fn cursor_op(&mut self, page: PageHandle, op: CursorOp, mode: InputMode) -> EngineResult<()> {
@@ -742,7 +742,7 @@ impl Engine for WpeBackend {
             }
         };
         p.last_mouse.set(landed);
-        self.follow_new_window(page)
+        self.follow_new_window(page, matches!(op, CursorOp::ClickAt { .. }))
     }
 
     fn capabilities(&self) -> EngineCapabilities {
@@ -1145,9 +1145,18 @@ impl WpeBackend {
     }
 
     /// Load a new-window navigation the last input primitive caused, in
-    /// this page, and wait for it like `goto`. No parked request: no-op.
-    fn follow_new_window(&mut self, page: PageHandle) -> EngineResult<()> {
+    /// this page, and wait for it like `goto`. The `create` signal can
+    /// arrive after the click returns, so after a click (`settle`) pump
+    /// for up to `NEW_WINDOW_SETTLE` first. No parked request: no-op.
+    fn follow_new_window(&mut self, page: PageHandle, settle: bool) -> EngineResult<()> {
         let p = self.page_mut(page)?;
+        if settle {
+            let parked = p.new_window.clone();
+            let _ = run_loop_until(
+                move || parked.borrow().is_some(),
+                super::common::NEW_WINDOW_SETTLE,
+            );
+        }
         let Some(request) = p.new_window.borrow_mut().take() else {
             return Ok(());
         };

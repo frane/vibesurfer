@@ -164,14 +164,19 @@ impl Webview2Backend {
 
     /// Navigate this page to a new-window URL the last input primitive
     /// caused, and wait for it like `goto`. `NewWindowRequested` is
-    /// raised asynchronously, so pump messages briefly first. No
-    /// request: no-op.
-    fn follow_new_window(&mut self, page: PageHandle) -> EngineResult<()> {
+    /// raised asynchronously, so after a click (`settle`) pump messages
+    /// for up to `NEW_WINDOW_SETTLE` first. No request: no-op.
+    fn follow_new_window(&mut self, page: PageHandle, settle: bool) -> EngineResult<()> {
         use windows::Win32::UI::WindowsAndMessaging::{
             DispatchMessageW, PeekMessageW, MSG, PM_REMOVE,
         };
         let parked = self.page_mut(page)?.new_window.clone();
-        let deadline = std::time::Instant::now() + Duration::from_millis(300);
+        let deadline = std::time::Instant::now()
+            + if settle {
+                super::common::NEW_WINDOW_SETTLE
+            } else {
+                Duration::ZERO
+            };
         while parked.borrow().is_none() && std::time::Instant::now() < deadline {
             let mut msg = MSG::default();
             unsafe {
@@ -496,10 +501,7 @@ fn install_inspector(web_view: &ICoreWebView2, slots: &InspectorSlots) -> bool {
         Ok(())
     }));
     let mut token: i64 = 0;
-    if unsafe { web_view.add_WebMessageReceived(&handler, &raw mut token) }.is_err() {
-        return false;
-    }
-    true
+    unsafe { web_view.add_WebMessageReceived(&handler, &raw mut token) }.is_ok()
 }
 
 // =============================================================================
@@ -791,7 +793,7 @@ impl Engine for Webview2Backend {
             &target,
             &action,
         )?;
-        self.follow_new_window(page)
+        self.follow_new_window(page, super::common::may_open_window(&action))
     }
 
     fn wait(
@@ -1170,7 +1172,7 @@ impl Engine for Webview2Backend {
                 std::thread::sleep(Duration::from_millis(wait.max(1)));
             }
         }
-        self.follow_new_window(page)
+        self.follow_new_window(page, false)
     }
 
     fn cursor_op(&mut self, page: PageHandle, op: CursorOp, mode: InputMode) -> EngineResult<()> {
@@ -1221,7 +1223,7 @@ impl Engine for Webview2Backend {
             }
         };
         p.last_mouse.set(landed);
-        self.follow_new_window(page)
+        self.follow_new_window(page, matches!(op, CursorOp::ClickAt { .. }))
     }
 
     fn capabilities(&self) -> EngineCapabilities {

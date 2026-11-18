@@ -161,6 +161,11 @@ impl NavDelegate {
         self.ivars().slot.clone()
     }
 
+    /// Whether the page has asked for a new window we have not loaded.
+    pub(super) fn has_new_window(&self) -> bool {
+        self.ivars().new_window.borrow().is_some()
+    }
+
     /// Take the parked new-window request, if the page asked for one.
     pub(super) fn take_new_window(&self) -> Option<Retained<NSURLRequest>> {
         self.ivars().new_window.borrow_mut().take()
