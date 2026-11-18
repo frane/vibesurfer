@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Popup</title></head>
+<body>
+  <h1>Popup</h1>
+  <a href="/multi-page-2.html" target="_blank">New-window link</a>
+  <form method="post" action="/echo" target="_blank">
+    <input type="hidden" name="entity" value="escp-idp">
+    <button type="submit">New-window POST</button>
+  </form>
+  <button type="button" onclick="window.open('/multi-page-2.html')">Window open</button>
+</body>
+</html>

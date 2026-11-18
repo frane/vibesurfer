@@ -1,6 +1,6 @@
 ---
 name: vibesurfer
-version: 0.2.9
+version: 0.2.10
 binary: vs
 description: Agent-native headless browser. 26 primitives over a Unix-socket wire protocol. Real WKWebView (macOS), WebKitGTK 6 (Linux), or WebView2 (Windows) — all three engines verified per-commit by a real-browser integration suite. Optimistic concurrency via state tokens; tree-delta wire format; durable session/page/auth state in SQLite.
 ---
@@ -61,6 +61,8 @@ Wire form is `vs_<name>` (over the socket); CLI subcommand is `<name>` with hyph
 | 11 | `vs mark <PAGE> <REF> <NAME> --token=<TOK>` | Persist a ref as a named anchor. Act on it later with `mark:NAME`. |
 | 12 | `vs annotate <TARGET> <KEY> [VALUE]` | `ref:N` / `mark:NAME` / `page` annotation. |
 | 17 | `vs viewport <PAGE> <SPEC> [--dpr=N]` | Preset (`mobile` / `desktop` / etc.) or `WxH`. Re-baselines next view. |
+
+**New windows (v0.2.10+).** A `target="_blank"` link or form, or `window.open()`, set off by `act`, `ca` or `type` loads in the same page, and the call returns once it has navigated. Re-`view` for the new document. Windows drops a POST body (the form arrives as a GET).
 
 ### Cursor coordinates (20–23, v0.1.8+; trusted on all platforms in v0.1.11+)
 

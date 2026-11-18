@@ -4,6 +4,11 @@ All notable changes to vibesurfer are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.10] - 2026-11-18
+
+### Fixed
+- A `target="_blank"` link or form, or `window.open()`, now navigates. The headless page has no second window: WebKit on macOS and WebKitGTK on Linux dropped the navigation, so the click returned ok and the tree did not change, and WebView2 on Windows opened a separate popup the agent could not address. ScienceDirect's institution login is a blank-target form, so an agent could not sign in through it. Each engine now parks the request, and the `act`, `click-at` or `type` call that caused it loads it in the same page and returns after that navigation. The WebKit engines keep method and body; WebView2 exposes only the URL, so a POSTed form arrives as a GET on Windows (`docs/known-issues.md`). A popup the page opens on its own is not followed by the next unrelated click. Fixture `popup.html`, cell `cell_new_window_navigation_loads_in_place`.
+
 ## [0.2.9] - 2026-11-12
 
 ### Fixed

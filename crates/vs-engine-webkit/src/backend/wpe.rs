@@ -63,6 +63,10 @@ struct WpePage {
     /// after every `cursor_op` so the next humanized lead-in starts
     /// where the previous one ended. Defaults to (0, 0) on `open`.
     last_mouse: Cell<vs_humanize::Point>,
+    /// A new-window navigation (`target="_blank"`, `window.open()`)
+    /// the page asked for and we have not loaded yet. Set by the
+    /// `create` handler installed in `open`.
+    new_window: Rc<RefCell<Option<webkit6::URIRequest>>>,
 }
 
 // =============================================================================
@@ -188,6 +192,22 @@ impl Engine for WpeBackend {
             super::inspector_bridge::InspectorSlots::new(crate::inspector::DEFAULT_BUFFER_CAPACITY);
         let inspector_installed = install_inspector(&web_view, &inspector);
         install_download_shim(&web_view);
+        // A headless page has no second window. Without a `create`
+        // handler WebKitGTK drops a `target="_blank"` link or form, or
+        // `window.open()`, and the click does nothing. Park the request;
+        // the input primitive that caused it loads it in this page
+        // (`follow_new_window`). `act click` on this engine is a JS
+        // click, not a user gesture, so blank-target navigation also
+        // has to be allowed without one.
+        if let Some(settings) = WebViewExt::settings(&web_view) {
+            settings.set_javascript_can_open_windows_automatically(true);
+        }
+        let new_window: Rc<RefCell<Option<webkit6::URIRequest>>> = Rc::new(RefCell::new(None));
+        let parked = new_window.clone();
+        web_view.connect_create(move |_view, action| {
+            *parked.borrow_mut() = action.request();
+            None
+        });
         web_view.load_uri(url);
 
         // Wait for LoadEvent::Finished or LoadEvent::Failed via signal.
@@ -241,6 +261,7 @@ impl Engine for WpeBackend {
                 cookie_baseline: std::cell::RefCell::new(None),
                 cookie_next_seq: std::cell::RefCell::new(0),
                 last_mouse: Cell::new(vs_humanize::Point { x: 0.0, y: 0.0 }),
+                new_window,
             },
         );
         Ok(handle)
@@ -253,45 +274,7 @@ impl Engine for WpeBackend {
         // to load and wait.
         let web_view = self.page_mut(page)?.web_view.clone();
         web_view.load_uri(url);
-
-        let slot: Rc<RefCell<Option<Result<(), String>>>> = Rc::new(RefCell::new(None));
-        let slot_for_signal = slot.clone();
-        let signal_id = web_view.connect_load_changed(move |_view, event| {
-            if event == LoadEvent::Finished {
-                *slot_for_signal.borrow_mut() = Some(Ok(()));
-            }
-        });
-        let slot_fail = slot.clone();
-        let fail_id = web_view.connect_load_failed(move |_view, _event, _uri, err| {
-            *slot_fail.borrow_mut() = Some(Err(err.message().to_string()));
-            true
-        });
-
-        let slot_check = slot.clone();
-        let budget = super::common::nav_budget();
-        let ok = run_loop_until(move || slot_check.borrow().is_some(), budget);
-
-        web_view.disconnect(signal_id);
-        web_view.disconnect(fail_id);
-
-        if !ok {
-            return Err(EngineError::Timeout {
-                budget,
-                primitive: "navigate",
-                detail: "",
-            });
-        }
-        // Taken out of the RefCell before the match, not inside it:
-        // as the function's tail expression the borrow guard would
-        // otherwise outlive `slot` itself.
-        let result = slot.borrow_mut().take();
-        match result {
-            Some(Ok(())) => Ok(()),
-            Some(Err(msg)) => Err(EngineError::Other(format!("navigation failed: {msg}"))),
-            None => Err(EngineError::Other(
-                "navigation completed without a result".into(),
-            )),
-        }
+        wait_for_load(&web_view, "navigate")
     }
 
     fn enable_webauthn(&mut self, _page: PageHandle) -> EngineResult<()> {
@@ -325,13 +308,15 @@ impl Engine for WpeBackend {
         action: Action,
         _mode: InputMode,
     ) -> EngineResult<()> {
+        self.forget_new_window(page)?;
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
         super::common::run_act(
             move |js, budget| eval_js_string(&web_view, js, budget),
             &target,
             &action,
-        )
+        )?;
+        self.follow_new_window(page)
     }
 
     fn wait(
@@ -603,6 +588,7 @@ impl Engine for WpeBackend {
         // Addressing the page validates it and keeps the error shape
         // the same as every other page op, even though the keys go to
         // whatever holds focus rather than to a page handle.
+        self.forget_new_window(page)?;
         let cursor = self.page_mut(page)?.last_mouse.get();
         let dispatcher = super::wpe_input::dispatcher()?;
         // Pump GLib rather than sleep: this runs on the main thread,
@@ -672,10 +658,11 @@ impl Engine for WpeBackend {
         // Let the last keyUp turn into beforeinput/input before the
         // caller reads the page back.
         let _ = run_loop_until(|| false, Duration::from_millis(150));
-        Ok(())
+        self.follow_new_window(page)
     }
 
     fn cursor_op(&mut self, page: PageHandle, op: CursorOp, mode: InputMode) -> EngineResult<()> {
+        self.forget_new_window(page)?;
         let p = self.page_mut(page)?;
         let dispatcher = super::wpe_input::dispatcher()?;
         let humanize_mode = match mode {
@@ -755,7 +742,7 @@ impl Engine for WpeBackend {
             }
         };
         p.last_mouse.set(landed);
-        Ok(())
+        self.follow_new_window(page)
     }
 
     fn capabilities(&self) -> EngineCapabilities {
@@ -1103,5 +1090,69 @@ mod wpe_cookies {
                 _ => None,
             },
         }
+    }
+}
+
+/// Wait for the load already started on `web_view` to finish or fail.
+fn wait_for_load(web_view: &WebView, primitive: &'static str) -> EngineResult<()> {
+    let slot: Rc<RefCell<Option<Result<(), String>>>> = Rc::new(RefCell::new(None));
+    let slot_for_signal = slot.clone();
+    let signal_id = web_view.connect_load_changed(move |_view, event| {
+        if event == LoadEvent::Finished {
+            *slot_for_signal.borrow_mut() = Some(Ok(()));
+        }
+    });
+    let slot_fail = slot.clone();
+    let fail_id = web_view.connect_load_failed(move |_view, _event, _uri, err| {
+        *slot_fail.borrow_mut() = Some(Err(err.message().to_string()));
+        true
+    });
+
+    let slot_check = slot.clone();
+    let budget = super::common::nav_budget();
+    let ok = run_loop_until(move || slot_check.borrow().is_some(), budget);
+
+    web_view.disconnect(signal_id);
+    web_view.disconnect(fail_id);
+
+    if !ok {
+        return Err(EngineError::Timeout {
+            budget,
+            primitive,
+            detail: "",
+        });
+    }
+    // Taken out of the RefCell before the match, not inside it:
+    // as the function's tail expression the borrow guard would
+    // otherwise outlive `slot` itself.
+    let result = slot.borrow_mut().take();
+    match result {
+        Some(Ok(())) => Ok(()),
+        Some(Err(msg)) => Err(EngineError::Other(format!("navigation failed: {msg}"))),
+        None => Err(EngineError::Other(
+            "navigation completed without a result".into(),
+        )),
+    }
+}
+
+impl WpeBackend {
+    /// Drop a new-window request parked before this input primitive
+    /// started (a popup the page fired on its own), so the primitive
+    /// only follows what it caused.
+    fn forget_new_window(&mut self, page: PageHandle) -> EngineResult<()> {
+        let _ = self.page_mut(page)?.new_window.borrow_mut().take();
+        Ok(())
+    }
+
+    /// Load a new-window navigation the last input primitive caused, in
+    /// this page, and wait for it like `goto`. No parked request: no-op.
+    fn follow_new_window(&mut self, page: PageHandle) -> EngineResult<()> {
+        let p = self.page_mut(page)?;
+        let Some(request) = p.new_window.borrow_mut().take() else {
+            return Ok(());
+        };
+        let web_view = p.web_view.clone();
+        web_view.load_request(&request);
+        wait_for_load(&web_view, "act")
     }
 }

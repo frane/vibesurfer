@@ -611,3 +611,56 @@ fn cell_drag_native_draggable_does_not_wedge() {
         );
     }
 }
+
+// A target="_blank" link, a target="_blank" POST form, and
+// window.open() all used to go nowhere: the headless page has no
+// second window, WebKit dropped the navigation, and the click looked
+// like a no-op. ScienceDirect's institution login is a blank-target
+// form, so agents could not sign in through it. The navigation now
+// loads in the same page, with a POST body intact on the WebKit
+// engines. WebView2 hands over only the URL, so Windows skips the POST
+// case (docs/known-issues.md).
+#[test]
+fn cell_new_window_navigation_loads_in_place() {
+    for _ in each_available_backend() {
+        let cases: [(&str, &str, &str, &str); 3] = [
+            (
+                "lnk",
+                "New-window link",
+                "/multi-page-2.html",
+                "Multi-page B",
+            ),
+            ("btn", "New-window POST", "/echo", "entity=escp-idp"),
+            ("btn", "Window open", "/multi-page-2.html", "Multi-page B"),
+        ];
+        for (role, label, path, text) in cases {
+            if cfg!(target_os = "windows") && label == "New-window POST" {
+                continue;
+            }
+            let ctx = TestContext::start();
+            let (_s, page, _t) = open_fixture(&ctx, "/popup.html");
+            let r = ctx.vs(&["view", &page, "--full"]);
+            assert_ok("view", &r);
+            let target = ref_for(&body_rest(&r), role, label);
+            let r = ctx.vs(&[
+                "act",
+                &page,
+                &target.to_string(),
+                "click",
+                &format!("--token={}", token_of(&r)),
+            ]);
+            assert_ok(label, &r);
+            settle(1500);
+            let got_path = eval_js(&ctx, &page, "location.pathname");
+            assert!(
+                got_path.contains(path),
+                "{label}: page must navigate to {path}, got {got_path:?}"
+            );
+            let body = eval_js(&ctx, &page, "document.body.innerText");
+            assert!(
+                body.contains(text),
+                "{label}: expected {text:?} in body, got {body:?}"
+            );
+        }
+    }
+}

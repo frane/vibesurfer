@@ -94,6 +94,11 @@ Perform `<op>` on `<ref>`. Operations: `click`, `fill`, `scroll`,
 - Idempotent on `(page_id, before_token, args_hash)` for 30s.
 - Errors: `STALE_TOKEN`, `NOT_FOUND ref=<n>`, `POLICY_DENY`,
   `CONFIRM_REQUIRED`, `TIMEOUT`.
+- New windows (v0.2.10+): a `target="_blank"` link or form, or
+  `window.open()`, loads in this page, and `act` returns after that
+  navigation. `click-at` and `type` do the same. The WebKit engines
+  keep a POST body; WebView2 only exposes the URL, so on Windows the
+  form arrives as a GET.
 
 ## 8. `vs_find <query>`
 

@@ -46,7 +46,8 @@ use webview2_com::{
     CallDevToolsProtocolMethodCompletedHandler, CapturePreviewCompletedHandler,
     CreateCoreWebView2CompositionControllerCompletedHandler,
     CreateCoreWebView2EnvironmentCompletedHandler, ExecuteScriptCompletedHandler,
-    NavigationCompletedEventHandler, WebMessageReceivedEventHandler,
+    NavigationCompletedEventHandler, NewWindowRequestedEventHandler,
+    WebMessageReceivedEventHandler,
 };
 use windows::core::{Interface, HSTRING, PWSTR};
 use windows::Win32::Foundation::{E_POINTER, HWND, POINT, RECT};
@@ -107,6 +108,10 @@ struct W2Page {
     /// after every `cursor_op` so the next humanized lead-in starts
     /// where the previous one ended. Defaults to (0, 0) on `open`.
     last_mouse: std::cell::Cell<vs_humanize::Point>,
+    /// URL of a new-window navigation (`target="_blank"`,
+    /// `window.open()`) the page asked for and we have not loaded yet.
+    /// Set by the `NewWindowRequested` handler installed in `open`.
+    new_window: std::rc::Rc<std::cell::RefCell<Option<String>>>,
 }
 
 // =============================================================================
@@ -149,6 +154,39 @@ unsafe extern "system" fn wnd_proc(
 }
 
 impl Webview2Backend {
+    /// Drop a new-window request parked before this input primitive
+    /// started (a popup the page fired on its own), so the primitive
+    /// only follows what it caused.
+    fn forget_new_window(&mut self, page: PageHandle) -> EngineResult<()> {
+        let _ = self.page_mut(page)?.new_window.borrow_mut().take();
+        Ok(())
+    }
+
+    /// Navigate this page to a new-window URL the last input primitive
+    /// caused, and wait for it like `goto`. `NewWindowRequested` is
+    /// raised asynchronously, so pump messages briefly first. No
+    /// request: no-op.
+    fn follow_new_window(&mut self, page: PageHandle) -> EngineResult<()> {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            DispatchMessageW, PeekMessageW, MSG, PM_REMOVE,
+        };
+        let parked = self.page_mut(page)?.new_window.clone();
+        let deadline = std::time::Instant::now() + Duration::from_millis(300);
+        while parked.borrow().is_none() && std::time::Instant::now() < deadline {
+            let mut msg = MSG::default();
+            unsafe {
+                while PeekMessageW(&raw mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                    DispatchMessageW(&raw const msg);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let Some(url) = parked.borrow_mut().take() else {
+            return Ok(());
+        };
+        self.navigate(page, &url)
+    }
+
     /// Build a backend. Caller must already have initialized COM
     /// (`CoInitializeEx` STA) on this thread before constructing.
     /// Production wiring lives in `vs-cli::serve` on Windows.
@@ -625,6 +663,30 @@ impl Engine for Webview2Backend {
         // which is what the in-iframe viewer case needs.
         let _ = add_init_script(&web_view, super::common::DOWNLOAD_SHIM_JS);
 
+        // A headless page has no second window. WebView2 would open a
+        // separate popup the agent cannot address; mark the request
+        // handled and park its URL instead, and the input primitive that
+        // caused it navigates this page there (`follow_new_window`).
+        // WebView2 does not expose the request body, so a POSTed
+        // blank-target form arrives as a GET (docs/known-issues.md).
+        let new_window: std::rc::Rc<std::cell::RefCell<Option<String>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let parked = new_window.clone();
+        let popup_handler =
+            NewWindowRequestedEventHandler::create(Box::new(move |_sender, args| {
+                if let Some(args) = args {
+                    let mut uri = PWSTR(std::ptr::null_mut());
+                    if unsafe { args.Uri(&raw mut uri) }.is_ok() {
+                        *parked.borrow_mut() = Some(take_pwstr(uri));
+                    }
+                    unsafe { args.SetHandled(true) }?;
+                }
+                Ok(())
+            }));
+        let mut popup_token: i64 = 0;
+        unsafe { web_view.add_NewWindowRequested(&popup_handler, &raw mut popup_token) }
+            .map_err(|e| EngineError::Other(format!("add_NewWindowRequested: {e}")))?;
+
         // 4. Navigate + wait for NavigationCompleted.
         let (tx, rx) = mpsc::channel();
         let handler = NavigationCompletedEventHandler::create(Box::new(move |_sender, _args| {
@@ -658,6 +720,7 @@ impl Engine for Webview2Backend {
                 cookie_baseline: std::cell::RefCell::new(None),
                 cookie_next_seq: std::cell::RefCell::new(0),
                 last_mouse: std::cell::Cell::new(vs_humanize::Point { x: 0.0, y: 0.0 }),
+                new_window,
             },
         );
         Ok(handle)
@@ -720,13 +783,15 @@ impl Engine for Webview2Backend {
         action: Action,
         _mode: InputMode,
     ) -> EngineResult<()> {
+        self.forget_new_window(page)?;
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
         super::common::run_act(
             move |js, _budget| execute_script(&web_view, js),
             &target,
             &action,
-        )
+        )?;
+        self.follow_new_window(page)
     }
 
     fn wait(
@@ -1056,6 +1121,7 @@ impl Engine for Webview2Backend {
     }
 
     fn type_text(&mut self, page: PageHandle, text: &str, mode: InputMode) -> EngineResult<()> {
+        self.forget_new_window(page)?;
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
         let (base_delay, span) = match mode {
@@ -1104,10 +1170,11 @@ impl Engine for Webview2Backend {
                 std::thread::sleep(Duration::from_millis(wait.max(1)));
             }
         }
-        Ok(())
+        self.follow_new_window(page)
     }
 
     fn cursor_op(&mut self, page: PageHandle, op: CursorOp, mode: InputMode) -> EngineResult<()> {
+        self.forget_new_window(page)?;
         let p = self.page_mut(page)?;
         let comp = p.comp_controller.clone();
         let humanize_mode = match mode {
@@ -1154,7 +1221,7 @@ impl Engine for Webview2Backend {
             }
         };
         p.last_mouse.set(landed);
-        Ok(())
+        self.follow_new_window(page)
     }
 
     fn capabilities(&self) -> EngineCapabilities {

@@ -102,6 +102,9 @@ pub enum Command {
         r: u32,
     },
     /// 7. Perform an action on a ref.
+    ///
+    /// A click that opens a new window (`target="_blank"`,
+    /// `window.open()`) loads in this page.
     #[command(visible_alias = "a")]
     Act {
         page: String,
@@ -303,7 +306,8 @@ pub enum Command {
         #[arg(long, short = 'M', default_value = "human")]
         mode: String,
     },
-    /// Click at `(x, y)`. Trusted on macOS (`isTrusted = true`).
+    /// Click at `(x, y)`. Trusted on macOS (`isTrusted = true`). A
+    /// new-window link or form loads in this page.
     #[command(visible_alias = "ca")]
     ClickAt {
         page: String,

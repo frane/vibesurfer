@@ -31,6 +31,10 @@ Honest list of behaviors that aren't yet what they should be. Each entry has a s
 
 - `vs auth webauthn <page>` installs a virtual authenticator on macOS (WKWebView) and any WebKit backend that can inject a document-start script. It is a pure-JS software authenticator (`webauthn_virtual.js`) that overrides `navigator.credentials.create`/`.get` with an ES256 (P-256) authenticator built on WebCrypto — no CDP, no WebDriver, `navigator.webdriver` stays undefined, so it is the same "injected script, no automation surface" model as the snapshot walker. Registration and login round-trip against a real relying party. Limits: ES256 only (the common passkey algorithm); "none" attestation, so a relying party that demands direct/packed attestation with a trusted AAGUID will reject it; credentials live in-page (per document, shared across a create/get in the same session). For sites where those limits bite, `vs auth import` remains the fallback (log in with a passkey elsewhere, import the session). Linux WPE / Windows WebView2 return `ENGINE_UNSUPPORTED` for `enable_webauthn` until their document-start injection is wired.
 
+## New-window POST on Windows
+
+- A `target="_blank"` link, form or `window.open()` loads in the same page on all three engines (v0.2.10, cell `cell_new_window_navigation_loads_in_place`). WebView2's `NewWindowRequested` exposes only the URL, so on Windows a blank-target POST form is followed as a GET and the server never sees the body. The macOS and Linux engines carry method and body.
+
 ## Caller-key sessions vs command substitution (Windows only)
 
 - Fixed on Unix: session auto-binding keys on the POSIX session id (`sid-<sid>`), which is identical across command substitution, nested shells and pipelines, so `P=$(vs open …); vs view $P` works. Cell `cell_session_survives_command_substitution`.

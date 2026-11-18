@@ -310,6 +310,37 @@ const RAF_SHIM_JS: &str = r"
 })();
 ";
 
+impl WkBackend {
+    /// Load a new-window navigation the page asked for during the last
+    /// input primitive, in this page, and wait for it like `goto`.
+    ///
+    /// A `target="_blank"` link or form, or `window.open()`, has no
+    /// second window to go to headless. The UI delegate parks the
+    /// request (`NavDelegate::create_web_view`); without this the click
+    /// returned ok and nothing happened. No parked request: no-op.
+    /// Drop a new-window request parked before this input primitive
+    /// started (a popup a page fired on its own), so the primitive only
+    /// follows what it caused.
+    fn forget_new_window(&mut self, page: PageHandle) -> EngineResult<()> {
+        let _ = self.page_mut(page)?.nav_delegate.take_new_window();
+        Ok(())
+    }
+
+    fn follow_new_window(&mut self, page: PageHandle) -> EngineResult<()> {
+        let (web_view, delegate) = {
+            let p = self.page_mut(page)?;
+            (p.web_view.clone(), p.nav_delegate.clone())
+        };
+        let Some(request) = delegate.take_new_window() else {
+            return Ok(());
+        };
+        let slot = delegate.slot();
+        slot.borrow_mut().reset();
+        let _ = unsafe { web_view.loadRequest(&request) };
+        wait_for_navigation(&slot, super::common::nav_budget(), "act")
+    }
+}
+
 impl Engine for WkBackend {
     fn open(&mut self, url: &str) -> EngineResult<PageHandle> {
         let mtm = self.mtm;
@@ -530,6 +561,7 @@ impl Engine for WkBackend {
         action: Action,
         mode: InputMode,
     ) -> EngineResult<()> {
+        self.forget_new_window(page)?;
         let p = self.page_mut(page)?;
 
         let web_view = p.web_view.clone();
@@ -596,7 +628,7 @@ impl Engine for WkBackend {
                 )?;
                 p.last_mouse.set(landed);
                 flush(&web_view_flush);
-                return Ok(());
+                return self.follow_new_window(page);
             }
         }
 
@@ -606,7 +638,8 @@ impl Engine for WkBackend {
             &action,
         );
         flush(&web_view_flush);
-        result
+        result?;
+        self.follow_new_window(page)
     }
 
     fn wait(
@@ -877,6 +910,7 @@ impl Engine for WkBackend {
 
     fn type_text(&mut self, page: PageHandle, text: &str, mode: InputMode) -> EngineResult<()> {
         let mtm = self.mtm;
+        self.forget_new_window(page)?;
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
         let web_view_flush = p.web_view.clone();
@@ -900,11 +934,12 @@ impl Engine for WkBackend {
             "String(window.__vsFlushRAF ? window.__vsFlushRAF() : 0)",
             Duration::from_secs(2),
         );
-        Ok(())
+        self.follow_new_window(page)
     }
 
     fn cursor_op(&mut self, page: PageHandle, op: CursorOp, mode: InputMode) -> EngineResult<()> {
         let mtm = self.mtm;
+        self.forget_new_window(page)?;
         let (web_view, window, webview_height, start) = {
             let p = self.page_mut(page)?;
             (
@@ -965,7 +1000,7 @@ impl Engine for WkBackend {
         if let Some(p) = self.pages.get(&page) {
             p.last_mouse.set(landed);
         }
-        Ok(())
+        self.follow_new_window(page)
     }
     fn capabilities(&self) -> EngineCapabilities {
         // Inspector console + network reflect actual install-path

@@ -8,8 +8,11 @@ use std::time::Duration;
 
 use objc2::rc::Retained;
 use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
-use objc2_foundation::{NSError, NSObject, NSObjectProtocol, NSRect};
-use objc2_web_kit::{WKNavigation, WKNavigationDelegate, WKUIDelegate, WKWebView};
+use objc2_foundation::{NSError, NSObject, NSObjectProtocol, NSRect, NSURLRequest};
+use objc2_web_kit::{
+    WKNavigation, WKNavigationAction, WKNavigationDelegate, WKUIDelegate, WKWebView,
+    WKWebViewConfiguration, WKWindowFeatures,
+};
 
 /// Slot shared between the delegate and the Rust caller. Both ends
 /// live on the main thread, so `Rc<RefCell<...>>` is fine.
@@ -36,6 +39,9 @@ pub(super) type NavSlot = Rc<RefCell<NavState>>;
 
 pub(super) struct NavDelegateIvars {
     pub(super) slot: NavSlot,
+    /// A new-window navigation WebKit asked for and we have not
+    /// loaded yet. See `create_web_view`.
+    pub(super) new_window: RefCell<Option<Retained<NSURLRequest>>>,
 }
 
 define_class!(
@@ -109,6 +115,30 @@ define_class!(
                 .map_or_else(|| web_view.frame(), |w| w.frame());
             handler.call((frame,));
         }
+
+        /// A `target="_blank"` link or form, or `window.open()`.
+        ///
+        /// A headless page has nowhere to put a second window, and
+        /// without this method WebKit drops the navigation: the click
+        /// does nothing and the agent sees an unchanged tree. Park the
+        /// request instead; the input primitive that caused it loads it
+        /// in this page and waits for it (see `follow_new_window`). A
+        /// load started from inside this callback is dropped, because
+        /// WebKit is still deciding the originating navigation. The
+        /// request carries method and body, so a POSTed form (SAML and
+        /// institution-login handoffs) arrives intact.
+        #[unsafe(method(webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:))]
+        fn create_web_view(
+            &self,
+            _web_view: &WKWebView,
+            _config: &WKWebViewConfiguration,
+            action: &WKNavigationAction,
+            _features: &WKWindowFeatures,
+        ) -> *mut WKWebView {
+            let request = unsafe { action.request() };
+            *self.ivars().new_window.borrow_mut() = Some(request);
+            std::ptr::null_mut()
+        }
     }
 
     unsafe impl NSObjectProtocol for NavDelegate {}
@@ -118,7 +148,10 @@ define_class!(
 
 impl NavDelegate {
     pub(super) fn new(mtm: MainThreadMarker, slot: NavSlot) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(NavDelegateIvars { slot });
+        let this = Self::alloc(mtm).set_ivars(NavDelegateIvars {
+            slot,
+            new_window: RefCell::new(None),
+        });
         unsafe { msg_send![super(this), init] }
     }
 
@@ -126,6 +159,11 @@ impl NavDelegate {
     /// in-place navigation on the same delegate.
     pub(super) fn slot(&self) -> NavSlot {
         self.ivars().slot.clone()
+    }
+
+    /// Take the parked new-window request, if the page asked for one.
+    pub(super) fn take_new_window(&self) -> Option<Retained<NSURLRequest>> {
+        self.ivars().new_window.borrow_mut().take()
     }
 }
 
