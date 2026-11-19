@@ -199,6 +199,33 @@
         };
     }
 
+    const FIELD_ROLES = new Set(['tf', 'ta', 'sel', 'chk', 'rad']);
+    // Text of the elements that label a form field: aria-labelledby,
+    // else <label for> and a wrapping <label>. The control's own text
+    // (a wrapped <select>'s options) is left out.
+    function fieldLabel(el) {
+        var sources = [];
+        var ids = el.getAttribute('aria-labelledby');
+        if (ids) {
+            ids.split(/\s+/).forEach(function (id) {
+                var t = id && document.getElementById(id);
+                if (t) sources.push(t);
+            });
+        } else if (el.labels) {
+            for (var i = 0; i < el.labels.length; i++) sources.push(el.labels[i]);
+        }
+        var out = '';
+        function collect(n) {
+            if (n === el) return;
+            if (n.nodeType === 3) { out += n.nodeValue + ' '; return; }
+            if (n.nodeType !== 1) return;
+            var tag = n.tagName;
+            if (tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'SCRIPT' || tag === 'STYLE') return;
+            for (var c = n.firstChild; c; c = c.nextSibling) collect(c);
+        }
+        sources.forEach(collect);
+        return out.replace(/\s+/g, ' ').trim().slice(0, 200);
+    }
     function labelFor(el, role) {
         const aria = el.getAttribute('aria-label');
         if (aria) return aria.trim();
@@ -311,6 +338,22 @@
             return node;
         }
         if (role && hiddenFor(el, role)) node.hid = 1;
+        // Heading level and checked state, so a test can ask for an h1
+        // or assert a checkbox without a separate eval.
+        if (role === 'hd') {
+            var lvl = Number(el.getAttribute('aria-level')) ||
+                (/^H[1-6]$/.test(el.tagName) ? Number(el.tagName[1]) : 0);
+            if (lvl) node.lvl = lvl;
+        } else if (role === 'chk' || role === 'rad') {
+            var ac = el.getAttribute('aria-checked');
+            if (el.checked === true || ac === 'true') node.chk = 1;
+        }
+        // A form field's label is its value (what was typed), so the
+        // <label> text rides separately as `lbl=`.
+        if (FIELD_ROLES.has(role)) {
+            var named = fieldLabel(el);
+            if (named) node.flbl = named;
+        }
         return node;
     }
     const docRef = refFor(document.documentElement);

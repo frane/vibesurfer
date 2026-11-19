@@ -97,6 +97,19 @@ fn build_node(v: &serde_json::Value) -> Option<Node> {
     if v.get("hid").and_then(serde_json::Value::as_u64) == Some(1) {
         attrs.insert("hid".to_string(), "1".to_string());
     }
+    // `level=N` on a heading (h1-h6 or aria-level).
+    if let Some(l) = v.get("lvl").and_then(serde_json::Value::as_u64) {
+        attrs.insert("level".to_string(), l.to_string());
+    }
+    // `lbl=<text>` on a form field with a <label> or aria-labelledby.
+    // The node's label stays the field's value.
+    if let Some(l) = v.get("flbl").and_then(serde_json::Value::as_str) {
+        attrs.insert("lbl".to_string(), l.to_string());
+    }
+    // `checked=1` on a checked checkbox or radio; absent when unchecked.
+    if v.get("chk").and_then(serde_json::Value::as_u64) == Some(1) {
+        attrs.insert("checked".to_string(), "1".to_string());
+    }
     // `challenge=<provider>:<state>` on a bot-check widget. `pending`
     // means unsolved, and is usually one trusted click away from
     // solved — see `challenge_box` below. Providers draw into a closed

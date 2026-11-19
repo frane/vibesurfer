@@ -4,6 +4,11 @@ All notable changes to vibesurfer are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- The tree carries `level=N` on headings (h1-h6 or `aria-level`), `checked=1` on a checked checkbox or radio, and `lbl=<text>` on a form field labelled by a `<label>` (for or wrapping) or `aria-labelledby`. A field's node label stays its value, which is what an agent reads to see what was typed; the label text was not in the tree at all, and a checkbox showed only its value (`on`). A client can now filter headings by level, assert checked state, and find a field by its label without an eval. Cell `cell_view_heading_level_and_checked`.
+
 ## [0.2.11] - 2026-11-19
 
 ### Fixed

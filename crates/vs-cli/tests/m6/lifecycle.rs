@@ -178,6 +178,56 @@ fn cell_view_survives_lone_surrogates() {
     }
 }
 
+// Headings carry level=N and a checked checkbox carries checked=1,
+// so a client can filter by heading level and assert checked state
+// from the tree alone.
+#[test]
+fn cell_view_heading_level_and_checked() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/static.html");
+        let r = ctx.vs(&["view", &page, "--full"]);
+        assert_ok("view --full", &r);
+        let body = body_rest(&r);
+        let has = |needle: &str| body.lines().any(|l| l.contains(needle));
+        assert!(
+            body.lines()
+                .any(|l| l.contains("hd") && l.contains("Static fixture") && l.contains("level=1")),
+            "h1 must carry level=1:\n{body}"
+        );
+        assert!(
+            body.lines()
+                .any(|l| l.contains("hd") && l.contains("Forms") && l.contains("level=2")),
+            "h2 must carry level=2:\n{body}"
+        );
+        assert!(!has("checked=1"), "nothing is checked yet:\n{body}");
+        // The checkbox's own label is its value ("on"); the wrapping
+        // <label> text rides as lbl=.
+        let chk_line = body
+            .lines()
+            .find(|l| l.contains(" chk ") && l.contains("lbl=\"Accept terms\""))
+            .unwrap_or_else(|| panic!("checkbox must carry lbl=\"Accept terms\":\n{body}"));
+        let chk: u32 = chk_line.split_whitespace().next().unwrap().parse().unwrap();
+        let tok = token_of(&r);
+        let a = ctx.vs(&[
+            "act",
+            &page,
+            &chk.to_string(),
+            "click",
+            &format!("--token={tok}"),
+        ]);
+        assert_ok("act click checkbox", &a);
+        let r = ctx.vs(&["view", &page, "--full"]);
+        let body = body_rest(&r);
+        assert!(
+            body.lines().any(|l| l.contains("chk")
+                && l.contains("Accept terms")
+                && l.contains("checked=1")),
+            "checked box must carry checked=1:\n{body}"
+        );
+    }
+}
+
 // 6. vs_read
 #[test]
 fn cell_read() {
