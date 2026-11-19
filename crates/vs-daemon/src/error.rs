@@ -121,7 +121,7 @@ impl DaemonError {
                     "vs_prompt_form_wait".into(),
                     format!(
                         "form {form} still waiting on the human; the form and its URL \
-                         are live, call vs_prompt_form_wait again with the same form id"
+                         are live, wait again with the same form id (vs prompt-form-wait {form})"
                     ),
                 ],
             ),

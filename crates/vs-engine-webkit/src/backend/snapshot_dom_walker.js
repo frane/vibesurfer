@@ -346,7 +346,31 @@
         }
         return walk(document);
     };
-    var __vsResult = JSON.stringify(root);
+    // Labels are capped with slice(), which can cut an emoji between
+    // its two UTF-16 halves, and pages can carry lone surrogates too.
+    // JSON.stringify escapes a lone one as `\udXXX`, which serde_json
+    // rejects, failing the whole view. Swap any lone surrogate for
+    // U+FFFD.
+    function wellFormed(s) {
+        if (!/[\ud800-\udfff]/.test(s)) return s;
+        var out = '';
+        for (var i = 0; i < s.length; i++) {
+            var c = s.charCodeAt(i);
+            if (c >= 0xd800 && c <= 0xdbff) {
+                var d = s.charCodeAt(i + 1);
+                if (d >= 0xdc00 && d <= 0xdfff) { out += s[i] + s[i + 1]; i++; continue; }
+                out += '�';
+            } else if (c >= 0xdc00 && c <= 0xdfff) {
+                out += '�';
+            } else {
+                out += s[i];
+            }
+        }
+        return out;
+    }
+    var __vsResult = JSON.stringify(root, function (_k, v) {
+        return typeof v === 'string' ? wellFormed(v) : v;
+    });
     window.__vsLastResult = __vsResult;
     window.__vsDirty = false;
     // The walker's globals are created here, after the download shim's

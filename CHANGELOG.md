@@ -4,6 +4,12 @@ All notable changes to vibesurfer are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.11] - 2026-11-19
+
+### Fixed
+- `vs view` no longer fails with `invalid snapshot json: unexpected end of hex escape`. Labels are capped at 200 UTF-16 units, and a cap that fell inside an emoji left half a surrogate pair; a page string can carry a lone surrogate as well. `JSON.stringify` escapes a lone surrogate and serde_json rejects the escape, so the whole view failed. The walker now replaces a lone surrogate with U+FFFD before serializing. Seen on a ScienceDirect article page. Fixture `surrogate.html`, cell `cell_view_survives_lone_surrogates`.
+- `vs prompt-form-wait <FORM>` (alias `pfw`) is listed in `--help`. It was hidden as MCP-only, so a CLI agent whose `prompt-form` wait timed out, or that used `--no-wait`, had no documented way to park again on the same form. The timeout message names the command.
+
 ## [0.2.10] - 2026-11-18
 
 ### Fixed

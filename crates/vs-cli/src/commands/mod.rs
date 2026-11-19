@@ -405,7 +405,7 @@ pub enum Command {
         #[arg(long)]
         open: bool,
         /// Print the URL and form id, then exit instead of waiting.
-        /// Park later with the wire op `vs_prompt_form_wait`.
+        /// Park later with `vs prompt-form-wait <FORM>`.
         #[arg(long)]
         no_wait: bool,
         /// How long to wait for the submit, in milliseconds.
@@ -463,12 +463,11 @@ pub enum Command {
     /// Plumbing for MCP panel frames / thumbnails. Hidden.
     #[command(hide = true)]
     Frame { page: String },
-    /// Wire-only park step of `vs prompt-form` — waits for the form
-    /// to be submitted, then fills the refs. Used by `vs mcp` so the
-    /// agent can enqueue (getting the URL back immediately), relay
-    /// the URL to the human, and park in a second call. Hidden from
-    /// `--help`: only the MCP server wires it.
-    #[command(hide = true)]
+    /// Park on a form from `vs prompt-form --no-wait` (or one whose
+    /// wait timed out) until the human submits, then fill its refs.
+    /// `! TIMEOUT ... still waiting` means the form is live: run it
+    /// again with the same form id.
+    #[command(visible_alias = "pfw")]
     PromptFormWait {
         form: String,
         #[arg(long = "timeout-ms", default_value_t = 300_000)]

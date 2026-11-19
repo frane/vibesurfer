@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>surrogate</title>
+</head>
+<body>
+  <!-- Leaf labels are capped at 200 UTF-16 units. The emoji sits at
+       units 199-200, so the cap cuts it in half and leaves a lone high
+       surrogate. The second paragraph gets a lone low surrogate from
+       script. Either one used to fail the whole view with
+       "invalid snapshot json: unexpected end of hex escape". -->
+  <p id="cut"></p>
+  <p id="lone"></p>
+  <button>Still here</button>
+  <script>
+    document.getElementById('cut').textContent = 'a'.repeat(199) + '\u{1F600} tail';
+    document.getElementById('lone').textContent = 'low \udc00 end';
+  </script>
+</body>
+</html>

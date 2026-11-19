@@ -160,6 +160,24 @@ fn cell_view_never_emits_ref_zero() {
     }
 }
 
+// A label capped mid-emoji, or a page string with a lone surrogate,
+// used to fail the whole view: JSON.stringify escapes the lone half
+// and serde_json rejects it. Found on a ScienceDirect article page.
+#[test]
+fn cell_view_survives_lone_surrogates() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/surrogate.html");
+        let r = ctx.vs(&["view", &page, "--full"]);
+        assert_ok("view --full", &r);
+        let body = body_rest(&r);
+        assert!(
+            body.contains("Still here") && body.contains("low \u{FFFD} end"),
+            "view must render with lone surrogates replaced:\n{body}"
+        );
+    }
+}
+
 // 6. vs_read
 #[test]
 fn cell_read() {
