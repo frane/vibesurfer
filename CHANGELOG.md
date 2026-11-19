@@ -7,6 +7,7 @@ All notable changes to vibesurfer are recorded here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- A click no longer waits 250ms for a new window that is not coming. 0.2.10 made every click, submit and Enter pump for up to 250ms in case a `target="_blank"` link or `window.open` had asked for a window, because that request can arrive after the click returns; ordinary clicks paid the whole wait, and a four-click flow got a second slower. The document-start shim now flags a blank-target link or form, `form.submit()` with a target, and `window.open`, and the engine reads that flag after the click (one eval) and waits only when it is set, for up to 1s. Measured by the testsurfer benchmark on a GitHub macOS runner.
 - `vs serve` exits on SIGTERM (and `vs serve --stop`) again. Since 0.2.7 the session reaper's thread held a strong handle to the daemon, so after the server stopped the engine channel never closed and the main run loop waited forever; the daemon needed `kill -9`, which skips the engine teardown and orphans each open page's web-content process. The reaper now holds a weak handle. The m6 harness stops each daemon with SIGTERM and falls back to SIGKILL after 3s, so every cell since 0.2.7 paid that wait and leaked its render processes, which is most of why the Mac engine job went from ~14 to ~30 minutes. Cell `cell_sigterm_stops_the_daemon`.
 
 ## [0.2.12] - 2026-11-19

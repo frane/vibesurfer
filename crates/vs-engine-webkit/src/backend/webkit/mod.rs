@@ -335,12 +335,19 @@ impl WkBackend {
             let p = self.page_mut(page)?;
             (p.web_view.clone(), p.nav_delegate.clone())
         };
-        if settle {
-            let waiting = delegate.clone();
-            let _ = run_loop_until(
-                move || waiting.has_new_window(),
-                super::common::NEW_WINDOW_SETTLE,
+        if settle && !delegate.has_new_window() {
+            let hint = eval_js_string(
+                &web_view,
+                super::common::NEW_WINDOW_HINT_JS,
+                Duration::from_secs(2),
             );
+            if super::common::new_window_hinted(&hint) {
+                let waiting = delegate.clone();
+                let _ = run_loop_until(
+                    move || waiting.has_new_window(),
+                    super::common::NEW_WINDOW_SETTLE,
+                );
+            }
         }
         let Some(request) = delegate.take_new_window() else {
             return Ok(());

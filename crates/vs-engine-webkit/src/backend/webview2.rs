@@ -170,9 +170,18 @@ impl Webview2Backend {
         use windows::Win32::UI::WindowsAndMessaging::{
             DispatchMessageW, PeekMessageW, MSG, PM_REMOVE,
         };
-        let parked = self.page_mut(page)?.new_window.clone();
+        let (parked, web_view) = {
+            let p = self.page_mut(page)?;
+            (p.new_window.clone(), p.web_view.clone())
+        };
+        let wait = settle
+            && parked.borrow().is_none()
+            && super::common::new_window_hinted(&execute_script(
+                &web_view,
+                super::common::NEW_WINDOW_HINT_JS,
+            ));
         let deadline = std::time::Instant::now()
-            + if settle {
+            + if wait {
                 super::common::NEW_WINDOW_SETTLE
             } else {
                 Duration::ZERO

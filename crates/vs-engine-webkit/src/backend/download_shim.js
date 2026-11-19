@@ -345,11 +345,54 @@
     intercept(abs, a.getAttribute('download') || null);
   }
 
+  // --- new-window hint ---
+  //
+  // A blank-target link or form, or window.open, asks the engine for a
+  // new window over IPC, and that request can land after the click
+  // that caused it has returned. The engine used to wait 250ms after
+  // every click in case one was coming; now it waits only when this
+  // flag says one is. `__vsNw` is set on the top window (same-origin
+  // frames reach it; a cross-origin frame's request is still caught
+  // whenever it lands before the click returns).
+  function markNewWindow() {
+    try { window.__vsNw = 1; } catch (e) { /* ignore */ }
+    try { if (!isTop) window.top.__vsNw = 1; } catch (e) { /* cross-origin top */ }
+  }
+  function opensWindow(target) {
+    if (!target) {
+      var base = document.querySelector && document.querySelector('base[target]');
+      target = base ? base.getAttribute('target') : '';
+    }
+    target = String(target || '').toLowerCase();
+    return target !== '' && target !== '_self' && target !== '_parent' && target !== '_top';
+  }
+
   document.addEventListener('click', function (ev) {
     var t = ev.target;
-    while (t && t.nodeType === 1 && t.tagName !== 'A') t = t.parentNode;
-    if (t && t.nodeType === 1) anchorIntent(t);
+    while (t && t.nodeType === 1 && t.tagName !== 'A' && t.tagName !== 'AREA') t = t.parentNode;
+    if (t && t.nodeType === 1) {
+      if (t.tagName === 'A') anchorIntent(t);
+      try { if (t.getAttribute('href') !== null && opensWindow(t.getAttribute('target'))) markNewWindow(); } catch (e) { /* ignore */ }
+    }
   }, true);
+
+  document.addEventListener('submit', function (ev) {
+    try {
+      var f = ev.target;
+      var target = (ev.submitter && ev.submitter.getAttribute && ev.submitter.getAttribute('formtarget')) ||
+        (f && f.getAttribute && f.getAttribute('target'));
+      if (opensWindow(target)) markNewWindow();
+    } catch (e) { /* ignore */ }
+  }, true);
+
+  // form.submit() fires no submit event.
+  try {
+    var protoSubmit = HTMLFormElement.prototype.submit;
+    HTMLFormElement.prototype.submit = passAsNative(function submit() {
+      try { if (opensWindow(this.getAttribute('target'))) markNewWindow(); } catch (e) { /* ignore */ }
+      return protoSubmit.apply(this, arguments);
+    }, protoSubmit);
+  } catch (e) { /* prototype frozen */ }
 
   // A synthetic `a.click()` on an anchor never attached to the
   // document does not bubble anywhere the listener above can see it —
@@ -365,6 +408,7 @@
   try {
     var origOpen = window.open;
     window.open = passAsNative(function open(url) {
+      markNewWindow();
       try {
         if (url && (String(url).slice(0, 5) === 'blob:' || String(url).slice(0, 5) === 'data:')) {
           intercept(String(url), null);
@@ -387,4 +431,7 @@
     '__vsDirty', '__vsDirtyObserver', '__vsRefCounter',
     '__vsFindRef', '__vsLastResult',
   ]);
+  try {
+    Object.defineProperty(window, '__vsNw', { value: 0, writable: true, enumerable: false, configurable: true });
+  } catch (e) { /* ignore */ }
 })()

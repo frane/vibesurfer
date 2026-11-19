@@ -1150,12 +1150,19 @@ impl WpeBackend {
     /// for up to `NEW_WINDOW_SETTLE` first. No parked request: no-op.
     fn follow_new_window(&mut self, page: PageHandle, settle: bool) -> EngineResult<()> {
         let p = self.page_mut(page)?;
-        if settle {
-            let parked = p.new_window.clone();
-            let _ = run_loop_until(
-                move || parked.borrow().is_some(),
-                super::common::NEW_WINDOW_SETTLE,
+        if settle && p.new_window.borrow().is_none() {
+            let hint = eval_js_string(
+                &p.web_view,
+                super::common::NEW_WINDOW_HINT_JS,
+                Duration::from_secs(2),
             );
+            if super::common::new_window_hinted(&hint) {
+                let parked = p.new_window.clone();
+                let _ = run_loop_until(
+                    move || parked.borrow().is_some(),
+                    super::common::NEW_WINDOW_SETTLE,
+                );
+            }
         }
         let Some(request) = p.new_window.borrow_mut().take() else {
             return Ok(());

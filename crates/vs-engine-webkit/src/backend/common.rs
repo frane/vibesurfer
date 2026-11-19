@@ -196,15 +196,31 @@ pub(crate) fn nav_budget() -> std::time::Duration {
     std::time::Duration::from_millis(ms)
 }
 
-/// How long a click waits for the page to ask for a new window.
+/// How long a click waits for the page's new-window request.
 ///
 /// The engine raises that request (WKUIDelegate `createWebView`,
 /// WebKitGTK `create`, WebView2 `NewWindowRequested`) over IPC from the
-/// content process, and it can land after the click has returned. On a
-/// fast runner the click came back first and the blank-target link
-/// looked like a no-op. The wait ends as soon as the request arrives,
-/// so only a click that opens nothing pays the full settle.
-pub(crate) const NEW_WINDOW_SETTLE: std::time::Duration = std::time::Duration::from_millis(250);
+/// content process, and it can land after the click has returned. The
+/// wait only happens when the page's hint (`NEW_WINDOW_HINT_JS`) says a
+/// request is coming, and ends as soon as it arrives. Every click used
+/// to pay this in full, which cost ~250ms per click.
+pub(crate) const NEW_WINDOW_SETTLE: std::time::Duration = std::time::Duration::from_millis(1000);
+
+/// Read and clear the page's new-window hint (`__vsNw`, set by the
+/// document-start shim when a blank-target link or form or
+/// `window.open` fires). The reply carries `vsnw:1` when a new-window
+/// request is on its way.
+pub(crate) const NEW_WINDOW_HINT_JS: &str =
+    "(function(){var v=window.__vsNw;try{window.__vsNw=0;}catch(e){}return v?'vsnw:1':'vsnw:0';})()";
+
+/// Whether to wait for a new-window request after a click, given the
+/// hint eval's result. A failed eval waits, as before the hint existed.
+pub(crate) fn new_window_hinted(result: &Result<String, impl std::fmt::Debug>) -> bool {
+    match result {
+        Ok(s) => s.contains("vsnw:1"),
+        Err(_) => true,
+    }
+}
 
 /// Whether `action` can open a new window: a click, a submit, or Enter.
 pub(crate) fn may_open_window(action: &crate::engine::Action) -> bool {
