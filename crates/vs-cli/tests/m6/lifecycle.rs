@@ -228,6 +228,24 @@ fn cell_view_heading_level_and_checked() {
     }
 }
 
+// SIGTERM stops the daemon by itself, with a page open. The reaper
+// thread held a strong daemon handle, so the engine channel never
+// closed and `vs serve` hung until SIGKILL, orphaning the page's
+// web-content process (and every m6 teardown fell back to SIGKILL).
+#[cfg(unix)]
+#[test]
+fn cell_sigterm_stops_the_daemon() {
+    for _ in each_available_backend() {
+        let mut ctx = TestContext::start();
+        let (_s, _page, _t) = open_fixture(&ctx, "/static.html");
+        assert!(
+            ctx.daemon
+                .terminate_within(std::time::Duration::from_secs(10)),
+            "vs serve did not exit within 10s of SIGTERM"
+        );
+    }
+}
+
 // 6. vs_read
 #[test]
 fn cell_read() {

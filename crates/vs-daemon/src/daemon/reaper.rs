@@ -120,12 +120,17 @@ pub(crate) fn spawn(daemon: &Daemon) {
         tracing::info!("session reaping disabled (VS_REAP=0)");
         return;
     };
-    let daemon = daemon.clone();
+    // Weak, so the sweep thread does not keep the daemon alive. A
+    // strong handle here held the engine channel open after SIGTERM:
+    // the server stopped, but the main run loop waits for that channel
+    // to close, so `vs serve` never exited and needed kill -9.
+    let weak = std::sync::Arc::downgrade(&daemon.inner);
     let _ = std::thread::Builder::new()
         .name("vs-reaper".into())
         .spawn(move || loop {
             std::thread::sleep(cfg.sweep);
-            daemon.reap_once(cfg);
+            let Some(inner) = weak.upgrade() else { break };
+            Daemon { inner }.reap_once(cfg);
         });
     tracing::info!(
         page_idle_secs = cfg.page_idle.as_secs(),

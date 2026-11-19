@@ -67,6 +67,23 @@ impl DaemonGuard {
     pub fn home(&self) -> &Path {
         &self.home
     }
+
+    /// Send SIGTERM and report whether the daemon exited by itself
+    /// within `budget`.
+    #[cfg(unix)]
+    #[allow(dead_code)]
+    pub fn terminate_within(&mut self, budget: Duration) -> bool {
+        let pid = self.child.id().to_string();
+        let _ = Command::new("kill").arg("-TERM").arg(&pid).status();
+        let deadline = std::time::Instant::now() + budget;
+        while std::time::Instant::now() < deadline {
+            if matches!(self.child.try_wait(), Ok(Some(_))) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    }
 }
 
 impl Drop for DaemonGuard {
