@@ -11,6 +11,7 @@
 pub(crate) mod auth;
 mod common;
 pub(crate) mod inspector_bridge;
+mod native_download;
 
 #[cfg(target_os = "macos")]
 pub mod webkit;

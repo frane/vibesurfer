@@ -127,6 +127,9 @@
       push: function (entry) {
         this.seq += 1;
         entry.id = this.seq;
+        // Start time, so Rust can order this against downloads the
+        // engine itself received.
+        entry.t0 = entry.t0 || Date.now();
         this.list.push(entry);
         while (this.list.length > MAX_ENTRIES) this.list.shift();
         return entry.id;
@@ -151,6 +154,7 @@
           size: e.bytes ? e.bytes.length : 0,
           done: !!e.done,
           ts: e.ts || 0,
+          t0: e.t0 || 0,
         });
       },
       index: function () {
@@ -403,6 +407,23 @@
       try { anchorIntent(this); } catch (e) { /* never block the click */ }
       return protoClick.apply(this, arguments);
     }, protoClick);
+  } catch (e) { /* prototype frozen */ }
+
+  // FileSaver.js and its copies click with
+  // `a.dispatchEvent(new MouseEvent('click'))` instead. On a detached
+  // anchor that reaches neither the listener nor `.click()`. An
+  // attached one bubbles to the listener, so only detached ones are
+  // handled here.
+  try {
+    var protoDispatch = EventTarget.prototype.dispatchEvent;
+    EventTarget.prototype.dispatchEvent = passAsNative(function dispatchEvent(ev) {
+      try {
+        if (ev && ev.type === 'click' && this instanceof HTMLAnchorElement && !this.isConnected) {
+          anchorIntent(this);
+        }
+      } catch (e) { /* never block the event */ }
+      return protoDispatch.apply(this, arguments);
+    }, protoDispatch);
   } catch (e) { /* prototype frozen */ }
 
   try {

@@ -49,6 +49,8 @@ use crate::engine::{
 use eval::{eval_js_string, run_loop_until};
 use nav_delegate::{wait_for_navigation, NavDelegate, NavSlot, NavState};
 
+use super::native_download::SharedDownloads;
+
 // =============================================================================
 // Per-page state
 // =============================================================================
@@ -473,7 +475,7 @@ impl Engine for WkBackend {
         unsafe { web_view.setCustomUserAgent(Some(&ua)) };
 
         let slot: NavSlot = Rc::new(RefCell::new(NavState::default()));
-        let delegate = NavDelegate::new(mtm, slot.clone());
+        let delegate = NavDelegate::new(mtm, slot.clone(), SharedDownloads::default());
         let proto: &ProtocolObject<dyn WKNavigationDelegate> = ProtocolObject::from_ref(&*delegate);
         unsafe { web_view.setNavigationDelegate(Some(proto)) };
         // Same object serves as the UI delegate: WebKit sources
@@ -686,6 +688,7 @@ impl Engine for WkBackend {
     ) -> EngineResult<Download> {
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
+        let native = p.nav_delegate.downloads();
         super::common::run_download(
             |js, budget| eval_js_string(&web_view, js, budget),
             || {
@@ -693,13 +696,18 @@ impl Engine for WkBackend {
             },
             &source,
             budget,
+            &native,
         )
     }
 
     fn download_list(&mut self, page: PageHandle) -> EngineResult<Vec<DownloadEntry>> {
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
-        super::common::run_download_list(move |js, budget| eval_js_string(&web_view, js, budget))
+        let native = p.nav_delegate.downloads();
+        super::common::run_download_list(
+            move |js, budget| eval_js_string(&web_view, js, budget),
+            &native,
+        )
     }
 
     fn capture(&mut self, page: PageHandle, _scope: CaptureScope) -> EngineResult<PathBuf> {

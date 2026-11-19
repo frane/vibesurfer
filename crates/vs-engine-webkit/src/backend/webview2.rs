@@ -33,6 +33,8 @@ use std::time::Duration;
 
 use vs_protocol::{Ref, Tree};
 
+use super::native_download::{name_from_disposition, temp_path, SharedDownloads, MAX_BYTES};
+
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2, ICoreWebView2CompositionController, ICoreWebView2Controller,
     ICoreWebView2Environment, ICoreWebView2Environment3,
@@ -112,6 +114,8 @@ struct W2Page {
     /// `window.open()`) the page asked for and we have not loaded yet.
     /// Set by the `NewWindowRequested` handler installed in `open`.
     new_window: std::rc::Rc<std::cell::RefCell<Option<String>>>,
+    /// Downloads this page's responses turned into.
+    downloads: SharedDownloads,
 }
 
 // =============================================================================
@@ -673,6 +677,8 @@ impl Engine for Webview2Backend {
         // `AddScriptToExecuteOnDocumentCreated` applies to every frame,
         // which is what the in-iframe viewer case needs.
         let _ = add_init_script(&web_view, super::common::DOWNLOAD_SHIM_JS);
+        let downloads = SharedDownloads::default();
+        install_download_capture(&web_view, &downloads)?;
 
         // A headless page has no second window. WebView2 would open a
         // separate popup the agent cannot address; mark the request
@@ -732,6 +738,7 @@ impl Engine for Webview2Backend {
                 cookie_next_seq: std::cell::RefCell::new(0),
                 last_mouse: std::cell::Cell::new(vs_humanize::Point { x: 0.0, y: 0.0 }),
                 new_window,
+                downloads,
             },
         );
         Ok(handle)
@@ -918,6 +925,7 @@ impl Engine for Webview2Backend {
     ) -> EngineResult<Download> {
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
+        let native = p.downloads.clone();
         super::common::run_download(
             |js, _budget| execute_script(&web_view, js),
             || {
@@ -937,13 +945,15 @@ impl Engine for Webview2Backend {
             },
             &source,
             budget,
+            &native,
         )
     }
 
     fn download_list(&mut self, page: PageHandle) -> EngineResult<Vec<DownloadEntry>> {
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
-        super::common::run_download_list(move |js, _budget| execute_script(&web_view, js))
+        let native = p.downloads.clone();
+        super::common::run_download_list(move |js, _budget| execute_script(&web_view, js), &native)
     }
 
     fn set_viewport(&mut self, page: PageHandle, viewport: Viewport) -> EngineResult<()> {
@@ -1518,4 +1528,103 @@ mod wv2_cookies {
             same_site,
         }
     }
+}
+
+/// Take over WebView2's own downloads.
+///
+/// WebView2 turns a `Content-Disposition: attachment` response (an
+/// export button, a form POST answering with a file, a hidden-iframe
+/// download) into a download with a shelf UI and a file in the user's
+/// Downloads folder. A headless page wants neither: write it to a temp
+/// file, hide the UI, and move the bytes into `downloads` for
+/// `vs_download`. `blob:` and `data:` saves come from page script and
+/// the shim already has them, so those are cancelled here.
+fn install_download_capture(
+    web_view: &ICoreWebView2,
+    downloads: &SharedDownloads,
+) -> EngineResult<()> {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2DownloadOperation, ICoreWebView2_4, COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON,
+        COREWEBVIEW2_DOWNLOAD_STATE, COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED,
+        COREWEBVIEW2_DOWNLOAD_STATE_INTERRUPTED,
+    };
+    use webview2_com::{DownloadStartingEventHandler, StateChangedEventHandler};
+
+    fn read_pwstr(f: impl FnOnce(*mut PWSTR) -> windows::core::Result<()>) -> String {
+        let mut p = PWSTR(std::ptr::null_mut());
+        if f(&raw mut p).is_ok() && !p.0.is_null() {
+            take_pwstr(p)
+        } else {
+            String::new()
+        }
+    }
+
+    let v4: ICoreWebView2_4 = web_view
+        .cast()
+        .map_err(|e| EngineError::Other(format!("cast to ICoreWebView2_4: {e}")))?;
+    let downloads = downloads.clone();
+    let handler = DownloadStartingEventHandler::create(Box::new(move |_sender, args| {
+        let Some(args) = args else { return Ok(()) };
+        let op: ICoreWebView2DownloadOperation = unsafe { args.DownloadOperation() }?;
+        let url = read_pwstr(|p| unsafe { op.Uri(p) });
+        if url.starts_with("blob:") || url.starts_with("data:") {
+            unsafe { args.SetCancel(true) }?;
+            return Ok(());
+        }
+        let cd = read_pwstr(|p| unsafe { op.ContentDisposition(p) });
+        let mime = read_pwstr(|p| unsafe { op.MimeType(p) });
+        let name = name_from_disposition(&cd).unwrap_or_default();
+        let Ok(id) = downloads.lock().map(|mut d| d.begin(&url, &name, &mime)) else {
+            return Ok(());
+        };
+        let mut total: i64 = 0;
+        let _ = unsafe { op.TotalBytesToReceive(&raw mut total) };
+        if u64::try_from(total).is_ok_and(|n| n > MAX_BYTES) {
+            if let Ok(mut d) = downloads.lock() {
+                d.finish(
+                    id,
+                    Err(format!("download exceeds {MAX_BYTES} bytes ({total})")),
+                );
+            }
+            unsafe { args.SetCancel(true) }?;
+            return Ok(());
+        }
+        let path = temp_path(id);
+        let _ = std::fs::remove_file(&path);
+        let wide = HSTRING::from(path.as_os_str());
+        unsafe { args.SetResultFilePath(&wide) }?;
+        unsafe { args.SetHandled(true) }?;
+
+        let dl = downloads.clone();
+        let state_handler = StateChangedEventHandler::create(Box::new(move |op, _| {
+            let Some(op) = op else { return Ok(()) };
+            let mut state = COREWEBVIEW2_DOWNLOAD_STATE::default();
+            unsafe { op.State(&raw mut state) }?;
+            let result = if state == COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED {
+                let path = temp_path(id);
+                let bytes =
+                    std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()));
+                let _ = std::fs::remove_file(&path);
+                bytes
+            } else if state == COREWEBVIEW2_DOWNLOAD_STATE_INTERRUPTED {
+                let _ = std::fs::remove_file(temp_path(id));
+                let mut reason = COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON::default();
+                let _ = unsafe { op.InterruptReason(&raw mut reason) };
+                Err(format!("download interrupted ({reason:?})"))
+            } else {
+                return Ok(());
+            };
+            if let Ok(mut d) = dl.lock() {
+                d.finish(id, result);
+            }
+            Ok(())
+        }));
+        let mut token: i64 = 0;
+        unsafe { op.add_StateChanged(&state_handler, &raw mut token) }?;
+        Ok(())
+    }));
+    let mut token: i64 = 0;
+    unsafe { v4.add_DownloadStarting(&handler, &raw mut token) }
+        .map_err(|e| EngineError::Other(format!("add_DownloadStarting: {e}")))?;
+    Ok(())
 }

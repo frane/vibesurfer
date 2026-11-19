@@ -2,16 +2,26 @@
 //! implements `WKNavigationDelegate`. Drops the navigation result into
 //! a shared slot when the page finishes loading or fails.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
 use objc2::rc::Retained;
-use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
-use objc2_foundation::{NSError, NSObject, NSObjectProtocol, NSRect, NSURLRequest};
+use objc2::runtime::ProtocolObject;
+use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly, Message};
+use objc2_foundation::{
+    NSData, NSError, NSHTTPURLResponse, NSObject, NSObjectProtocol, NSRect, NSString, NSURLRequest,
+    NSURLResponse, NSURL,
+};
 use objc2_web_kit::{
-    WKNavigation, WKNavigationAction, WKNavigationDelegate, WKUIDelegate, WKWebView,
+    WKDownload, WKDownloadDelegate, WKNavigation, WKNavigationAction, WKNavigationDelegate,
+    WKNavigationResponse, WKNavigationResponsePolicy, WKUIDelegate, WKWebView,
     WKWebViewConfiguration, WKWindowFeatures,
+};
+
+use crate::backend::native_download::{
+    is_attachment, name_from_disposition, temp_path, SharedDownloads, MAX_BYTES,
 };
 
 /// Slot shared between the delegate and the Rust caller. Both ends
@@ -42,6 +52,46 @@ pub(super) struct NavDelegateIvars {
     /// A new-window navigation WebKit asked for and we have not
     /// loaded yet. See `create_web_view`.
     pub(super) new_window: RefCell<Option<Retained<NSURLRequest>>>,
+    /// Downloads the engine received, drained by `vs_download`.
+    pub(super) downloads: SharedDownloads,
+    /// In-flight `WKDownload`s: object address, buffer id, temp file.
+    pub(super) in_flight: RefCell<Vec<(usize, u64, PathBuf)>>,
+    /// The main-frame response just became a download. WebKit then
+    /// fails the provisional navigation, which is not a failed load.
+    pub(super) main_became_download: Cell<bool>,
+}
+
+fn ns_str(s: Option<Retained<NSString>>) -> String {
+    s.map(|s| s.to_string()).unwrap_or_default()
+}
+
+fn response_url(r: &NSURLResponse) -> String {
+    r.URL()
+        .and_then(|u| u.absoluteString())
+        .map(|s| s.to_string())
+        .unwrap_or_default()
+}
+
+fn disposition(r: &NSURLResponse) -> String {
+    let r: Retained<NSURLResponse> = r.retain();
+    r.downcast::<NSHTTPURLResponse>()
+        .ok()
+        .and_then(|h| h.valueForHTTPHeaderField(&NSString::from_str("Content-Disposition")))
+        .map(|s| s.to_string())
+        .unwrap_or_default()
+}
+
+/// Whether a navigation response should be saved instead of shown:
+/// the server marked it an attachment, or WebKit cannot render it.
+/// `blob:` and `data:` saves come from page script and the shim
+/// already has them.
+fn wants_download(resp: &WKNavigationResponse) -> bool {
+    let r = unsafe { resp.response() };
+    let url = response_url(&r);
+    if !(url.starts_with("http:") || url.starts_with("https:")) {
+        return false;
+    }
+    is_attachment(&disposition(&r)) || !unsafe { resp.canShowMIMEType() }
 }
 
 define_class!(
@@ -91,8 +141,61 @@ define_class!(
             _nav: Option<&WKNavigation>,
             error: &NSError,
         ) {
+            // A main-frame response that became a download ends the
+            // provisional load with "frame load interrupted". The page
+            // is unchanged and the file is on its way: not a failure.
+            if self.ivars().main_became_download.replace(false) {
+                self.ivars().slot.borrow_mut().done = Some(Ok(()));
+                return;
+            }
             let msg = error.localizedDescription().to_string();
             self.ivars().slot.borrow_mut().done = Some(Err(msg));
+        }
+
+        /// Save attachments instead of dropping them.
+        ///
+        /// Without this method WebKit cancels any response it cannot
+        /// render, and a `Content-Disposition: attachment` response is
+        /// lost with no event: an export button, a form POST that
+        /// answers with a file, a hidden-iframe download.
+        #[unsafe(method(webView:decidePolicyForNavigationResponse:decisionHandler:))]
+        fn decide_response(
+            &self,
+            _web_view: &WKWebView,
+            resp: &WKNavigationResponse,
+            handler: &block2::DynBlock<dyn Fn(WKNavigationResponsePolicy)>,
+        ) {
+            let policy = if wants_download(resp) {
+                if unsafe { resp.isForMainFrame() } {
+                    self.ivars().main_became_download.set(true);
+                }
+                WKNavigationResponsePolicy::Download
+            } else {
+                WKNavigationResponsePolicy::Allow
+            };
+            handler.call((policy,));
+        }
+
+        #[unsafe(method(webView:navigationResponse:didBecomeDownload:))]
+        fn response_became_download(
+            &self,
+            _web_view: &WKWebView,
+            resp: &WKNavigationResponse,
+            download: &WKDownload,
+        ) {
+            let r = unsafe { resp.response() };
+            let name = name_from_disposition(&disposition(&r))
+                .unwrap_or_else(|| ns_str(r.suggestedFilename()));
+            let id = match self.ivars().downloads.lock() {
+                Ok(mut d) => d.begin(&response_url(&r), &name, &ns_str(r.MIMEType())),
+                Err(_) => return,
+            };
+            let key = std::ptr::from_ref(download) as usize;
+            self.ivars()
+                .in_flight
+                .borrow_mut()
+                .push((key, id, temp_path(id)));
+            unsafe { download.setDelegate(Some(ProtocolObject::from_ref(self))) };
         }
 
         /// Answer WebKit's request for the host window's frame.
@@ -144,13 +247,76 @@ define_class!(
     unsafe impl NSObjectProtocol for NavDelegate {}
     unsafe impl WKNavigationDelegate for NavDelegate {}
     unsafe impl WKUIDelegate for NavDelegate {}
+
+    unsafe impl WKDownloadDelegate for NavDelegate {
+        #[unsafe(method(download:decideDestinationUsingResponse:suggestedFilename:completionHandler:))]
+        fn decide_destination(
+            &self,
+            download: &WKDownload,
+            response: &NSURLResponse,
+            suggested: &NSString,
+            handler: &block2::DynBlock<dyn Fn(*mut NSURL)>,
+        ) {
+            let Some((id, path)) = self.in_flight_entry(download) else {
+                handler.call((std::ptr::null_mut(),));
+                return;
+            };
+            if let Ok(mut d) = self.ivars().downloads.lock() {
+                let header = name_from_disposition(&disposition(response));
+                if header.is_none() {
+                    d.set_name(id, &suggested.to_string());
+                }
+            }
+            let expected = response.expectedContentLength();
+            if u64::try_from(expected).is_ok_and(|n| n > MAX_BYTES) {
+                self.settle(download, Err(format!(
+                    "download exceeds {MAX_BYTES} bytes ({expected})"
+                )));
+                handler.call((std::ptr::null_mut(),));
+                return;
+            }
+            let _ = std::fs::remove_file(&path);
+            let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+            handler.call((Retained::as_ptr(&url).cast_mut(),));
+        }
+
+        #[unsafe(method(downloadDidFinish:))]
+        fn download_did_finish(&self, download: &WKDownload) {
+            let Some((_, path)) = self.in_flight_entry(download) else {
+                return;
+            };
+            let bytes = std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()));
+            let _ = std::fs::remove_file(&path);
+            self.settle(download, bytes);
+        }
+
+        #[unsafe(method(download:didFailWithError:resumeData:))]
+        fn download_did_fail(
+            &self,
+            download: &WKDownload,
+            error: &NSError,
+            _resume: Option<&NSData>,
+        ) {
+            if let Some((_, path)) = self.in_flight_entry(download) {
+                let _ = std::fs::remove_file(&path);
+            }
+            self.settle(download, Err(error.localizedDescription().to_string()));
+        }
+    }
 );
 
 impl NavDelegate {
-    pub(super) fn new(mtm: MainThreadMarker, slot: NavSlot) -> Retained<Self> {
+    pub(super) fn new(
+        mtm: MainThreadMarker,
+        slot: NavSlot,
+        downloads: SharedDownloads,
+    ) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(NavDelegateIvars {
             slot,
             new_window: RefCell::new(None),
+            downloads,
+            in_flight: RefCell::new(Vec::new()),
+            main_became_download: Cell::new(false),
         });
         unsafe { msg_send![super(this), init] }
     }
@@ -161,9 +327,37 @@ impl NavDelegate {
         self.ivars().slot.clone()
     }
 
+    /// Downloads this page's responses turned into.
+    pub(super) fn downloads(&self) -> SharedDownloads {
+        self.ivars().downloads.clone()
+    }
+
     /// Whether the page has asked for a new window we have not loaded.
     pub(super) fn has_new_window(&self) -> bool {
         self.ivars().new_window.borrow().is_some()
+    }
+
+    fn in_flight_entry(&self, download: &WKDownload) -> Option<(u64, PathBuf)> {
+        let key = std::ptr::from_ref(download) as usize;
+        self.ivars()
+            .in_flight
+            .borrow()
+            .iter()
+            .find(|(k, _, _)| *k == key)
+            .map(|(_, id, p)| (*id, p.clone()))
+    }
+
+    /// Record the outcome and forget the `WKDownload`.
+    fn settle(&self, download: &WKDownload, result: Result<Vec<u8>, String>) {
+        let key = std::ptr::from_ref(download) as usize;
+        let mut in_flight = self.ivars().in_flight.borrow_mut();
+        let Some(pos) = in_flight.iter().position(|(k, _, _)| *k == key) else {
+            return;
+        };
+        let (_, id, _) = in_flight.remove(pos);
+        if let Ok(mut d) = self.ivars().downloads.lock() {
+            d.finish(id, result);
+        }
     }
 
     /// Take the parked new-window request, if the page asked for one.

@@ -4,6 +4,13 @@ All notable changes to vibesurfer are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.14] - 2026-11-19
+
+### Fixed
+- `vs download` catches files the server sends as attachments. An export button whose form POST answers with `Content-Disposition: attachment`, the same POST aimed at a hidden iframe, or a link to a file the engine cannot render never reaches page script, so the capture shim never saw it, and with no download handler WebKit cancelled the response. `vs download` timed out and `--list` was empty. Each engine now turns such a response into a native download (WKDownload on macOS, the WebKitGTK download API on Linux, `DownloadStarting` on WebView2), writes it to a temp file, and puts the bytes in a buffer that `vs download` drains together with the shim's. The page stays where it was, and a `goto` to an attachment URL returns ok. WebView2 no longer drops such files in the user's Downloads folder. Seen on Scopus "Export to RIS". Cells `cell_download_captures_form_post_attachment` and `cell_download_captures_iframe_attachment`. (Reported via `#vibesurfer`, 01M7TG.)
+- A save made with `a.dispatchEvent(new MouseEvent('click'))` on a detached anchor, the FileSaver.js pattern, is captured. Cell `cell_download_captures_dispatched_click`.
+- A click that re-renders a large subtree returns the full tree, not a delta twice its size. Re-created elements get fresh refs, so the delta removed and re-added every node; on the Scopus results page one click cost about 25k tokens. When a delta is over 2 KB and longer than the tree, the full tree is sent instead, which is also a valid re-baseline.
+
 ## [0.2.13] - 2026-11-19
 
 ### Fixed

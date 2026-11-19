@@ -67,6 +67,11 @@ struct WpePage {
     /// the page asked for and we have not loaded yet. Set by the
     /// `create` handler installed in `open`.
     new_window: Rc<RefCell<Option<webkit6::URIRequest>>>,
+    /// Downloads this page's responses turned into.
+    downloads: SharedDownloads,
+    /// The shared network session's `download-started` handler for
+    /// this page. Disconnected on close.
+    download_hook: Option<(webkit6::NetworkSession, glib::SignalHandlerId)>,
 }
 
 // =============================================================================
@@ -147,6 +152,9 @@ fn run_loop_until<F: FnMut() -> bool>(mut done: F, budget: Duration) -> bool {
 // =============================================================================
 
 use super::common::{parse_snapshot, SNAPSHOT_DOM_WALKER_JS as SNAPSHOT_JS};
+use super::native_download::{
+    is_attachment, name_from_disposition, temp_path, SharedDownloads, MAX_BYTES,
+};
 
 // =============================================================================
 // Engine impl
@@ -208,6 +216,8 @@ impl Engine for WpeBackend {
             *parked.borrow_mut() = action.request();
             None
         });
+        let downloads = SharedDownloads::default();
+        let download_hook = install_download_capture(&web_view, &downloads);
         web_view.load_uri(url);
 
         // Wait for LoadEvent::Finished or LoadEvent::Failed via signal.
@@ -220,7 +230,7 @@ impl Engine for WpeBackend {
         });
         let slot_fail = slot.clone();
         let fail_id = web_view.connect_load_failed(move |_view, _event, _uri, err| {
-            *slot_fail.borrow_mut() = Some(Err(err.message().to_string()));
+            *slot_fail.borrow_mut() = Some(load_result(err));
             // Stop event propagation: we have handled it.
             true
         });
@@ -262,6 +272,8 @@ impl Engine for WpeBackend {
                 cookie_next_seq: std::cell::RefCell::new(0),
                 last_mouse: Cell::new(vs_humanize::Point { x: 0.0, y: 0.0 }),
                 new_window,
+                downloads,
+                download_hook,
             },
         );
         Ok(handle)
@@ -285,7 +297,10 @@ impl Engine for WpeBackend {
     }
 
     fn close(&mut self, page: PageHandle) -> EngineResult<()> {
-        if let Some(p) = self.pages.remove(&page) {
+        if let Some(mut p) = self.pages.remove(&page) {
+            if let Some((session, id)) = p.download_hook.take() {
+                session.disconnect(id);
+            }
             // Dismiss the hidden host window so its `GdkSurface` is
             // unmapped from the display server. `close()` queues the
             // destroy; the GLib main context completes it on the next
@@ -353,6 +368,7 @@ impl Engine for WpeBackend {
     ) -> EngineResult<Download> {
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
+        let native = p.downloads.clone();
         super::common::run_download(
             |js, budget| eval_js_string(&web_view, js, budget),
             || {
@@ -360,13 +376,18 @@ impl Engine for WpeBackend {
             },
             &source,
             budget,
+            &native,
         )
     }
 
     fn download_list(&mut self, page: PageHandle) -> EngineResult<Vec<DownloadEntry>> {
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
-        super::common::run_download_list(move |js, budget| eval_js_string(&web_view, js, budget))
+        let native = p.downloads.clone();
+        super::common::run_download_list(
+            move |js, budget| eval_js_string(&web_view, js, budget),
+            &native,
+        )
     }
     fn set_viewport(&mut self, page: PageHandle, viewport: Viewport) -> EngineResult<()> {
         let p = self.page_mut(page)?;
@@ -1093,6 +1114,129 @@ mod wpe_cookies {
     }
 }
 
+/// A load that ended because its response became a download left the
+/// page as it was and put the file in the download buffer. Not a
+/// failure.
+fn load_result(err: &glib::Error) -> Result<(), String> {
+    if err.matches(webkit6::PolicyError::FrameLoadInterruptedByPolicyChange) {
+        Ok(())
+    } else {
+        Err(err.message().to_string())
+    }
+}
+
+/// Save attachments instead of dropping them.
+///
+/// A `Content-Disposition: attachment` response (an export button, a
+/// form POST answering with a file, a hidden-iframe download) never
+/// reaches page script. Turn it into a WebKit download, write it to a
+/// temp file, and move the bytes into `downloads` for `vs_download`.
+/// The network session is shared by every page, so the
+/// `download-started` handler checks the download belongs to this one.
+fn install_download_capture(
+    web_view: &WebView,
+    downloads: &SharedDownloads,
+) -> Option<(webkit6::NetworkSession, glib::SignalHandlerId)> {
+    web_view.connect_decide_policy(|_view, decision, ty| {
+        if ty != webkit6::PolicyDecisionType::Response {
+            return false;
+        }
+        let Some(rd) = decision.downcast_ref::<webkit6::ResponsePolicyDecision>() else {
+            return false;
+        };
+        let Some(resp) = rd.response() else {
+            return false;
+        };
+        let uri = resp.uri().map(|u| u.to_string()).unwrap_or_default();
+        if !(uri.starts_with("http:") || uri.starts_with("https:")) {
+            return false;
+        }
+        let cd = resp
+            .http_headers()
+            .and_then(|h| h.one("Content-Disposition"))
+            .map(|v| v.to_string())
+            .unwrap_or_default();
+        if is_attachment(&cd) || !rd.is_mime_type_supported() {
+            decision.download();
+            return true;
+        }
+        false
+    });
+
+    let session = WebViewExt::network_session(web_view)?;
+    let weak = web_view.downgrade();
+    let downloads = downloads.clone();
+    let id = session.connect_download_started(move |_session, download| {
+        let Some(view) = weak.upgrade() else { return };
+        if download.web_view().as_ref() != Some(&view) {
+            return;
+        }
+        let resp = download.response();
+        let url = resp
+            .as_ref()
+            .and_then(webkit6::URIResponse::uri)
+            .or_else(|| download.request().and_then(|r| r.uri()))
+            .map(|u| u.to_string())
+            .unwrap_or_default();
+        let mime = resp
+            .as_ref()
+            .and_then(webkit6::URIResponse::mime_type)
+            .map(|m| m.to_string())
+            .unwrap_or_default();
+        let name = resp
+            .as_ref()
+            .and_then(webkit6::URIResponse::http_headers)
+            .and_then(|h| h.one("Content-Disposition"))
+            .and_then(|cd| name_from_disposition(&cd))
+            .unwrap_or_default();
+        let Ok(id) = downloads.lock().map(|mut d| d.begin(&url, &name, &mime)) else {
+            return;
+        };
+        let path = temp_path(id);
+        let _ = std::fs::remove_file(&path);
+
+        let dl = downloads.clone();
+        download.connect_decide_destination(move |download, suggested| {
+            if let Ok(mut d) = dl.lock() {
+                if name.is_empty() {
+                    d.set_name(id, suggested);
+                }
+            }
+            let expected = download.response().map_or(0, |r| r.content_length());
+            if expected > MAX_BYTES {
+                if let Ok(mut d) = dl.lock() {
+                    d.finish(
+                        id,
+                        Err(format!("download exceeds {MAX_BYTES} bytes ({expected})")),
+                    );
+                }
+                download.cancel();
+                return true;
+            }
+            download.set_destination(&path.to_string_lossy());
+            true
+        });
+        let dl = downloads.clone();
+        download.connect_failed(move |_download, err| {
+            if let Ok(mut d) = dl.lock() {
+                d.finish(id, Err(err.message().to_string()));
+            }
+            let _ = std::fs::remove_file(temp_path(id));
+        });
+        let dl = downloads.clone();
+        download.connect_finished(move |_download| {
+            let path = temp_path(id);
+            // `failed` is followed by `finished`; the first result wins.
+            let bytes = std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()));
+            let _ = std::fs::remove_file(&path);
+            if let Ok(mut d) = dl.lock() {
+                d.finish(id, bytes);
+            }
+        });
+    });
+    Some((session, id))
+}
+
 /// Wait for the load already started on `web_view` to finish or fail.
 fn wait_for_load(web_view: &WebView, primitive: &'static str) -> EngineResult<()> {
     let slot: Rc<RefCell<Option<Result<(), String>>>> = Rc::new(RefCell::new(None));
@@ -1104,7 +1248,7 @@ fn wait_for_load(web_view: &WebView, primitive: &'static str) -> EngineResult<()
     });
     let slot_fail = slot.clone();
     let fail_id = web_view.connect_load_failed(move |_view, _event, _uri, err| {
-        *slot_fail.borrow_mut() = Some(Err(err.message().to_string()));
+        *slot_fail.borrow_mut() = Some(load_result(err));
         true
     });
 

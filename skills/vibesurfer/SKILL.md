@@ -1,6 +1,6 @@
 ---
 name: vibesurfer
-version: 0.2.13
+version: 0.2.14
 binary: vs
 description: Agent-native headless browser. 26 primitives over a Unix-socket wire protocol. Real WKWebView (macOS), WebKitGTK 6 (Linux), or WebView2 (Windows) — all three engines verified per-commit by a real-browser integration suite. Optimistic concurrency via state tokens; tree-delta wire format; durable session/page/auth state in SQLite.
 ---
@@ -123,7 +123,7 @@ A password field masks to `***` in the tree whatever its value, so empty → fil
 **Downloads (v0.2.1+).** A headless web view has no download UI, so a file the page tries to save has nowhere to go. `vs download` is the way out, in two modes:
 
 - **You know the URL** — `vs download <PAGE> <URL>` reads it *from inside the page*, so session cookies, referer, and same-origin rules apply. This is how you get a PDF that only an authenticated session may fetch. Relative URLs resolve against the current document.
-- **The page saved it itself** — `vs download <PAGE>` with no URL drains the newest download the page started: a `download` link, a viewer's Save button, a `blob:` navigation. Those are captured as they happen (bytes and all, even when the page revokes the object URL a tick later), so click Save first, then call `vs download`. `--list` shows what is waiting; `--id=N` picks one entry instead of the newest.
+- **The page saved it itself** — `vs download <PAGE>` with no URL drains the newest download the page started: a `download` link, a viewer's Save button, a `blob:` navigation, an export form or iframe whose response is an attachment (v0.2.14+). Those are captured as they happen (bytes and all, even when the page revokes the object URL a tick later), so click Save first, then call `vs download`. `--list` shows what is waiting; `--id=N` picks one entry instead of the newest. A `TIMEOUT` leaves the capture in place, so call again.
 
 The response body is `path` / `size` / `mime` / `url` rows — bytes never cross the wire. A failed read (401, revoked blob, over the 64 MiB cap) comes back as an error saying why, not as silence. Files are named from `Content-Disposition` or the `download` attribute, sanitized to a single path component; a repeat download gets a `-1`, `-2`, … suffix rather than overwriting. `--dest` overrides the name (relative paths stay inside the downloads dir).
 

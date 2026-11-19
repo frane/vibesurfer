@@ -98,7 +98,18 @@ impl PageState {
             (None, _) | (Some(_), true) => ViewForm::Full(new_tree.clone()),
             (Some(prev), false) => {
                 let ops = vs_protocol::diff(prev, &new_tree);
-                ViewForm::Delta(ops)
+                // A page that re-renders a whole subtree gets fresh
+                // refs for every node in it, so the delta removes and
+                // re-adds all of them and costs about twice the tree.
+                // Past that point the full tree is the cheaper answer
+                // and it is a valid re-baseline. Small deltas are left
+                // alone: a few bytes either way are not worth the swap.
+                let delta_len = vs_protocol::delta::encode(&ops).len();
+                if delta_len > 2048 && delta_len > new_tree.encode().len() {
+                    ViewForm::Full(new_tree.clone())
+                } else {
+                    ViewForm::Delta(ops)
+                }
             }
         };
 
@@ -172,6 +183,24 @@ mod tests {
         p.apply_snapshot(sample_tree("Hello"));
         let (_token, form) = p.apply_snapshot(sample_tree("World"));
         assert!(matches!(form, ViewForm::Delta(_)));
+    }
+
+    /// A doc with `n` paragraphs, refs starting at `base`.
+    fn wide_tree(base: u32, n: u32) -> Tree {
+        let mut root = Node::leaf(Ref(1), Role::Doc, "page");
+        root.children = (0..n)
+            .map(|i| Node::leaf(Ref(base + i), Role::P, format!("row {i}")))
+            .collect();
+        Tree::from_root(root)
+    }
+
+    #[test]
+    fn rerendered_subtree_comes_back_full() {
+        let mut p = make_state();
+        p.apply_snapshot(wide_tree(100, 200));
+        // Same content, every node re-created with a fresh ref.
+        let (_token, form) = p.apply_snapshot(wide_tree(1000, 200));
+        assert!(matches!(form, ViewForm::Full(_)), "got {form:?}");
     }
 
     #[test]

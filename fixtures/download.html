@@ -16,6 +16,19 @@
   <button id="save-blob" type="button">Save blob</button>
 
   <!--
+    Server-sent attachments the page script never sees: a form POST
+    that answers with a file, the same POST aimed at a hidden iframe,
+    and a plain link to the endpoint. Only the engine's own download
+    path can catch these.
+  -->
+  <form method="post" action="/export"><input type="hidden" name="fmt" value="ris"><button type="submit">Export (form)</button></form>
+  <form method="post" action="/export" target="dl-sink"><input type="hidden" name="fmt" value="ris"><button type="submit">Export (iframe)</button></form>
+  <iframe name="dl-sink" style="display:none"></iframe>
+
+  <!-- FileSaver.js style: a detached anchor clicked via dispatchEvent. -->
+  <button id="save-dispatch" type="button">Save dispatch</button>
+
+  <!--
     An embedded document. The a11y walker cannot cross into it, so the
     only thing an agent can use is this src.
   -->
@@ -30,6 +43,13 @@
       a.download = 'saved-from-page.txt';
       a.click();
       URL.revokeObjectURL(url);
+    });
+    document.getElementById('save-dispatch').addEventListener('click', function () {
+      var blob = new Blob(['dispatched payload'], { type: 'text/plain' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'dispatched.txt';
+      a.dispatchEvent(new MouseEvent('click'));
     });
   </script>
 </body>

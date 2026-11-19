@@ -215,9 +215,10 @@ pub enum Command {
     /// 16b. Save a file out of a page. With a URL, the page fetches it
     ///     with its own session cookies (relative URLs resolve against
     ///     the current document). With no URL, the newest download the
-    ///     page itself started — a `download` link, a viewer's save
-    ///     button, a `blob:` navigation — is drained from the capture
-    ///     buffer. Files land in `~/.vibesurfer/downloads`.
+    ///     page itself started (a `download` link, a viewer's save
+    ///     button, a `blob:` navigation, an export form whose response
+    ///     is an attachment) is drained from the capture buffer. Files
+    ///     land in `~/.vibesurfer/downloads`.
     #[command(visible_alias = "dl")]
     Download {
         page: String,

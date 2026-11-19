@@ -7,7 +7,9 @@
 //! itself, and see an embedded frame's `src` in the tree at all.
 
 use crate::helpers::{eval_js, open_fixture, ref_for, settle};
-use crate::support::fixture_server::{REPORT_PDF_BODY, REPORT_PDF_NAME};
+use crate::support::fixture_server::{
+    EXPORT_RIS_BODY, EXPORT_RIS_NAME, REPORT_PDF_BODY, REPORT_PDF_NAME,
+};
 use crate::support::{
     assert_err, assert_ok, body_rest, each_available_backend, token_of, TestContext,
 };
@@ -139,6 +141,92 @@ fn cell_download_captures_in_page_blob_save() {
             b"in-page blob payload",
             "blob payload did not survive the revoked object URL"
         );
+    }
+}
+
+/// Click the button labelled `label` on the download fixture, then
+/// drain the newest download. Returns the file path.
+fn click_and_drain(ctx: &TestContext, page: &str, label: &str) -> std::path::PathBuf {
+    let r = ctx.vs(&["view", page, "--full"]);
+    assert_ok("view", &r);
+    let body = body_rest(&r);
+    let token = token_of(&r);
+    let n = ref_for(&body, "btn", label);
+    let r = ctx.vs(&[
+        "act",
+        page,
+        &n.to_string(),
+        "click",
+        &format!("--token={token}"),
+    ]);
+    assert_ok(label, &r);
+    let r = ctx.vs(&["download", page]);
+    assert_ok(&format!("download after {label}"), &r);
+    std::path::PathBuf::from(field(&body_rest(&r), "path"))
+}
+
+// The Scopus report: an export button whose form POST answers with a
+// `Content-Disposition: attachment` file. Page script never sees the
+// bytes; WebKit used to cancel the response and nothing reached disk.
+#[test]
+fn cell_download_captures_form_post_attachment() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/download.html");
+        let path = click_and_drain(&ctx, &page, "Export (form)");
+        assert_eq!(path.file_name().unwrap().to_string_lossy(), EXPORT_RIS_NAME);
+        assert_eq!(std::fs::read(&path).unwrap(), EXPORT_RIS_BODY);
+        // The page stays where it was: the response became a file,
+        // not a navigation.
+        let r = ctx.vs(&["view", &page, "--full"]);
+        assert_ok("view after export", &r);
+        assert!(
+            r.stdout.contains("Export (iframe)"),
+            "page navigated away:\n{}",
+            r.stdout
+        );
+    }
+}
+
+// Navigating straight to an attachment URL saves the file and leaves
+// the page where it was, instead of failing the goto.
+#[test]
+fn cell_download_goto_attachment_url() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/download.html");
+        let r = ctx.vs(&["goto", &page, &ctx.url("/export")]);
+        assert_ok("goto attachment", &r);
+        let r = ctx.vs(&["download", &page]);
+        assert_ok("download after goto", &r);
+        let path = std::path::PathBuf::from(field(&body_rest(&r), "path"));
+        assert_eq!(std::fs::read(&path).unwrap(), EXPORT_RIS_BODY);
+    }
+}
+
+// Same response, aimed at a hidden iframe.
+#[test]
+fn cell_download_captures_iframe_attachment() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/download.html");
+        let path = click_and_drain(&ctx, &page, "Export (iframe)");
+        assert_eq!(std::fs::read(&path).unwrap(), EXPORT_RIS_BODY);
+    }
+}
+
+// FileSaver.js: a detached anchor clicked with dispatchEvent.
+#[test]
+fn cell_download_captures_dispatched_click() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/download.html");
+        let path = click_and_drain(&ctx, &page, "Save dispatch");
+        assert_eq!(
+            path.file_name().unwrap().to_string_lossy(),
+            "dispatched.txt"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"dispatched payload");
     }
 }
 

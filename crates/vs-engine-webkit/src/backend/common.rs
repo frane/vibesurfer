@@ -12,6 +12,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use vs_protocol::{Node, Op, Ref, Role, Tree};
 
+use super::native_download::{SharedDownloads, NATIVE_ID_BASE};
+
 pub(crate) fn parse_role(s: &str) -> Role {
     match s {
         "doc" => Role::Doc,
@@ -204,7 +206,7 @@ pub(crate) fn nav_budget() -> std::time::Duration {
 /// wait only happens when the page's hint (`NEW_WINDOW_HINT_JS`) says a
 /// request is coming, and ends as soon as it arrives. Every click used
 /// to pay this in full, which cost ~250ms per click.
-pub(crate) const NEW_WINDOW_SETTLE: std::time::Duration = std::time::Duration::from_millis(1000);
+pub(crate) const NEW_WINDOW_SETTLE: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Read and clear the page's new-window hint (`__vsNw`, set by the
 /// document-start shim when a blank-target link or form or
@@ -722,6 +724,7 @@ pub(crate) fn run_download<F, T>(
     mut tick: T,
     source: &DownloadSource,
     budget: Duration,
+    native: &SharedDownloads,
 ) -> EngineResult<Download>
 where
     F: Fn(&str, Duration) -> EngineResult<String>,
@@ -731,8 +734,12 @@ where
 
     ensure_download_shim(&eval)?;
     let deadline = std::time::Instant::now() + budget;
+    let timeout = || EngineError::Timeout {
+        budget,
+        primitive: "download",
+        detail: "",
+    };
 
-    // `0` addresses "whatever is newest" on the JS side.
     let id = match source {
         DownloadSource::Url(url) => {
             let js = format!("window.__vsDl.fetch({}, null)", json_string(url));
@@ -741,7 +748,20 @@ where
                 EngineError::Other(format!("download: shim returned no id ({raw:?})"))
             })?
         }
-        DownloadSource::Captured { id } => id.unwrap_or(0),
+        DownloadSource::Captured { id: Some(id) } if *id >= NATIVE_ID_BASE => {
+            return wait_native(native, *id, deadline, timeout, &mut tick);
+        }
+        DownloadSource::Captured { id: Some(id) } => *id,
+        // Newest of either buffer. A server-sent attachment lands in
+        // the native buffer, a page-script save in the shim's; an
+        // `<a download>` to an http URL can land in both, and then the
+        // shim's copy wins so the agent gets one file, not two.
+        DownloadSource::Captured { id: None } => {
+            match newest_either(&eval, native, deadline, timeout, &mut tick)? {
+                Newest::Shim(id) => id,
+                Newest::Native(id) => return wait_native(native, id, deadline, timeout, &mut tick),
+            }
+        }
     };
 
     let meta = loop {
@@ -821,7 +841,10 @@ where
 
 /// Run `download_list`: the captured download intents, payloads
 /// excluded.
-pub(crate) fn run_download_list<F>(eval: F) -> EngineResult<Vec<DownloadEntry>>
+pub(crate) fn run_download_list<F>(
+    eval: F,
+    native: &SharedDownloads,
+) -> EngineResult<Vec<DownloadEntry>>
 where
     F: Fn(&str, Duration) -> EngineResult<String>,
 {
@@ -829,9 +852,125 @@ where
     let raw = eval_str(eval("window.__vsDl.index()", Duration::from_secs(5))?);
     let v: serde_json::Value = serde_json::from_str(&raw)
         .map_err(|e| EngineError::Other(format!("download list: bad json {raw:?}: {e}")))?;
-    Ok(v.as_array()
+    let mut out: Vec<DownloadEntry> = v
+        .as_array()
         .map(|a| a.iter().map(parse_download_entry).collect())
-        .unwrap_or_default())
+        .unwrap_or_default();
+    // An `<a download>` to an http URL can be caught by both; list it once.
+    let nat = native.lock().map_err(poisoned)?.entries();
+    for e in nat {
+        if !out.iter().any(|j| j.url == e.url) {
+            out.push(e);
+        }
+    }
+    Ok(out)
+}
+
+fn poisoned<T>(_: std::sync::PoisonError<T>) -> EngineError {
+    EngineError::Other("download buffer lock poisoned".into())
+}
+
+/// The shim's newest entry, done or not.
+struct ShimNewest {
+    id: u64,
+    t0: u64,
+    url: String,
+}
+
+fn shim_newest<F>(eval: &F) -> EngineResult<Option<ShimNewest>>
+where
+    F: Fn(&str, Duration) -> EngineResult<String>,
+{
+    let raw = eval_str(eval("window.__vsDl.meta(0)", Duration::from_secs(5))?);
+    if raw == "null" || raw.is_empty() {
+        return Ok(None);
+    }
+    let v: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| EngineError::Other(format!("download: bad meta {raw:?}: {e}")))?;
+    let num = |k: &str| v.get(k).and_then(serde_json::Value::as_u64).unwrap_or(0);
+    Ok(Some(ShimNewest {
+        id: num("id"),
+        t0: num("t0").max(num("ts")),
+        url: v
+            .get("url")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    }))
+}
+
+enum Newest {
+    Shim(u64),
+    Native(u64),
+}
+
+/// Wait until either buffer has something to drain and say which.
+fn newest_either<F, T>(
+    eval: &F,
+    native: &SharedDownloads,
+    deadline: std::time::Instant,
+    timeout: impl Fn() -> EngineError,
+    tick: &mut T,
+) -> EngineResult<Newest>
+where
+    F: Fn(&str, Duration) -> EngineResult<String>,
+    T: FnMut(),
+{
+    loop {
+        let js = shim_newest(eval)?;
+        let nat = native.lock().map_err(poisoned)?.newest_with_url();
+        match (nat, js) {
+            (Some(n), j)
+                if j.as_ref()
+                    .is_none_or(|j| n.started_ms >= j.t0 && n.url != j.url) =>
+            {
+                if n.done {
+                    return Ok(Newest::Native(n.id));
+                }
+            }
+            (_, Some(j)) => return Ok(Newest::Shim(j.id)),
+            (_, None) => {}
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(timeout());
+        }
+        tick();
+    }
+}
+
+/// Wait for a native download to settle, then take it.
+fn wait_native<T: FnMut()>(
+    native: &SharedDownloads,
+    id: u64,
+    deadline: std::time::Instant,
+    timeout: impl Fn() -> EngineError,
+    tick: &mut T,
+) -> EngineResult<Download> {
+    loop {
+        let done = native.lock().map_err(poisoned)?.is_done(id);
+        match done {
+            None => {
+                return Err(EngineError::Other(format!(
+                    "download: no captured download with id {id}"
+                )))
+            }
+            Some(true) => {
+                let taken = native.lock().map_err(poisoned)?.take(id);
+                return match taken {
+                    Some(Ok(d)) => Ok(d),
+                    Some(Err(e)) => Err(EngineError::Other(format!("download failed: {e}"))),
+                    None => Err(EngineError::Other(format!(
+                        "download: no captured download with id {id}"
+                    ))),
+                };
+            }
+            Some(false) => {}
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(timeout());
+        }
+        tick();
+    }
 }
 
 /// Run `save_auth`: eval the snapshot JS, capture the JSON blob.

@@ -15,6 +15,8 @@
 //! - `GET  /img/pixel.gif` — a tiny 1×1 transparent GIF.
 //! - `GET  /files/report.pdf` — `Content-Disposition: attachment`, but
 //!   only with the `session_id` cookie; 401 without it.
+//! - `GET|POST /export` — an RIS file as `Content-Disposition:
+//!   attachment`, the shape of a citation-export endpoint.
 //! - `GET  /static/script-a.js`, `/static/script-b.js` — small JS
 //!   files, used by `scripts.html`.
 //!
@@ -135,6 +137,19 @@ fn handle(mut req: Request) -> std::io::Result<()> {
     if path == "/files/report.pdf" {
         return handle_report_pdf(req);
     }
+    if path == "/export" {
+        let resp = Response::from_data(EXPORT_RIS_BODY.to_vec())
+            .with_header(header(
+                "Content-Type",
+                "application/x-research-info-systems",
+            ))
+            .with_header(header(
+                "Content-Disposition",
+                &format!("attachment; filename=\"{EXPORT_RIS_NAME}\""),
+            ))
+            .with_header(no_store());
+        return req.respond(resp);
+    }
     if path.starts_with("/static/") {
         return handle_static(req, &path);
     }
@@ -210,6 +225,12 @@ fn handle_dashboard_http_only(req: Request) -> std::io::Result<()> {
 /// distinctive enough that a test can prove the file on disk came from
 /// here and arrived intact.
 pub const REPORT_PDF_BODY: &[u8] = b"%PDF-1.4\n% vibesurfer download fixture\n%%EOF\n";
+
+/// Body of `/export`: what a citation-export endpoint answers with.
+pub const EXPORT_RIS_BODY: &[u8] = b"TY  - JOUR\nTI  - vibesurfer export fixture\nER  - \n";
+
+/// Name `/export` advertises in `Content-Disposition`.
+pub const EXPORT_RIS_NAME: &str = "scopus.ris";
 
 /// Name the fixture advertises in `Content-Disposition`. Contains a
 /// space so the wire's quoting path is exercised too.
