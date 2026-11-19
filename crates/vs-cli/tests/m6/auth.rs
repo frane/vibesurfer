@@ -230,7 +230,15 @@ fn cell_auth_webauthn_virtual_authenticator() {
         // 20s: WebCrypto ES256 sign+verify plus the wait poll is slower
         // on CI runners than locally; 8s flaked on the macOS runner.
         let r = ctx.vs(&["wait", &page, "text", "VERIFIED", "--timeout=20000"]);
-        assert_ok("wait for VERIFIED", &r);
+        if !r.stdout.starts_with('@') {
+            // Say where the flow stopped (idle / FAIL:create / ERR:...),
+            // not just that the wait ran out.
+            let status = eval_js(&ctx, &page, "document.getElementById('status').textContent");
+            panic!(
+                "wait for VERIFIED timed out; page status was {status:?}: {}",
+                r.stdout
+            );
+        }
         let status = eval_js(&ctx, &page, "document.getElementById('status').textContent");
         assert!(
             status.contains("VERIFIED"),
