@@ -4,7 +4,7 @@ All notable changes to vibesurfer are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.13] - 2026-11-19
 
 ### Fixed
 - A click no longer waits 250ms for a new window that is not coming. 0.2.10 made every click, submit and Enter pump for up to 250ms in case a `target="_blank"` link or `window.open` had asked for a window, because that request can arrive after the click returns; ordinary clicks paid the whole wait, and a four-click flow got a second slower. The document-start shim now flags a blank-target link or form, `form.submit()` with a target, and `window.open`, and the engine reads that flag after the click (one eval) and waits only when it is set, for up to 1s. Measured by the testsurfer benchmark on a GitHub macOS runner.
