@@ -12,7 +12,7 @@ use super::{Decision, Mitm, Overrides, SessionNet};
 
 /// What an aborted request gets on the wire (see `proxy::abort`).
 const ABORTED: &[u8] = if cfg!(target_os = "macos") {
-    b"HTTP/1.1 502 Aborted\r\nvs-abort\r\n\r\n"
+    b"HTTP/1.1 200 OK\r\nContent-Length: 1048576\r\n\r\n"
 } else {
     b""
 };
@@ -219,7 +219,7 @@ fn held_requests_follow_the_decision() {
                 Ok(Some(head)) => {
                     let (status, _) = super::http::parse_status_line(&head.line).ok()?;
                     let body =
-                        read_body(&mut c, response_framing("GET", status, &head.headers)).unwrap();
+                        read_body(&mut c, response_framing("GET", status, &head.headers)).ok()?;
                     Some((status, String::from_utf8(body).unwrap()))
                 }
                 _ => None,
@@ -535,5 +535,30 @@ fn https_upgrade_is_piped_both_ways() {
     let mut echo = [0u8; 5];
     c.read_exact(&mut echo).unwrap();
     assert_eq!(&echo, b"hello");
+    net.shutdown();
+}
+
+#[test]
+fn a_held_request_the_browser_drops_fails_as_cancelled() {
+    let net = start();
+    net.set_route(true);
+    let up = upstream();
+    let mut c = connect(&net);
+    c.get_mut()
+        .write_all(format!("GET http://127.0.0.1:{up}/x HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes())
+        .unwrap();
+    let id = wait_for_req(&net, "/x");
+    // The page gives up (AbortController, a removed frame): the connection closes.
+    drop(c);
+    let mut seen = String::new();
+    for _ in 0..30 {
+        seen.push_str(&net.poll(Duration::from_millis(100)));
+        if seen.contains(&format!("fail {id} cancelled")) {
+            break;
+        }
+    }
+    assert!(seen.contains(&format!("fail {id} cancelled")), "{seen}");
+    // A decision after that finds nothing to decide.
+    assert!(!net.decide(id, Decision::Continue(Overrides::default())));
     net.shutdown();
 }

@@ -160,13 +160,27 @@ fn split_authority(authority: &str, default: u16) -> (String, u16) {
     }
 }
 
+/// Whether the browser closed (or wrote to) a connection that should be
+/// silently waiting for its one response: either way it gave up on the
+/// request.
+fn browser_gone(sock: &TcpStream) -> bool {
+    if sock.set_nonblocking(true).is_err() {
+        return false;
+    }
+    let mut b = [0u8; 1];
+    let gone = !matches!(sock.peek(&mut b), Err(ref e) if e.kind() == io::ErrorKind::WouldBlock);
+    let _ = sock.set_nonblocking(false);
+    gone
+}
+
 /// Record, maybe hold, then answer one request. The browser
 /// connection is consumed: it carries one request.
 fn exchange(net: &SessionNet, req: &ProxyRequest, mut conn: BufReader<Stream>) -> io::Result<()> {
     let id = net.next_id();
     net.ev_request(id, req, classify(&req.method, &req.url, &req.headers));
     let decision = if net.routing() {
-        net.hold(id, req)
+        let gone = || browser_gone(conn.get_ref().sock());
+        net.hold(id, req, &gone)
     } else {
         Decision::Continue(Overrides::default())
     };

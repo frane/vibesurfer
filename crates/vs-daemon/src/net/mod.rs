@@ -284,8 +284,11 @@ impl SessionNet {
         self.events_cv.notify_all();
     }
 
-    /// Park the calling connection thread until the client decides.
-    fn hold(&self, id: u64, req: &ProxyRequest) -> Decision {
+    /// Park the calling connection thread until the client decides, or
+    /// until `gone()` says the browser gave up on the request (the page
+    /// aborted the fetch, removed the frame, navigated away): then it is
+    /// dropped as `cancelled`, and a late decision gets NOT_FOUND.
+    fn hold(&self, id: u64, req: &ProxyRequest, gone: &dyn Fn() -> bool) -> Decision {
         let (tx, rx) = mpsc::channel();
         self.held.lock().expect("poisoned").insert(
             id,
@@ -300,10 +303,22 @@ impl SessionNet {
             self.held.lock().expect("poisoned").remove(&id);
             return Decision::Continue(Overrides::default());
         }
-        rx.recv_timeout(HOLD_TIMEOUT).unwrap_or_else(|_| {
-            self.held.lock().expect("poisoned").remove(&id);
-            Decision::Continue(Overrides::default())
-        })
+        let deadline = std::time::Instant::now() + HOLD_TIMEOUT;
+        loop {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(d) => return d,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+            }
+            if gone() && self.held.lock().expect("poisoned").remove(&id).is_some() {
+                return Decision::Abort("cancelled".into());
+            }
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+        }
+        self.held.lock().expect("poisoned").remove(&id);
+        Decision::Continue(Overrides::default())
     }
 
     fn ev_request(&self, id: u64, req: &ProxyRequest, kind: classify::Kind) {
