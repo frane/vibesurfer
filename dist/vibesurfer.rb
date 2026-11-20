@@ -14,9 +14,9 @@
 class Vibesurfer < Formula
   desc "A browser for LLMs, not humans."
   homepage "https://github.com/frane/vibesurfer"
-  url "https://github.com/frane/vibesurfer/archive/refs/tags/v0.2.13.tar.gz"
+  url "https://github.com/frane/vibesurfer/archive/refs/tags/v0.2.14.tar.gz"
   # Update on each release: `shasum -a 256 <tarball>`.
-  sha256 "1039957c24c98eb9fdda61b9d28ca74df86b36ad8a0b0ff227c4f86215f6e2c0"
+  sha256 "8dd7a9c717c6f61531d98c71573854346a4b0f8e5250b0f391e25ba302f8cfd4"
   license "Apache-2.0"
   head "https://github.com/frane/vibesurfer.git", branch: "main"
 
