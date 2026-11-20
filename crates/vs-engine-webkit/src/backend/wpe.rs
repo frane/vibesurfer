@@ -755,13 +755,9 @@ impl Engine for WpeBackend {
         // `GdkX11Surface::xid()` + `XTranslateCoordinates` to read the
         // real origin. Until then, page-local CSS px == screen px,
         // which is fine for CI and most headless setups.
-        // Within the window, add where the web view actually sits (it
-        // is pinned top-left, so this is normally zero).
-        let offset = p
-            .web_view
-            .compute_point(&p.window, &gtk::graphene::Point::new(0.0, 0.0))
-            .map_or((0.0, 0.0), |pt| (f64::from(pt.x()), f64::from(pt.y())));
-        let (origin_x, origin_y) = offset;
+        // The web view is pinned to the window's top-left (see open),
+        // so page coordinates are window coordinates.
+        let (origin_x, origin_y) = (0.0_f64, 0.0_f64);
         let start = p.last_mouse.get();
         let seed = humanize_seed(op);
         let landed = match op {
