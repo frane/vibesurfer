@@ -277,3 +277,23 @@ fn tls_after_connect_is_tunnelled_blind() {
     assert_eq!(net.poll(Duration::ZERO), format!("tun 127.0.0.1:{port}\n"));
     net.shutdown();
 }
+
+#[test]
+fn connect_to_port_80_reports_the_url_without_it() {
+    let net = SessionNet::start().unwrap();
+    net.set_route(true);
+    let mut c = connect(&net);
+    c.get_mut()
+        .write_all(b"CONNECT example.test:80 HTTP/1.1\r\n\r\nGET /p HTTP/1.1\r\nHost: example.test\r\n\r\n")
+        .unwrap();
+    let id = wait_for_req(&net, "http://example.test/p ");
+    assert!(net.decide(
+        id,
+        Decision::Fulfill {
+            status: 204,
+            headers: vec![],
+            body: vec![]
+        }
+    ));
+    net.shutdown();
+}

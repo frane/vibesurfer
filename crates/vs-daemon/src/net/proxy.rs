@@ -77,7 +77,10 @@ fn handle_conn(net: &SessionNet, stream: TcpStream) -> io::Result<()> {
                     return blind_tunnel(reader, writer, &target);
                 }
                 Some(_) => {
-                    authority = Some(target);
+                    // WebKit tunnels plain http as `CONNECT host:80`;
+                    // report `http://host/…` as the browser would.
+                    let a = target.strip_suffix(":80").unwrap_or(&target);
+                    authority = Some(a.to_string());
                     continue;
                 }
             }
