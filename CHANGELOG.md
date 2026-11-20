@@ -4,6 +4,11 @@ All notable changes to vibesurfer are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- `npx vibesurfer` installs on Windows under Git Bash, as on GitHub's Windows runners. The launcher unpacked the release zip with whatever `tar` came first on the PATH; there that is GNU tar, which reads the `C:` in the archive path as a remote host and fails with `Cannot connect to C: resolve failed`. It now runs the system bsdtar (`System32\tar.exe`).
+
 ## [0.2.15] - 2026-11-20
 
 ### Added

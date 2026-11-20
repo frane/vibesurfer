@@ -100,8 +100,14 @@ async function download(dest) {
     fs.writeFileSync(archivePath, archive);
     // bsdtar (macOS/Windows) extracts both .tar.gz and .zip; GNU tar
     // (Linux) handles our .tar.gz. So `tar -xf` covers every platform's
-    // own asset format.
-    const r = spawnSync("tar", ["-xf", archivePath, "-C", tmp], {
+    // own asset format. On Windows, name the system bsdtar: under Git
+    // Bash (GitHub's Windows runners) `tar` is GNU tar, which reads the
+    // `C:` in the archive path as a remote host and cannot unzip.
+    const sysTar =
+      process.platform === "win32"
+        ? path.join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe")
+        : "tar";
+    const r = spawnSync(sysTar, ["-xf", archivePath, "-C", tmp], {
       stdio: "inherit",
     });
     if (r.status !== 0) {
