@@ -17,17 +17,21 @@ impl Daemon {
     /// session-scoped state token (`0000…`); page-scoped tokens come
     /// from `vs_open`.
     pub fn session_open(&self, policy: Option<&str>) -> Result<SessionOpenResponse> {
-        self.session_open_with(policy, false)
+        self.session_open_with(policy, false, false)
     }
 
     /// [`Self::session_open`], optionally `isolated`: the session's
     /// pages get a private, in-memory data store (cookies,
     /// localStorage, IndexedDB) that no other session sees and that is
-    /// discarded on close or daemon restart.
+    /// discarded on close or daemon restart. `intercept` also routes
+    /// the pages through a per-session HTTP proxy (see [`crate::net`]);
+    /// it implies a private store, since every engine binds the proxy
+    /// to the store.
     pub fn session_open_with(
         &self,
         policy: Option<&str>,
         isolated: bool,
+        intercept: bool,
     ) -> Result<SessionOpenResponse> {
         let id = format!("s_{}", short_id());
         let mut hash_args: Vec<String> = policy.into_iter().map(str::to_string).collect();
@@ -37,20 +41,29 @@ impl Daemon {
             hash_args.push("--isolated".into());
             flags.push(("isolated".into(), None));
         }
+        if intercept {
+            hash_args.push("--intercept".into());
+            flags.push(("intercept".into(), None));
+        }
         let ctx = AuditCtx::new("vs_session_open", &id).with_args(
             redact::redact_args(&[], flags.as_slice()),
             tokens::args_hash("vs_session_open", &hash_args),
         );
         self.audit_call(ctx, |ctx| {
             ctx.after_token = Some(StateToken::ZERO);
+            let mut state = SessionState::new(isolated);
+            if intercept {
+                state.intercept = true;
+                state.running_net()?;
+            }
             let mut store = self.inner.store.lock().expect("poisoned");
-            let session = store.create_session_with(&id, policy, isolated)?;
+            let session = store.create_session_with(&id, policy, isolated, intercept)?;
             drop(store);
             self.inner
                 .sessions
                 .lock()
                 .expect("poisoned")
-                .insert(id.clone(), SessionState::new(isolated));
+                .insert(id.clone(), state);
             Ok(SessionOpenResponse {
                 session_id: session.id,
                 token: StateToken::ZERO,
@@ -62,24 +75,27 @@ impl Daemon {
         let ctx = AuditCtx::new("vs_session_close", session_id)
             .with_args(String::new(), tokens::args_hash("vs_session_close", &[]));
         self.audit_call(ctx, |_ctx| {
-            let (page_handles, isolated): (Vec<_>, bool) = {
+            let (page_handles, own_store, net) = {
                 let mut sessions = self.inner.sessions.lock().expect("poisoned");
                 let s = sessions
                     .remove(session_id)
                     .ok_or_else(|| DaemonError::UnknownSession(session_id.to_string()))?;
-                let isolated = s.isolated;
-                let handles = s
+                let own_store = s.isolated || s.intercept;
+                let handles: Vec<_> = s
                     .pages
                     .into_values()
                     .filter_map(|p| p.engine_handle)
                     .collect();
-                (handles, isolated)
+                (handles, own_store, s.net)
             };
             for h in page_handles {
                 let _ = self.inner.engine.close(h);
             }
-            if isolated {
+            if own_store {
                 let _ = self.inner.engine.drop_store(session_id);
+            }
+            if let Some(net) = net {
+                net.shutdown();
             }
             let mut store = self.inner.store.lock().expect("poisoned");
             store.close_session(session_id)?;
@@ -302,6 +318,9 @@ impl Daemon {
                 continue;
             }
             let mut state = SessionState::new(s.isolated);
+            // The proxy starts with the first rebuilt page; see
+            // `data_store_for`.
+            state.intercept = s.intercept;
             for p in live {
                 // Dormant: the engine page is created lazily on
                 // first use, so startup stays instant and zombie

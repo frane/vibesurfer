@@ -41,10 +41,20 @@ fn session_lifecycle() {
 fn session_isolated_flag_round_trips() {
     let mut s = fresh_store();
     assert!(!s.create_session("shared", None).unwrap().isolated);
-    let iso = s.create_session_with("iso", None, true).unwrap();
+    let iso = s.create_session_with("iso", None, true, false).unwrap();
     assert!(iso.isolated);
     assert!(s.get_session("iso").unwrap().unwrap().isolated);
     assert!(!s.get_session("shared").unwrap().unwrap().isolated);
+}
+
+#[test]
+fn session_intercept_flag_round_trips() {
+    let mut s = fresh_store();
+    assert!(!s.create_session("plain", None).unwrap().intercept);
+    s.create_session_with("net", None, false, true).unwrap();
+    let row = s.get_session("net").unwrap().unwrap();
+    assert!(row.intercept && !row.isolated);
+    assert!(!s.get_session("plain").unwrap().unwrap().intercept);
 }
 
 #[test]

@@ -399,12 +399,14 @@ impl Daemon {
     }
 }
 
-/// Trailing `\tisolated` field for an isolated session's status row.
+/// Trailing `\tisolated` / `\tintercept` fields for a session's status
+/// row.
 fn isolated_tag(s: &crate::daemon::SessionState) -> &'static str {
-    if s.isolated {
-        "\tisolated"
-    } else {
-        ""
+    match (s.isolated, s.intercept) {
+        (false, false) => "",
+        (true, false) => "\tisolated",
+        (false, true) => "\tintercept",
+        (true, true) => "\tisolated\tintercept",
     }
 }
 

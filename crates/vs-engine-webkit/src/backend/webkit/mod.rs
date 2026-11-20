@@ -23,6 +23,7 @@ mod headless_window;
 mod input;
 mod inspector_handler;
 mod nav_delegate;
+mod proxy;
 mod record;
 
 use std::collections::HashMap;
@@ -143,21 +144,26 @@ impl WkBackend {
     /// cookie jar. Assigning `defaultDataStore` defensively pins it.
     ///
     /// An isolated session gets its own in-memory store instead,
-    /// created on its first page and reused for the rest.
-    fn data_store(&mut self, store: &DataStore) -> Retained<objc2_web_kit::WKWebsiteDataStore> {
+    /// created on its first page and reused for the rest. A proxied
+    /// one is the same, with the proxy configured before any page uses
+    /// it.
+    fn data_store(
+        &mut self,
+        store: &DataStore,
+    ) -> EngineResult<Retained<objc2_web_kit::WKWebsiteDataStore>> {
         let mtm = self.mtm;
-        match store {
-            DataStore::Shared => unsafe {
-                objc2_web_kit::WKWebsiteDataStore::defaultDataStore(mtm)
-            },
-            DataStore::Isolated(key) => self
-                .isolated_stores
-                .entry(key.clone())
-                .or_insert_with(|| unsafe {
-                    objc2_web_kit::WKWebsiteDataStore::nonPersistentDataStore(mtm)
-                })
-                .clone(),
+        let Some(key) = store.key() else {
+            return Ok(unsafe { objc2_web_kit::WKWebsiteDataStore::defaultDataStore(mtm) });
+        };
+        if let Some(s) = self.isolated_stores.get(key) {
+            return Ok(s.clone());
         }
+        let s = unsafe { objc2_web_kit::WKWebsiteDataStore::nonPersistentDataStore(mtm) };
+        if let Some(port) = store.proxy_port() {
+            proxy::set_http_proxy(&s, port)?;
+        }
+        self.isolated_stores.insert(key.to_string(), s.clone());
+        Ok(s)
     }
 
     fn alloc_handle(&mut self) -> PageHandle {
@@ -399,7 +405,7 @@ impl Engine for WkBackend {
         let inspector =
             super::inspector_bridge::InspectorSlots::new(crate::inspector::DEFAULT_BUFFER_CAPACITY);
         let config = unsafe { WKWebViewConfiguration::new(mtm) };
-        let data_store = self.data_store(store);
+        let data_store = self.data_store(store)?;
         unsafe { config.setWebsiteDataStore(&data_store) };
         // Expose `navigator.mediaDevices`. WKWebView gates the whole
         // MediaDevices surface behind a preference that is off by

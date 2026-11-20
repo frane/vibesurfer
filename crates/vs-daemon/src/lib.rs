@@ -17,6 +17,7 @@ pub mod config;
 pub mod daemon;
 pub mod dispatch;
 pub mod error;
+pub mod net;
 pub mod page_state;
 pub mod redact;
 pub mod server;

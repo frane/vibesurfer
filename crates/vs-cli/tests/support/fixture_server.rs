@@ -13,6 +13,8 @@
 //! - `GET  /api/slow` — 200 after a 500ms delay.
 //! - `POST /echo` — 200 echoes the request body.
 //! - `GET  /img/pixel.gif` — a tiny 1×1 transparent GIF.
+//! - `GET  /echo-headers` — 200 text, one `name: value` line per request
+//!   header.
 //! - `GET  /files/report.pdf` — `Content-Disposition: attachment`, but
 //!   only with the `session_id` cookie; 401 without it.
 //! - `GET|POST /export` — an RIS file as `Content-Disposition:
@@ -135,6 +137,16 @@ fn handle(mut req: Request) -> std::io::Result<()> {
     }
     if path == "/img/pixel.gif" {
         return respond_pixel(req);
+    }
+    if path == "/echo-headers" {
+        let mut body = String::new();
+        for h in req.headers() {
+            body.push_str(h.field.as_str().as_str());
+            body.push_str(": ");
+            body.push_str(h.value.as_str());
+            body.push('\n');
+        }
+        return respond_text(req, 200, "text/plain", &body);
     }
     if path == "/files/report.pdf" {
         return handle_report_pdf(req);

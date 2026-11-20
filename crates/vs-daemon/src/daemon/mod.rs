@@ -16,6 +16,7 @@ pub mod responses;
 
 mod engine_ops;
 mod lifecycle;
+mod net_ops;
 mod page_ops;
 pub mod pending;
 pub(crate) mod reaper;
@@ -54,6 +55,13 @@ pub(crate) struct SessionState {
     /// Pages use a private in-memory data store keyed by the session
     /// id instead of the shared persistent one.
     pub(crate) isolated: bool,
+    /// Pages go through the session's intercept proxy, in a private
+    /// store of their own.
+    pub(crate) intercept: bool,
+    /// The running proxy. `None` for a non-intercepting session, and
+    /// for an intercepting one rebuilt after a restart until its first
+    /// page needs it.
+    pub(crate) net: Option<Arc<crate::net::SessionNet>>,
 }
 
 impl SessionState {
@@ -62,6 +70,8 @@ impl SessionState {
             pages: HashMap::new(),
             last_touched: Instant::now(),
             isolated,
+            intercept: false,
+            net: None,
         }
     }
 }
@@ -248,10 +258,16 @@ impl Daemon {
 
     /// The engine data store a new page of `session_id` opens in.
     pub(crate) fn data_store_for(&self, session_id: &str) -> Result<vs_engine_webkit::DataStore> {
-        let sessions = self.inner.sessions.lock().expect("poisoned");
+        let mut sessions = self.inner.sessions.lock().expect("poisoned");
         let s = sessions
-            .get(session_id)
+            .get_mut(session_id)
             .ok_or_else(|| DaemonError::UnknownSession(session_id.to_string()))?;
+        if s.intercept {
+            return Ok(vs_engine_webkit::DataStore::Proxied {
+                key: session_id.to_string(),
+                port: s.running_net()?.port(),
+            });
+        }
         Ok(if s.isolated {
             vs_engine_webkit::DataStore::Isolated(session_id.to_string())
         } else {

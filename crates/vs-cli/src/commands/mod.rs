@@ -64,6 +64,11 @@ pub enum Command {
         /// restart. Default sessions share the persistent jar.
         #[arg(long)]
         isolated: bool,
+        /// Route the session's pages through a daemon-side HTTP proxy
+        /// so `vs net` can observe, hold, fulfill and abort every
+        /// request. Implies a private jar, as `--isolated`.
+        #[arg(long)]
+        intercept: bool,
     },
     /// 2. Close the active session, or a whole sweep of them.
     #[command(visible_alias = "sc")]
@@ -494,6 +499,12 @@ pub enum Command {
         #[command(subcommand)]
         sub: PendingSub,
     },
+    /// Observe and route the requests of a `--intercept` session.
+    /// Request ids come from `vs net poll`.
+    Net {
+        #[command(subcommand)]
+        sub: NetSub,
+    },
     /// Record a page to an H.264 MP4 (real-time openh264, plays
     /// everywhere). `start` spawns a background capture at `--fps`;
     /// `stop` flushes and writes the file. Both print the output path.
@@ -563,6 +574,93 @@ pub enum FlowSub {
     Run { file: PathBuf },
 }
 
+/// Overrides shared by `vs net continue` and `vs net fetch`.
+#[derive(Debug, clap::Args)]
+pub struct NetOverrides {
+    #[arg(long)]
+    url: Option<String>,
+    #[arg(long)]
+    method: Option<String>,
+    /// `name: value`; repeat for more. Replaces all request headers.
+    #[arg(long = "header", value_name = "NAME: VALUE")]
+    headers: Vec<String>,
+    /// Request body, base64.
+    #[arg(long = "body-b64", value_name = "B64")]
+    body_b64: Option<String>,
+}
+
+impl NetOverrides {
+    fn apply(&self, mut r: Request) -> Request {
+        if let Some(u) = &self.url {
+            r = r.flag_value("url", u.clone());
+        }
+        if let Some(m) = &self.method {
+            r = r.flag_value("method", m.clone());
+        }
+        r = net_headers(r, &self.headers);
+        if let Some(b) = &self.body_b64 {
+            r = r.flag_value("body-b64", b.clone());
+        }
+        r
+    }
+}
+
+/// Repeated `--header` values travel as one newline-joined `--headers`.
+fn net_headers(r: Request, headers: &[String]) -> Request {
+    if headers.is_empty() {
+        r
+    } else {
+        r.flag_value("headers", headers.join("\n"))
+    }
+}
+
+#[derive(Debug, Subcommand)]
+pub enum NetSub {
+    /// Print and clear queued events: `req`, `res`, `fin`, `fail`,
+    /// `tun` lines, each `req`/`res` followed by `h name: value` lines.
+    Poll {
+        /// Block up to this long (max 30000) for the first event.
+        #[arg(long = "wait-ms", default_value_t = 0)]
+        wait_ms: u64,
+    },
+    /// `on` holds every request after its `req` line until continued,
+    /// fulfilled or aborted (30 s, then it continues). `off` releases
+    /// all held requests.
+    Route { state: String },
+    /// Send a held request on, optionally changed.
+    Continue {
+        id: u64,
+        #[command(flatten)]
+        o: NetOverrides,
+    },
+    /// Answer a held request without the network.
+    Fulfill {
+        id: u64,
+        #[arg(long, default_value_t = 200)]
+        status: u16,
+        #[arg(long = "header", value_name = "NAME: VALUE")]
+        headers: Vec<String>,
+        #[arg(long = "body-b64", value_name = "B64")]
+        body_b64: Option<String>,
+    },
+    /// Fail a held request: the browser connection is closed.
+    Abort {
+        id: u64,
+        /// Error name reported in the `fail` line (default `failed`).
+        #[arg(long)]
+        error: Option<String>,
+    },
+    /// Perform a held request and print its response without
+    /// delivering it. The request stays held.
+    Fetch {
+        id: u64,
+        #[command(flatten)]
+        o: NetOverrides,
+    },
+    /// Print a kept response body (base64).
+    Body { id: u64 },
+}
+
 #[derive(Debug, Subcommand)]
 pub enum RecordSub {
     /// Start recording a page. Captures until `vs record stop <page>`.
@@ -617,13 +715,20 @@ impl Command {
     #[allow(clippy::too_many_lines)]
     pub fn to_request(&self, session_id: Option<&str>) -> Result<Request> {
         Ok(match self {
-            Self::SessionOpen { policy, isolated } => {
+            Self::SessionOpen {
+                policy,
+                isolated,
+                intercept,
+            } => {
                 let mut r = Request::new("vs_session_open");
                 if let Some(p) = policy {
                     r = r.flag_value("policy", p.clone());
                 }
                 if *isolated {
                     r = r.flag("isolated");
+                }
+                if *intercept {
+                    r = r.flag("intercept");
                 }
                 r
             }
@@ -1059,6 +1164,50 @@ impl Command {
                 PendingSub::Cancel { id } => Request::new("vs_pending_cancel").arg(id.clone()),
                 PendingSub::Url => Request::new("vs_pending_url"),
             },
+            Self::Net { sub } => {
+                let s = require_session(session_id)?;
+                let r = match sub {
+                    NetSub::Poll { wait_ms } => {
+                        let r = Request::new("vs_net_poll");
+                        if *wait_ms > 0 {
+                            r.flag_value("wait-ms", wait_ms.to_string())
+                        } else {
+                            r
+                        }
+                    }
+                    NetSub::Route { state } => Request::new("vs_net_route").arg(state.clone()),
+                    NetSub::Continue { id, o } => {
+                        o.apply(Request::new("vs_net_continue").arg(id.to_string()))
+                    }
+                    NetSub::Fulfill {
+                        id,
+                        status,
+                        headers,
+                        body_b64,
+                    } => {
+                        let mut r = Request::new("vs_net_fulfill")
+                            .arg(id.to_string())
+                            .flag_value("status", status.to_string());
+                        r = net_headers(r, headers);
+                        if let Some(b) = body_b64 {
+                            r = r.flag_value("body-b64", b.clone());
+                        }
+                        r
+                    }
+                    NetSub::Abort { id, error } => {
+                        let r = Request::new("vs_net_abort").arg(id.to_string());
+                        match error {
+                            Some(e) => r.flag_value("error", e.clone()),
+                            None => r,
+                        }
+                    }
+                    NetSub::Fetch { id, o } => {
+                        o.apply(Request::new("vs_net_fetch").arg(id.to_string()))
+                    }
+                    NetSub::Body { id } => Request::new("vs_net_body").arg(id.to_string()),
+                };
+                r.flag_value("session", s)
+            }
             Self::Record { sub } => {
                 let s = require_session(session_id)?;
                 match sub {

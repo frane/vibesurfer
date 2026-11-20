@@ -34,6 +34,7 @@ mod inspect;
 mod isolation;
 mod lifecycle;
 mod memory;
+mod net;
 mod visual;
 mod wait;
 mod webentry;

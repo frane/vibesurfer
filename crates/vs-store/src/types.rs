@@ -60,6 +60,8 @@ pub struct Session {
     pub closed_at: Option<i64>,
     /// Pages use a private in-memory data store, not the shared jar.
     pub isolated: bool,
+    /// Pages go through the daemon's intercepting HTTP proxy.
+    pub intercept: bool,
 }
 
 impl Session {
@@ -78,6 +80,7 @@ impl Session {
             })?,
             closed_at: row.get("closed_at")?,
             isolated: row.get::<_, i64>("isolated")? != 0,
+            intercept: row.get::<_, i64>("intercept")? != 0,
         })
     }
 }

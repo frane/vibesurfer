@@ -403,6 +403,32 @@ pub enum DataStore {
     /// key sees it. [`Engine::drop_store`] discards it, and it never
     /// outlives the engine.
     Isolated(String),
+    /// An isolated store, keyed like [`Self::Isolated`], whose network
+    /// traffic goes through the HTTP proxy at `127.0.0.1:<port>`. Every
+    /// engine binds proxy settings to the store (macOS data store,
+    /// WebKitGTK network session, WebView2 environment), which is why a
+    /// proxied page cannot share the default store.
+    Proxied { key: String, port: u16 },
+}
+
+impl DataStore {
+    /// The isolation key, for the isolated and proxied variants.
+    #[must_use]
+    pub fn key(&self) -> Option<&str> {
+        match self {
+            Self::Shared => None,
+            Self::Isolated(key) | Self::Proxied { key, .. } => Some(key),
+        }
+    }
+
+    /// The local proxy port, for the proxied variant.
+    #[must_use]
+    pub fn proxy_port(&self) -> Option<u16> {
+        match self {
+            Self::Proxied { port, .. } => Some(*port),
+            _ => None,
+        }
+    }
 }
 
 /// The browser engine, as the daemon sees it.

@@ -591,6 +591,15 @@ fn isolated_controller_options(
     Ok((env10, options))
 }
 
+/// User data folder for a proxied session's own browser process.
+fn proxied_user_data_dir(key: &str) -> std::path::PathBuf {
+    let name: String = key
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    std::env::temp_dir().join(format!("vibesurfer-intercept-{name}"))
+}
+
 impl Engine for Webview2Backend {
     // The COM bring-up (environment → composition controller →
     // DirectComposition device/target/visual → settings → navigate)
@@ -600,14 +609,41 @@ impl Engine for Webview2Backend {
     fn open(&mut self, url: &str, store: &DataStore) -> EngineResult<PageHandle> {
         let parent = self.create_host_hwnd()?;
 
-        // 1. Environment.
+        // 1. Environment. A proxied session needs its own browser
+        //    process: proxy flags are browser arguments, and every
+        //    environment on one user data folder must pass the same
+        //    ones. So it gets a per-session folder under the temp dir.
+        //    `<-loopback>` stops Chromium's implicit loopback bypass,
+        //    so local test servers are proxied too.
+        let proxied = match store {
+            DataStore::Proxied { key, port } => Some((proxied_user_data_dir(key), *port)),
+            _ => None,
+        };
         let environment: ICoreWebView2Environment = {
             let (tx, rx) = mpsc::channel();
             CreateCoreWebView2EnvironmentCompletedHandler::wait_for_async_operation(
-                Box::new(|handler| unsafe {
-                    webview2_com::Microsoft::Web::WebView2::Win32::CreateCoreWebView2Environment(
-                        &handler,
-                    )
+                Box::new(move |handler| unsafe {
+                    match proxied {
+                        None => {
+                            webview2_com::Microsoft::Web::WebView2::Win32::CreateCoreWebView2Environment(
+                                &handler,
+                            )
+                        }
+                        Some((dir, port)) => {
+                            let options = webview2_com::CoreWebView2EnvironmentOptions::default();
+                            options.set_additional_browser_arguments(format!(
+                                "--proxy-server=http://127.0.0.1:{port} --proxy-bypass-list=<-loopback>"
+                            ));
+                            let options: webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2EnvironmentOptions =
+                                options.into();
+                            webview2_com::Microsoft::Web::WebView2::Win32::CreateCoreWebView2EnvironmentWithOptions(
+                                windows::core::PCWSTR::null(),
+                                &HSTRING::from(dir.as_os_str()),
+                                &options,
+                                &handler,
+                            )
+                        }
+                    }
                     .map_err(webview2_com::Error::WindowsError)
                 }),
                 Box::new(move |error_code, environment| {
@@ -641,9 +677,9 @@ impl Engine for Webview2Backend {
         //    named after the session: pages of the session share it,
         //    nothing else does, and WebView2 deletes its data once the
         //    last page using it closes.
-        let iso_options = match store {
-            DataStore::Shared => None,
-            DataStore::Isolated(key) => Some(isolated_controller_options(&environment, key)?),
+        let iso_options = match store.key() {
+            None => None,
+            Some(key) => Some(isolated_controller_options(&environment, key)?),
         };
         let comp_controller: ICoreWebView2CompositionController = {
             let (tx, rx) = mpsc::channel();

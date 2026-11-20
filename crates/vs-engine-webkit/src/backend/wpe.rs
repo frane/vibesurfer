@@ -173,13 +173,29 @@ impl Engine for WpeBackend {
         // network session; everyone else gets the default persistent
         // one. The download hook below connects to whichever session
         // the view ends up with.
-        let web_view = match store {
-            DataStore::Shared => WebView::new(),
-            DataStore::Isolated(key) => {
+        //
+        // A proxied session's network session also sends every request
+        // through the daemon's proxy. The ignore list is empty, so
+        // loopback is proxied too.
+        let web_view = match store.key() {
+            None => WebView::new(),
+            Some(key) => {
+                let port = store.proxy_port();
                 let session = self
                     .isolated_sessions
-                    .entry(key.clone())
-                    .or_insert_with(webkit6::NetworkSession::new_ephemeral);
+                    .entry(key.to_string())
+                    .or_insert_with(|| {
+                        let s = webkit6::NetworkSession::new_ephemeral();
+                        if let Some(port) = port {
+                            let uri = format!("http://127.0.0.1:{port}");
+                            let settings = webkit6::NetworkProxySettings::new(Some(&uri), &[]);
+                            s.set_proxy_settings(
+                                webkit6::NetworkProxyMode::Custom,
+                                Some(&settings),
+                            );
+                        }
+                        s
+                    });
                 WebView::builder().network_session(session).build()
             }
         };
@@ -196,11 +212,6 @@ impl Engine for WpeBackend {
         let window = gtk::Window::new();
         window.set_decorated(false);
         window.set_default_size(1280, 800);
-        // Pin the view to the window's top-left corner: a viewport
-        // smaller than the window (set_viewport) must not be centered,
-        // or pointer input at page coordinates would miss by the gap.
-        web_view.set_halign(gtk::Align::Start);
-        web_view.set_valign(gtk::Align::Start);
         window.set_child(Some(&web_view));
         window.present();
 
@@ -451,6 +462,12 @@ impl Engine for WpeBackend {
         // viewport.
         p.window.set_default_size(w, h);
         p.web_view.set_size_request(w, h);
+        // Pin the sized view to the window's top-left corner: a viewport
+        // smaller than the window must not be centered, or pointer input
+        // at page coordinates would miss by the gap. (Without a size
+        // request the view fills the window, so this is only set here.)
+        p.web_view.set_halign(gtk::Align::Start);
+        p.web_view.set_valign(gtk::Align::Start);
         Ok(())
     }
 
@@ -755,8 +772,9 @@ impl Engine for WpeBackend {
         // `GdkX11Surface::xid()` + `XTranslateCoordinates` to read the
         // real origin. Until then, page-local CSS px == screen px,
         // which is fine for CI and most headless setups.
-        // The web view is pinned to the window's top-left (see open),
-        // so page coordinates are window coordinates.
+        // The web view fills the window, or is pinned to its top-left
+        // once sized (set_viewport): page coordinates are window
+        // coordinates either way.
         let (origin_x, origin_y) = (0.0_f64, 0.0_f64);
         let start = p.last_mouse.get();
         let seed = humanize_seed(op);

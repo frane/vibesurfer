@@ -33,7 +33,7 @@ tables, see [`codes.md`](codes.md).
 
 ---
 
-## 1. `vs_session_open [--policy=<name>] [--isolated]`
+## 1. `vs_session_open [--policy=<name>] [--isolated] [--intercept]`
 
 Open a new session. Returns the session id and a fresh `state_token` for
 the empty session.
@@ -42,6 +42,12 @@ the empty session.
 shared by its pages and no one else, discarded on close. The flag is
 kept on the session row, so a daemon restart rebuilds the pages isolated
 but with empty storage. Without it, pages use the shared persistent jar.
+
+`--intercept` routes the session's pages through a daemon-side HTTP
+proxy, so the `vs_net_*` primitives (19b) can observe and route every
+request. It implies a private in-memory jar, as `--isolated`: each
+engine binds proxy settings to the data store. The flag is kept on the
+session row; after a restart a fresh proxy starts with the first page.
 
 - Token in: —
 - Token out: yes
@@ -232,6 +238,96 @@ Persistent, encrypted auth state.
 
 Auth blobs are scoped per machine (the encryption key is local).
 Cross-host portability is not a v1 feature.
+
+## 19b. `vs_net_*`: request interception
+
+Only for `--intercept` sessions; any other session gets `BAD_REQUEST`.
+All take the session from `--session`. None of them write audit rows.
+
+Each intercepting session has its own proxy on `127.0.0.1:<ephemeral>`;
+the port tells the daemon which session a connection belongs to.
+
+| Engine | How pages reach the proxy | Loopback |
+|--------|---------------------------|----------|
+| macOS WebKit | `WKWebsiteDataStore.proxyConfigurations` with an HTTP CONNECT proxy (macOS 14+), failover off | `127.0.0.1`, `localhost`, `::1` and the host's own addresses always go direct. `*.localhost` names are proxied; the proxy resolves them to loopback. |
+| WebKitGTK 6 | `NetworkSession::set_proxy_settings`, custom `http://127.0.0.1:<port>`, empty ignore list | Proxied. |
+| WebView2 | `--proxy-server=http://127.0.0.1:<port> --proxy-bypass-list=<-loopback>` on a per-session environment and user data folder | Proxied. |
+
+Plain http is intercepted. https arrives as `CONNECT host:port` and is
+tunnelled untouched: a `tun` event, nothing more. On macOS plain http
+also arrives as `CONNECT`; the proxy reads the HTTP inside the tunnel.
+WebSocket upgrades are forwarded and then tunnelled.
+
+### `vs_net_poll [--wait-ms=N]`
+
+Returns and clears the queued events, oldest first. With `--wait-ms`
+(capped at 30000) it blocks until the first event or the timeout.
+
+```
+req <id> <METHOD> <url> type=<type> nav=<0|1> [frame=<main|sub>]
+h <name>: <value>
+body <base64>
+res <id> <status> <url> <reason>
+h <name>: <value>
+fin <id> size=<n>
+fail <id> <error>
+tun <host>:<port>
+drop <n>
+```
+
+`h` lines follow their `req` or `res` line, in the order received;
+`body` appears only for a request with a body. `res` carries the URL
+the browser asked for, even when `continue --url` sent it elsewhere.
+`fin` counts body bytes as received (still content-encoded). `drop`
+says how many events fell off a full queue (20000).
+
+Ids are per session, starting at 1. A redirect is a `res 3xx` and a
+new `req` for the next hop. Fulfilled requests get `res` and `fin`;
+aborted ones and network errors get `fail`.
+
+`type` is inferred: `Sec-Fetch-Dest` when present (Chromium always;
+WebKit only to trustworthy origins such as `*.localhost`), else
+`Accept` (`text/html` document, `text/css` stylesheet, `image/*`
+image), else the URL extension, else `other`. Types: `document`,
+`script`, `stylesheet`, `image`, `font`, `media`, `fetch`, `websocket`,
+`manifest`, `other`. `fetch` covers fetch() and XHR alike. `frame` is
+set for documents, `sub` only when `Sec-Fetch-Dest` says iframe.
+
+### `vs_net_route on|off`
+
+`on` holds every request after its `req` event until the client
+decides. A request held 30 s without a decision continues unchanged.
+`off` continues everything held.
+
+### `vs_net_continue <id> [--url=U] [--method=M] [--headers=H] [--body-b64=B]`
+### `vs_net_fulfill <id> [--status=N] [--headers=H] [--body-b64=B]`
+### `vs_net_abort <id> [--error=NAME]`
+
+Decide a held request. `--headers` is `name: value` lines joined by
+newlines (the CLI's repeatable `--header` builds it); when given it
+replaces the whole header list. Fulfill defaults to status 200 and an
+empty body; Content-Length is set by the proxy. Abort closes the
+browser's connection with no response and reports `fail <id> <NAME>`
+(default `failed`). `NOT_FOUND request=<id>` if the request is not
+held (unknown, decided, or timed out).
+
+### `vs_net_fetch <id> [--url=] [--method=] [--headers=] [--body-b64=]`
+
+Performs the held request (with the overrides) and returns the
+response without delivering it; the request stays held, so the client
+then fulfills, continues or aborts it.
+
+```
+res <id> <status> <url> <reason>
+h <name>: <value>
+body <base64>
+```
+
+### `vs_net_body <id>`
+
+`body <base64>`: a response body the proxy delivered (forwarded or
+fulfilled). The newest bodies are kept, 16 MiB per session in total;
+`NOT_FOUND body=<id>` once evicted.
 
 ---
 

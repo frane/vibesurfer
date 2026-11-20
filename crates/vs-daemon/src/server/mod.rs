@@ -10,6 +10,7 @@
 mod engine_ops;
 mod helpers;
 mod lifecycle;
+mod net_ops;
 mod page_ops;
 mod store_ops;
 
@@ -185,6 +186,13 @@ pub fn dispatch(daemon: &Daemon, req: &Request) -> String {
         "vs_pending_fulfill" => engine_ops::handle_pending_fulfill(daemon, req),
         "vs_pending_cancel" => engine_ops::handle_pending_cancel(daemon, req),
         "vs_pending_peek" => engine_ops::handle_pending_peek(daemon, req),
+        "vs_net_poll" => net_ops::handle_poll(daemon, req),
+        "vs_net_route" => net_ops::handle_route(daemon, req),
+        "vs_net_continue" => net_ops::handle_continue(daemon, req),
+        "vs_net_fulfill" => net_ops::handle_fulfill(daemon, req),
+        "vs_net_abort" => net_ops::handle_abort(daemon, req),
+        "vs_net_fetch" => net_ops::handle_fetch(daemon, req),
+        "vs_net_body" => net_ops::handle_body(daemon, req),
         other => format_error(
             ErrorCode::BadRequest,
             vec![format!("unknown primitive: {other}")],
