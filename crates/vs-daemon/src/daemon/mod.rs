@@ -458,7 +458,7 @@ impl Daemon {
                 }
             }
             let token = self.current_token(session_id, page_id)?;
-            ctx.after_token = Some(token.clone());
+            ctx.after_token = Some(token);
             Ok(token)
         })
     }
