@@ -695,3 +695,44 @@ fn cell_move_to_hovers_with_trusted_events() {
         }
     }
 }
+
+// Refs live in the walker's maps, not in DOM attributes: after a view
+// and an act, the page's markup is untouched, and the ref still
+// resolves to the element.
+#[test]
+fn cell_refs_stay_out_of_the_markup() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/form.html");
+        let r = ctx.vs(&["view", &page, "--full"]);
+        let body = body_rest(&r);
+        let token = token_of(&r);
+        let n_email = ref_for(&body, "tf", "");
+        let r_fill = ctx.vs(&[
+            "act",
+            &page,
+            &n_email.to_string(),
+            "fill",
+            "user@example.com",
+            &format!("--token={token}"),
+        ]);
+        assert_ok("fill email", &r_fill);
+        assert_eq!(
+            eval_js(
+                &ctx,
+                &page,
+                "String(document.documentElement.outerHTML.includes('data-vs-ref'))"
+            ),
+            "false",
+            "refs leaked into the page's markup"
+        );
+        assert_eq!(
+            eval_js(
+                &ctx,
+                &page,
+                &format!("String(window.__vsFindRef({n_email}).value)")
+            ),
+            "user@example.com"
+        );
+    }
+}

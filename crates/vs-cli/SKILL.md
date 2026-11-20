@@ -198,7 +198,7 @@ vs auth load "$PAGE" example-prod    # restores the session
 ## How the wire stays cheap
 
 - **Tree deltas, not re-dumps.** First `vs view` after `open` returns the full tree. Subsequent calls return only what changed since the last token the agent saw.
-- **Stable refs.** Every interesting element gets a sticky `data-vs-ref` integer that survives across snapshots — you can plan multi-step flows without re-discovering elements.
+- **Stable refs.** Every interesting element gets a sticky integer ref that survives across snapshots. Refs are kept in vibesurfer's own maps, never written into the page's DOM — you can plan multi-step flows without re-discovering elements.
 - **Tab-separated lines, not JSON.** Hot-path reads cost a fraction of equivalent JSON. Use `--json` only when you're inspecting by hand.
 
 ## Common mistakes to avoid

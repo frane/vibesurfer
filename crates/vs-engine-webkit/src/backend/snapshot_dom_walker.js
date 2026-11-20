@@ -298,11 +298,22 @@
         } catch (e) { window.__vsDirty = true; }
     }
     let counter = (window.__vsRefCounter || 0);
+    // Refs live in maps, not in DOM attributes: the page never sees
+    // them in its markup (outerHTML, attribute selectors, mutation
+    // observers), and a page cannot read or forge them.
+    if (!window.__vsRefMaps) {
+        Object.defineProperty(window, '__vsRefMaps', {
+            value: { byEl: new WeakMap(), byRef: new Map() },
+            enumerable: false,
+        });
+    }
+    const maps = window.__vsRefMaps;
     function refFor(el) {
-        let r = el.getAttribute('data-vs-ref');
-        if (r) return parseInt(r, 10);
+        const r = maps.byEl.get(el);
+        if (r !== undefined) return r;
         counter += 1;
-        el.setAttribute('data-vs-ref', String(counter));
+        maps.byEl.set(el, counter);
+        maps.byRef.set(counter, new WeakRef(el));
         return counter;
     }
     function visit(el) {
@@ -414,27 +425,15 @@
     // Reinstalled on every walk so the closure picks up new shadow
     // roots that appeared between snapshots.
     window.__vsFindRef = function(r) {
-        const sel = '[data-vs-ref="' + String(r) + '"]';
-        function walk(root) {
-            const direct = root.querySelector(sel);
-            if (direct) return direct;
-            for (const el of root.querySelectorAll('*')) {
-                if (el.shadowRoot) {
-                    const found = walk(el.shadowRoot);
-                    if (found) return found;
-                }
-                if (el.tagName === 'IFRAME' || el.tagName === 'FRAME') {
-                    let d = null;
-                    try { d = el.contentDocument; } catch (e) { d = null; }
-                    if (d) {
-                        const found = walk(d);
-                        if (found) return found;
-                    }
-                }
-            }
-            return null;
-        }
-        return walk(document);
+        const w = maps.byRef.get(Number(r));
+        const el = w && w.deref();
+        if (!el || !el.isConnected) return null;
+        return el;
+    };
+    // The ref of an element, or null: the reverse of __vsFindRef.
+    window.__vsRefOf = function(el) {
+        const r = maps.byEl.get(el);
+        return r === undefined ? null : r;
     };
     // An element's rect in the top viewport: a rect read inside a
     // frame is relative to that frame, so add each enclosing frame's
@@ -486,7 +485,7 @@
     if (typeof window.__vsHideGlobals === 'function') {
         window.__vsHideGlobals([
             '__vsDirty', '__vsDirtyObserver', '__vsRefCounter',
-            '__vsFindRef', '__vsLastResult', '__vsTopRect',
+            '__vsFindRef', '__vsRefOf', '__vsLastResult', '__vsTopRect',
         ]);
     }
     return __vsResult;
