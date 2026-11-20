@@ -1,0 +1,15 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Inner</title><style>body { margin: 20px; }</style></head>
+<body>
+  <label for="name">Frame name</label>
+  <input id="name">
+  <button id="greet">Greet from frame</button>
+  <p id="out">waiting</p>
+  <script>
+    document.getElementById('greet').addEventListener('click', function () {
+      document.getElementById('out').textContent = 'Hello ' + document.getElementById('name').value;
+    });
+  </script>
+</body>
+</html>

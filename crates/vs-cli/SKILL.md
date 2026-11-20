@@ -127,7 +127,7 @@ A password field masks to `***` in the tree whatever its value, so empty → fil
 
 The response body is `path` / `size` / `mime` / `url` rows — bytes never cross the wire. A failed read (401, revoked blob, over the 64 MiB cap) comes back as an error saying why, not as silence. Files are named from `Content-Disposition` or the `download` attribute, sanitized to a single path component; a repeat download gets a `-1`, `-2`, … suffix rather than overwriting. `--dest` overrides the name (relative paths stay inside the downloads dir).
 
-An `<iframe>` shows up in the tree as an `ifr` node whose label is its resolved `src` — the walker cannot cross into the frame, so that URL is what you feed `vs download`.
+An `<iframe>` shows up in the tree as an `ifr` node whose label is its resolved `src`. A same-origin frame's content is its children (v0.2.15+), with refs you act on as usual. A cross-origin frame stays a leaf: its URL is what you feed `vs download`.
 
 **Bot challenges (v0.2.1+).** If a page is gated by Turnstile / hCaptcha / reCAPTCHA, `vs view` raises `? captcha_visible <provider> <state>` and the widget appears as a labelled node carrying `challenge=<provider>:<state>` and `challenge_box=<x>,<y>,<w>,<h>`.
 

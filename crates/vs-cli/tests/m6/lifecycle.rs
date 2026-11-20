@@ -592,3 +592,48 @@ fn cell_init_script_ignores_page_csp() {
         assert_eq!(eval_js(&ctx, &page, "window.__vsInitCsp"), "ran");
     }
 }
+
+// A same-origin iframe's content is part of the tree: its elements
+// get refs, fill and click reach them (the click lands at the right
+// spot despite the frame's offset and border), and a change inside
+// the frame shows up in the next view.
+#[test]
+fn cell_same_origin_frame_is_in_the_tree() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/frames.html");
+        settle(500);
+        let r = ctx.vs(&["view", &page, "--full"]);
+        assert_ok("view", &r);
+        let body = body_rest(&r);
+        let token = token_of(&r);
+        let field = ref_for(&body, "tf", "");
+        let button = ref_for(&body, "btn", "Greet from frame");
+        let r = ctx.vs(&[
+            "act",
+            &page,
+            &field.to_string(),
+            "fill",
+            "Ada",
+            &format!("--token={token}"),
+        ]);
+        assert_ok("fill in frame", &r);
+        let r = ctx.vs(&["view", &page]);
+        let token = token_of(&r);
+        let r = ctx.vs(&[
+            "act",
+            &page,
+            &button.to_string(),
+            "click",
+            &format!("--token={token}"),
+        ]);
+        assert_ok("click in frame", &r);
+        settle(300);
+        let r = ctx.vs(&["view", &page, "--full"]);
+        assert!(
+            r.stdout.contains("Hello Ada"),
+            "the frame's change is not in the tree:\n{}",
+            r.stdout
+        );
+    }
+}

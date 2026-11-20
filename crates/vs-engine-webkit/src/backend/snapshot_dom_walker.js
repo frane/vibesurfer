@@ -273,6 +273,25 @@
         // Container roles: only the direct text (typically empty).
         return directText(el).slice(0, 200);
     }
+    // A change inside a same-origin frame must invalidate the cached
+    // top-level result too, so each walked frame document gets an
+    // observer that marks the top window dirty.
+    function watchFrame(doc) {
+        var w = doc.defaultView;
+        if (!w || w.__vsFrameObserved) return;
+        try {
+            var mark = function () { window.__vsDirty = true; };
+            new w.MutationObserver(mark).observe(doc.documentElement, {
+                subtree: true, childList: true, attributes: true, characterData: true,
+            });
+            doc.addEventListener('input', mark, true);
+            doc.addEventListener('change', mark, true);
+            Object.defineProperty(w, '__vsFrameObserved', { value: true, enumerable: false });
+            // The frame navigating replaces the document; the next
+            // walk sees a new one.
+            w.addEventListener('pagehide', mark);
+        } catch (e) { window.__vsDirty = true; }
+    }
     let counter = (window.__vsRefCounter || 0);
     function refFor(el) {
         let r = el.getAttribute('data-vs-ref');
@@ -297,6 +316,21 @@
             for (const c of el.shadowRoot.children) {
                 const node = visit(c);
                 if (node) children.push(node);
+            }
+        }
+        // Same-origin frames: their content becomes the ifr node's
+        // children, addressable by ref like anything else. A
+        // cross-origin frame throws on contentDocument and stays a
+        // leaf carrying its src.
+        if (el.tagName === 'IFRAME' || el.tagName === 'FRAME') {
+            var fdoc = null;
+            try { fdoc = el.contentDocument; } catch (e) { fdoc = null; }
+            if (fdoc && fdoc.body) {
+                watchFrame(fdoc);
+                for (const c of fdoc.body.children) {
+                    const node = visit(c);
+                    if (node) children.push(node);
+                }
             }
         }
         // A challenge node is always kept, even when it is a roleless
@@ -384,10 +418,34 @@
                     const found = walk(el.shadowRoot);
                     if (found) return found;
                 }
+                if (el.tagName === 'IFRAME' || el.tagName === 'FRAME') {
+                    let d = null;
+                    try { d = el.contentDocument; } catch (e) { d = null; }
+                    if (d) {
+                        const found = walk(d);
+                        if (found) return found;
+                    }
+                }
             }
             return null;
         }
         return walk(document);
+    };
+    // An element's rect in the top viewport: a rect read inside a
+    // frame is relative to that frame, so add each enclosing frame's
+    // position and border.
+    window.__vsTopRect = function (el) {
+        const r = el.getBoundingClientRect();
+        let x = r.left, y = r.top;
+        let w = el.ownerDocument && el.ownerDocument.defaultView;
+        while (w && w !== window && w.frameElement) {
+            const f = w.frameElement;
+            const fr = f.getBoundingClientRect();
+            x += fr.left + f.clientLeft;
+            y += fr.top + f.clientTop;
+            w = f.ownerDocument.defaultView;
+        }
+        return { x: x, y: y, width: r.width, height: r.height };
     };
     // Labels are capped with slice(), which can cut an emoji between
     // its two UTF-16 halves, and pages can carry lone surrogates too.
@@ -423,7 +481,7 @@
     if (typeof window.__vsHideGlobals === 'function') {
         window.__vsHideGlobals([
             '__vsDirty', '__vsDirtyObserver', '__vsRefCounter',
-            '__vsFindRef', '__vsLastResult',
+            '__vsFindRef', '__vsLastResult', '__vsTopRect',
         ]);
     }
     return __vsResult;

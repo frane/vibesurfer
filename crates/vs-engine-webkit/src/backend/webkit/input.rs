@@ -77,7 +77,7 @@ pub(super) fn ref_rect(
 ) -> EngineResult<Option<ClientRect>> {
     let js = format!(
         r#"(function() {{
-            var el = document.querySelector('[data-vs-ref="{r}"]');
+            var el = (window.__vsFindRef ? window.__vsFindRef({r}) : null) || document.querySelector('[data-vs-ref="{r}"]');
             if (!el) return 'null';
             // Scroll into the viewport's vertical center if it's
             // off-screen. `instant` keeps the test deterministic
@@ -87,7 +87,7 @@ pub(super) fn ref_rect(
             }} catch (e) {{
                 el.scrollIntoView();
             }}
-            var b = el.getBoundingClientRect();
+            var b = window.__vsTopRect ? window.__vsTopRect(el) : el.getBoundingClientRect();
             return JSON.stringify({{x: b.x, y: b.y, w: b.width, h: b.height}});
         }})()"#,
         r = r.0,

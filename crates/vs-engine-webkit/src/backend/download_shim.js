@@ -450,7 +450,7 @@
     '__vsInspectorInstalled',
     '__vsWebAuthn',
     '__vsDirty', '__vsDirtyObserver', '__vsRefCounter',
-    '__vsFindRef', '__vsLastResult',
+    '__vsFindRef', '__vsLastResult', '__vsTopRect',
   ]);
   try {
     Object.defineProperty(window, '__vsNw', { value: 0, writable: true, enumerable: false, configurable: true });

@@ -8,6 +8,7 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ### Added
 - `vs init-script <PAGE> <SOURCE|@FILE>` (wire `vs_init_script`) runs a script at document start in every frame of every later document in the page, before the page's own scripts, like Playwright's `addInitScript`. Page CSP does not apply to it. The current document is not touched. The daemon keeps the page's scripts and installs them again when it rebuilds a dormant page, before that page loads. Cells `cell_init_script_runs_at_document_start` and `cell_init_script_ignores_page_csp`.
+- Same-origin iframes are part of the tree. Their content appears as the `ifr` node's children with ordinary refs; `act`, `layout`, `click-at` and the macOS native click reach them, with rects offset by the frame's position and border so coordinates land in the right place. A change inside a frame invalidates the cached view. Action scripts bind DOM constructors to the element's own window, so fills on framework-controlled inputs work inside frames. Cross-origin frames stay leaves carrying their URL. Fixtures `frames.html`, `frame-inner.html`; cell `cell_same_origin_frame_is_in_the_tree`.
 - `vs socket` prints the address a client in another language connects to: the socket path on Unix, the named pipe on Windows, whose name is a hash of the path.
 
 ## [0.2.14] - 2026-11-19

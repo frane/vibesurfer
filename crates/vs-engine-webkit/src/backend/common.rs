@@ -264,10 +264,20 @@ fn json_string(s: &str) -> String {
 /// the resolved element `el`. Coordinates are the element's center so
 /// pointer-position-aware handlers behave. The `button`/`buttons`
 /// fields follow real semantics (held during down, released by up).
+/// Bind the DOM constructors an action script uses to the element's own
+/// window. An element inside a same-origin frame belongs to that
+/// frame's realm, where `el instanceof HTMLInputElement` against the
+/// top window's constructor is false and events built from the top
+/// window's constructors carry the wrong `view`.
+const REALM: &str = "const W = (el.ownerDocument && el.ownerDocument.defaultView) || window; \
+var HTMLInputElement = W.HTMLInputElement, HTMLTextAreaElement = W.HTMLTextAreaElement, \
+HTMLSelectElement = W.HTMLSelectElement, Event = W.Event, KeyboardEvent = W.KeyboardEvent, \
+MouseEvent = W.MouseEvent, PointerEvent = W.PointerEvent;";
+
 const CLICK_SEQUENCE_JS: &str = "\
 const rc = el.getBoundingClientRect(); \
 const x = rc.left + rc.width / 2, y = rc.top + rc.height / 2; \
-const mk = (b) => ({ bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y, screenX: x, screenY: y, button: 0, buttons: b }); \
+const mk = (b) => ({ bubbles: true, cancelable: true, composed: true, view: W, clientX: x, clientY: y, screenX: x, screenY: y, button: 0, buttons: b }); \
 const mkp = (b) => Object.assign(mk(b), { pointerId: 1, pointerType: 'mouse', isPrimary: true, width: 1, height: 1 }); \
 try { \
   el.dispatchEvent(new PointerEvent('pointerover', mkp(0))); \
@@ -328,7 +338,7 @@ fn build_act_js(r: Ref, action: &Action) -> String {
         Action::Focus => "el.focus(); return 'ok';".into(),
     };
     format!(
-        "(function() {{ const el = (window.__vsFindRef ? window.__vsFindRef({r}) : null) || document.querySelector('[data-vs-ref=\"{r}\"]'); if (!el) return 'err:not_found'; {body} }})()",
+        "(function() {{ const el = (window.__vsFindRef ? window.__vsFindRef({r}) : null) || document.querySelector('[data-vs-ref=\"{r}\"]'); if (!el) return 'err:not_found'; {REALM} {body} }})()",
         r = r.0
     )
 }
@@ -576,8 +586,8 @@ where
             const out = refs.map(r => {{
                 const el = (window.__vsFindRef ? window.__vsFindRef(r) : null) || document.querySelector(`[data-vs-ref="${{r}}"]`);
                 if (!el) return {{r, found: false}};
-                const rect = el.getBoundingClientRect();
-                const cs = getComputedStyle(el);
+                const rect = window.__vsTopRect ? window.__vsTopRect(el) : el.getBoundingClientRect();
+                const cs = (el.ownerDocument.defaultView || window).getComputedStyle(el);
                 const z = parseInt(cs.zIndex, 10);
                 return {{
                     r, found: true,
