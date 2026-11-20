@@ -39,3 +39,7 @@ Honest list of behaviors that aren't yet what they should be. Each entry has a s
 
 - Fixed on Unix: session auto-binding keys on the POSIX session id (`sid-<sid>`), which is identical across command substitution, nested shells and pipelines, so `P=$(vs open …); vs view $P` works. Cell `cell_session_survives_command_substitution`.
 - Windows has no POSIX session id and still falls back to `<parent_pid>-<parent_start_time>`. PowerShell assignment runs in-process so the common shape is unaffected, but `for /f` in `cmd.exe` spawns a child shell and would bind its own session. The planned fix is a console-scoped key (all processes sharing a console share its `GetConsoleWindow` handle), with the pid key kept for processes that have no console. Until then, on Windows pin `VS_CALLER` or `VS_SESSION`, or pass `--session`.
+
+## Native clicks on a rewritten about:blank (macOS)
+
+- A page opened on `about:blank` whose document is then written with `document.open()` / `document.write()` ignores the native click `vs act ... click` sends: the button's handler does not run, while a script `el.click()` on the same element does. The same HTML loaded from an http(s) or `data:` URL takes native clicks normally, so load content that way (testsurfer's `page.setContent` uses a `data:` URL off-origin for this reason). Not yet investigated in WebKit.
