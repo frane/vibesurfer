@@ -8,9 +8,10 @@
 //! handshake (0x16) is tunnelled blind, anything else is read as HTTP
 //! requests for that authority.
 //!
-//! Upstream, each request gets its own connection with
-//! `Connection: close`; the browser side keeps its connection alive and
-//! re-frames bodies (Content-Length when known, chunked otherwise).
+//! Each request gets its own connection on both sides, with
+//! `Connection: close`: a browser retries a request whose reused
+//! connection closed without a response, which would undo an abort.
+//! Bodies are re-framed (Content-Length when known, chunked otherwise).
 
 use std::io::{self, BufRead, BufReader, Write};
 use std::net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs};
@@ -95,7 +96,12 @@ fn handle_conn(net: &SessionNet, stream: TcpStream) -> io::Result<()> {
             },
         };
         let body = read_body(&mut reader, request_framing(&head.headers))?;
-        let keep_alive = wants_keep_alive(&version, &head);
+        // One request per browser connection. A browser that sees a
+        // reused connection close without a response retries the
+        // request, which would turn an abort into a second attempt;
+        // on a fresh connection the abort stands.
+        let _ = wants_keep_alive(&version, &head);
+        let keep_alive = false;
         let req = ProxyRequest {
             method,
             url,

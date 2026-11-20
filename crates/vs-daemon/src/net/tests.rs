@@ -84,8 +84,9 @@ fn wait_for_req(net: &SessionNet, needle: &str) -> u64 {
 fn absolute_form_requests_are_forwarded_and_recorded() {
     let up = upstream();
     let net = SessionNet::start().unwrap();
-    let mut c = connect(&net);
     for path in ["/plain", "/chunked", "/close"] {
+        // One request per connection: the proxy closes after each answer.
+        let mut c = connect(&net);
         let (status, body) = roundtrip(
             &mut c,
             &format!(
