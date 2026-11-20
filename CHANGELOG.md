@@ -8,6 +8,7 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ### Fixed
 - `npx vibesurfer` installs on Windows under Git Bash, as on GitHub's Windows runners. The launcher unpacked the release zip with whatever `tar` came first on the PATH; there that is GNU tar, which reads the `C:` in the archive path as a remote host and fails with `Cannot connect to C: resolve failed`. It now runs the system bsdtar (`System32\tar.exe`).
+- `vs move-to` and `vs hover-at` hover on macOS. The trusted mouse moves went to `-[WKWebView mouseMoved:]`, which never reaches the page, so there was no `mousemove`/`mouseover`/`mouseenter` and `:hover` never matched; clicks and drags were unaffected. Moves now go to the owner of WebKit's tracking area, the object AppKit messages for a real cursor. The lead-in moves before `click-at` and ref clicks take the same path. Fixture `hover.html`; cell `cell_move_to_hovers_with_trusted_events`.
 
 ## [0.2.15] - 2026-11-20
 

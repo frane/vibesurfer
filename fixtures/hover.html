@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Hover</title>
+<style>#a:hover { background: rgb(0, 128, 0); }</style></head>
+<body>
+<button id="a" style="position:absolute;left:100px;top:100px;width:120px;height:40px">Hover me</button>
+<script>
+  window.__vsLog = [];
+  ['mouseover', 'mouseenter', 'mousemove'].forEach(function (t) {
+    document.getElementById('a').addEventListener(t, function (e) {
+      if (window.__vsLog.indexOf(t + (e.isTrusted ? '-trusted' : '')) < 0) {
+        window.__vsLog.push(t + (e.isTrusted ? '-trusted' : ''));
+      }
+    });
+  });
+</script>
+</body>
+</html>

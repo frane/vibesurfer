@@ -36,7 +36,7 @@
 use std::time::Duration;
 
 use objc2::rc::Retained;
-use objc2::MainThreadMarker;
+use objc2::{msg_send, MainThreadMarker};
 use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType, NSWindow};
 use objc2_foundation::NSPoint;
 use objc2_web_kit::WKWebView;
@@ -157,7 +157,7 @@ pub(super) fn click_at_rect(
         // path only contributes the move sequence.
         if step.kind == vs_humanize::MouseStepKind::Move {
             let mv = make_event(NSEventType::MouseMoved, step.point)?;
-            web_view.mouseMoved(&mv);
+            deliver_mouse_moved(web_view, &mv);
             let now_ms = step.at.as_millis();
             let delta = now_ms.saturating_sub(prev_ms);
             if delta > 0 {
@@ -179,6 +179,44 @@ pub(super) fn click_at_rect(
     super::headless_webview::end_suppressed_drag(web_view, up.locationInWindow());
     let _ = run_loop_until(|| false, Duration::from_millis(up_ms));
     Ok(end)
+}
+
+/// `NSTrackingAreaOptions::MouseMoved`.
+const TRACKING_MOUSE_MOVED: usize = 0x02;
+
+/// Hand a `MouseMoved` event to WebKit the way AppKit would.
+///
+/// `-[WKWebView mouseMoved:]` does not reach the page. WebKit takes
+/// mouse moves from the owner of its own tracking area (a private
+/// `WKMouseTrackingObserver`), which AppKit messages for a real cursor.
+/// Sent to the view itself the event was dropped: no `mousemove`, no
+/// `mouseover`, and `:hover` never matched. Send it to that owner, the
+/// same object a hardware move reaches. Falls back to the view if WebKit
+/// ever stops installing the tracking area.
+fn deliver_mouse_moved(web_view: &WKWebView, event: &NSEvent) {
+    use objc2::runtime::AnyObject;
+    use objc2::sel;
+    let view_ptr: *const AnyObject = std::ptr::from_ref(web_view).cast();
+    let owner: Option<Retained<AnyObject>> = unsafe {
+        let areas: Retained<AnyObject> = msg_send![web_view, trackingAreas];
+        let n: usize = msg_send![&areas, count];
+        (0..n).find_map(|i| {
+            let area: *mut AnyObject = msg_send![&areas, objectAtIndex: i];
+            let opts: usize = msg_send![area, options];
+            let owner: Option<Retained<AnyObject>> = msg_send![area, owner];
+            owner.filter(|o| {
+                opts & TRACKING_MOUSE_MOVED != 0
+                    && !std::ptr::eq(Retained::as_ptr(o), view_ptr)
+                    && o.class().responds_to(sel!(mouseMoved:))
+            })
+        })
+    };
+    match owner {
+        Some(o) => unsafe {
+            let _: () = msg_send![&o, mouseMoved: event];
+        },
+        None => web_view.mouseMoved(event),
+    }
 }
 
 /// Trusted MouseMoved sequence from `start` to `end` along a Bezier
@@ -225,7 +263,7 @@ pub(super) fn move_along_path(
             if button_down {
                 web_view.mouseDragged(&mv);
             } else {
-                web_view.mouseMoved(&mv);
+                deliver_mouse_moved(web_view, &mv);
             }
             let now_ms = step.at.as_millis();
             let delta = now_ms.saturating_sub(prev_ms);
@@ -246,7 +284,7 @@ pub(super) fn move_along_path(
     if button_down {
         web_view.mouseDragged(&final_mv);
     } else {
-        web_view.mouseMoved(&final_mv);
+        deliver_mouse_moved(web_view, &final_mv);
     }
     if let Some((sink, mtm)) = rec {
         sink.frame(web_view, mtm, end.x, end.y, 0.0, 16);

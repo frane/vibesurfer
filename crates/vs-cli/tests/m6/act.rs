@@ -664,3 +664,34 @@ fn cell_new_window_navigation_loads_in_place() {
         }
     }
 }
+
+// `vs move-to` / `vs hover-at` dispatch trusted mouse moves. On macOS
+// they used to reach WKWebView and change nothing: no mouseover, no
+// :hover. Menus, tooltips and hover cards that open on a real pointer
+// never opened.
+#[test]
+fn cell_move_to_hovers_with_trusted_events() {
+    for _ in each_available_backend() {
+        for verb in ["move-to", "hover-at"] {
+            let ctx = TestContext::start();
+            let (_s, page, _t) = open_fixture(&ctx, "/hover.html");
+            let r = ctx.vs(&[verb, &page, "160", "120", "--mode=robotic"]);
+            assert_ok(verb, &r);
+            settle(100);
+            let hovered = eval_js(
+                &ctx,
+                &page,
+                "String(document.querySelector('button:hover') && document.querySelector('button:hover').id)",
+            );
+            assert_eq!(hovered.trim(), "a", "{verb}: button must match :hover");
+            let log = eval_js(&ctx, &page, "window.__vsLog.join(',')");
+            for ev in [
+                "mouseover-trusted",
+                "mouseenter-trusted",
+                "mousemove-trusted",
+            ] {
+                assert!(log.contains(ev), "{verb}: missing {ev}, got {log:?}");
+            }
+        }
+    }
+}
