@@ -36,7 +36,7 @@ Wire form is `vs_<name>` (over the socket); CLI subcommand is `<name>` with hyph
 
 | # | CLI | What |
 |---|-----|------|
-| 1 | `vs session-open [--policy=NAME]` | Create a session. Writes `~/.vibesurfer/active-session`. |
+| 1 | `vs session-open [--policy=NAME] [--isolated]` | Create a session. Writes `~/.vibesurfer/active-session`. `--isolated`: own in-memory cookie/storage jar, shared by the session's pages only, gone on close or daemon restart. Default sessions share the persistent jar (logins persist). |
 | 2 | `vs session-close [--all\|--idle-for=2h]` | Close the active session, or sweep the workspace: `--all`, or only what has been untouched that long. |
 | 3 | `vs open <URL>` | Open a page in the session. |
 | - | `vs goto <PAGE> <URL>` (`g`) | Navigate an existing page in place. Reuses the web view, so it skips browser spin-up and is much faster than open for successive navigations. Refs are fresh afterward. |
@@ -51,6 +51,7 @@ Wire form is `vs_<name>` (over the socket); CLI subcommand is `<name>` with hyph
 | 6 | `vs read <PAGE> <REF>` | Full text of one ref. |
 | 13 | `vs status` | Sessions, pages, and `live=` — how many still hold a web view. `live` is the number that costs memory and processes. |
 | 14 | `vs log [--page=<P>] [--group=<G>] [--since=<EPOCH>] [--limit=N]` | Audit log slice. |
+| - | `vs inspect <PAGE> response` (`i <PAGE> res`) | Main document's HTTP response from the last navigation: `url=`, `status=`, `status_text=`, then `h <name>: <value>` per header. `none` for `data:`, `about:blank`, `file:`, or a failed load. |
 
 ### Mutate (7, 9–12, 17)
 
@@ -198,7 +199,7 @@ vs auth load "$PAGE" example-prod    # restores the session
 ## How the wire stays cheap
 
 - **Tree deltas, not re-dumps.** First `vs view` after `open` returns the full tree. Subsequent calls return only what changed since the last token the agent saw.
-- **Stable refs.** Every interesting element gets a sticky `data-vs-ref` integer that survives across snapshots — you can plan multi-step flows without re-discovering elements.
+- **Stable refs.** Every interesting element gets a sticky integer ref that survives across snapshots. Refs are kept in vibesurfer's own maps, never written into the page's DOM — you can plan multi-step flows without re-discovering elements.
 - **Tab-separated lines, not JSON.** Hot-path reads cost a fraction of equivalent JSON. Use `--json` only when you're inspecting by hand.
 
 ## Common mistakes to avoid
