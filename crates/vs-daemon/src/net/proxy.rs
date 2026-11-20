@@ -204,20 +204,17 @@ fn exchange(net: &SessionNet, req: &ProxyRequest, mut conn: BufReader<Stream>) -
     }
 }
 
-/// Fail the browser's request for good.
-///
-/// CFNetwork (WebKit on macOS) retries an idempotent request once when
-/// its connection closes with no response, fresh connection or not,
-/// and it treats junk instead of a status line the same way; the retry
-/// would get the next decision and an aborted fetch would succeed. A
-/// status line followed by a malformed header field is a protocol
-/// error it reports without retrying, before any response reaches the
-/// page. Chromium skips malformed header lines, and it and libsoup do
-/// not retry a fresh connection, so elsewhere the connection is just
+/// Fail the browser's request without a retry. On macOS, CFNetwork
+/// silently retries a request whose connection closed before any
+/// response bytes, and treats a malformed header line as a response
+/// (fetch resolves with it). A response head that promises a body,
+/// followed by a close, is a hard network error there: fetch rejects
+/// and a navigation fails, with no retry. Chromium and libsoup do not
+/// retry a fresh connection, so elsewhere the connection is just
 /// dropped.
 fn abort(conn: &mut Stream) {
     if cfg!(target_os = "macos") {
-        let _ = conn.write_all(b"HTTP/1.1 502 Aborted\r\nvs-abort\r\n\r\n");
+        let _ = conn.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1048576\r\n\r\n");
         let _ = conn.flush();
     }
     conn.kill();
