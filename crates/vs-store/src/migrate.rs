@@ -9,10 +9,16 @@ use rusqlite::Connection;
 
 use crate::error::Result;
 
-const MIGRATIONS: &[(&str, &str)] = &[(
-    "0001_initial",
-    include_str!("../migrations/0001_initial.sql"),
-)];
+const MIGRATIONS: &[(&str, &str)] = &[
+    (
+        "0001_initial",
+        include_str!("../migrations/0001_initial.sql"),
+    ),
+    (
+        "0002_session_isolated",
+        include_str!("../migrations/0002_session_isolated.sql"),
+    ),
+];
 
 /// Apply any not-yet-applied migrations against `conn`. Idempotent.
 pub fn apply(conn: &Connection) -> Result<()> {

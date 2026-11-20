@@ -59,6 +59,11 @@ pub enum Command {
     SessionOpen {
         #[arg(long)]
         policy: Option<String>,
+        /// Give the session its own in-memory cookie and storage jar,
+        /// shared by its pages only and discarded on close or daemon
+        /// restart. Default sessions share the persistent jar.
+        #[arg(long)]
+        isolated: bool,
     },
     /// 2. Close the active session, or a whole sweep of them.
     #[command(visible_alias = "sc")]
@@ -612,10 +617,13 @@ impl Command {
     #[allow(clippy::too_many_lines)]
     pub fn to_request(&self, session_id: Option<&str>) -> Result<Request> {
         Ok(match self {
-            Self::SessionOpen { policy } => {
+            Self::SessionOpen { policy, isolated } => {
                 let mut r = Request::new("vs_session_open");
                 if let Some(p) = policy {
                     r = r.flag_value("policy", p.clone());
+                }
+                if *isolated {
+                    r = r.flag("isolated");
                 }
                 r
             }

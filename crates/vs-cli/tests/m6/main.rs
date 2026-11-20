@@ -31,6 +31,7 @@ mod download;
 mod extract;
 mod fingerprint;
 mod inspect;
+mod isolation;
 mod lifecycle;
 mod memory;
 mod visual;

@@ -392,6 +392,19 @@ pub struct RecFrame {
     pub dt_ms: u32,
 }
 
+/// Which browser data store (cookies, localStorage, IndexedDB, cache)
+/// a new page uses.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum DataStore {
+    /// The default persistent store every non-isolated page shares.
+    Shared,
+    /// A private in-memory store, keyed by the owning session's id.
+    /// Pages opened with the same key share it; nothing outside that
+    /// key sees it. [`Engine::drop_store`] discards it, and it never
+    /// outlives the engine.
+    Isolated(String),
+}
+
 /// The browser engine, as the daemon sees it.
 ///
 /// All methods are synchronous from the daemon's perspective. The
@@ -399,8 +412,14 @@ pub struct RecFrame {
 /// thread that owns the platform run loop; implementations should
 /// assume they are running on that thread.
 pub trait Engine {
-    /// Open a fresh page navigated to `url`.
-    fn open(&mut self, url: &str) -> EngineResult<PageHandle>;
+    /// Open a fresh page navigated to `url`, in data store `store`.
+    fn open(&mut self, url: &str, store: &DataStore) -> EngineResult<PageHandle>;
+
+    /// Discard the isolated data store keyed `key`, once its pages are
+    /// closed. Unknown keys are a no-op.
+    fn drop_store(&mut self, _key: &str) -> EngineResult<()> {
+        Ok(())
+    }
 
     /// Navigate an existing page to `url` in place, reusing its
     /// web view (and web-content process) instead of creating a new

@@ -14,8 +14,9 @@ use std::time::Duration;
 use vs_protocol::{Node, Op, Ref, Role, Tree};
 
 use crate::engine::{
-    ActTarget, Action, AuthBlob, CaptureScope, Download, DownloadEntry, DownloadSource, Engine,
-    EngineCapabilities, EngineError, EngineResult, LayoutBox, PageHandle, Viewport, WaitCondition,
+    ActTarget, Action, AuthBlob, CaptureScope, DataStore, Download, DownloadEntry, DownloadSource,
+    Engine, EngineCapabilities, EngineError, EngineResult, LayoutBox, PageHandle, Viewport,
+    WaitCondition,
 };
 
 /// 1×1 transparent PNG. Used by the test engine so the protocol's
@@ -126,7 +127,7 @@ impl TestEngine {
 }
 
 impl Engine for TestEngine {
-    fn open(&mut self, url: &str) -> EngineResult<PageHandle> {
+    fn open(&mut self, url: &str, _store: &DataStore) -> EngineResult<PageHandle> {
         let handle = self.alloc_handle();
         self.pages.insert(
             handle,
@@ -673,7 +674,7 @@ mod tests {
     #[test]
     fn open_and_snapshot() {
         let mut e = TestEngine::new();
-        let page = e.open("https://example.com").unwrap();
+        let page = e.open("https://example.com", &DataStore::Shared).unwrap();
         let tree = e.snapshot(page).unwrap();
         assert_eq!(tree.roots.len(), 1);
         assert_eq!(tree.roots[0].r, Ref(1));
@@ -685,7 +686,7 @@ mod tests {
     #[test]
     fn close_idempotent() {
         let mut e = TestEngine::new();
-        let page = e.open("about:blank").unwrap();
+        let page = e.open("about:blank", &DataStore::Shared).unwrap();
         e.close(page).unwrap();
         // Closing again is a no-op (the page is just gone).
         e.close(page).unwrap();
@@ -694,7 +695,7 @@ mod tests {
     #[test]
     fn snapshot_after_close_errors() {
         let mut e = TestEngine::new();
-        let page = e.open("about:blank").unwrap();
+        let page = e.open("about:blank", &DataStore::Shared).unwrap();
         e.close(page).unwrap();
         let err = e.snapshot(page).unwrap_err();
         assert!(matches!(err, EngineError::NotFound { kind: "page", .. }));
@@ -703,7 +704,7 @@ mod tests {
     #[test]
     fn act_known_ref_succeeds() {
         let mut e = TestEngine::new();
-        let p = e.open("about:blank").unwrap();
+        let p = e.open("about:blank", &DataStore::Shared).unwrap();
         e.act(
             p,
             ActTarget::Ref(Ref(4)),
@@ -723,7 +724,7 @@ mod tests {
     #[test]
     fn act_unknown_ref_errors() {
         let mut e = TestEngine::new();
-        let p = e.open("about:blank").unwrap();
+        let p = e.open("about:blank", &DataStore::Shared).unwrap();
         let err = e
             .act(
                 p,
@@ -738,7 +739,7 @@ mod tests {
     #[test]
     fn wait_stable_returns_immediately() {
         let mut e = TestEngine::new();
-        let p = e.open("about:blank").unwrap();
+        let p = e.open("about:blank", &DataStore::Shared).unwrap();
         e.wait(p, WaitCondition::Stable, Duration::from_millis(0))
             .unwrap();
     }
@@ -746,7 +747,7 @@ mod tests {
     #[test]
     fn wait_token_change_times_out() {
         let mut e = TestEngine::new();
-        let p = e.open("about:blank").unwrap();
+        let p = e.open("about:blank", &DataStore::Shared).unwrap();
         let err = e
             .wait(p, WaitCondition::TokenChange, Duration::from_millis(1))
             .unwrap_err();
@@ -757,7 +758,7 @@ mod tests {
     fn capture_writes_a_one_by_one_png() {
         let dir = tempfile::tempdir().unwrap();
         let mut e = TestEngine::new().with_capture_dir(dir.path());
-        let p = e.open("https://example.com").unwrap();
+        let p = e.open("https://example.com", &DataStore::Shared).unwrap();
         let path = e.capture(p, CaptureScope::Viewport).unwrap();
         assert!(path.exists(), "capture file missing: {path:?}");
         let bytes = std::fs::read(&path).unwrap();
@@ -770,7 +771,7 @@ mod tests {
     #[test]
     fn layout_returns_one_box_per_ref() {
         let mut e = TestEngine::new();
-        let p = e.open("about:blank").unwrap();
+        let p = e.open("about:blank", &DataStore::Shared).unwrap();
         let boxes = e.layout(p, &[Ref(2), Ref(4)]).unwrap();
         assert_eq!(boxes.len(), 2);
         assert_eq!(boxes[0].r, Ref(2));
@@ -781,7 +782,7 @@ mod tests {
     #[test]
     fn auth_round_trip() {
         let mut e = TestEngine::new();
-        let p = e.open("https://example.com").unwrap();
+        let p = e.open("https://example.com", &DataStore::Shared).unwrap();
         let blob = e.save_auth(p).unwrap();
         assert_eq!(blob.bytes, b"https://example.com");
         e.load_auth(p, &blob).unwrap();
@@ -790,7 +791,7 @@ mod tests {
     #[test]
     fn viewport_persists() {
         let mut e = TestEngine::new();
-        let p = e.open("about:blank").unwrap();
+        let p = e.open("about:blank", &DataStore::Shared).unwrap();
         e.set_viewport(p, Viewport::MOBILE).unwrap();
         // No public getter, but the page's viewport is updated; verify
         // by closing without panic.

@@ -36,9 +36,9 @@ use webkit6::{LoadEvent, UserContentInjectedFrames, UserScript, UserScriptInject
 use vs_protocol::{Ref, Tree};
 
 use crate::engine::{
-    ActTarget, Action, AuthBlob, CaptureScope, CursorOp, Download, DownloadEntry, DownloadSource,
-    Engine, EngineCapabilities, EngineError, EngineResult, InputMode, LayoutBox, PageHandle,
-    Viewport, WaitCondition,
+    ActTarget, Action, AuthBlob, CaptureScope, CursorOp, DataStore, Download, DownloadEntry,
+    DownloadSource, Engine, EngineCapabilities, EngineError, EngineResult, InputMode, LayoutBox,
+    PageHandle, Viewport, WaitCondition,
 };
 
 // =============================================================================
@@ -87,6 +87,9 @@ pub struct WpeBackend {
     pages: HashMap<PageHandle, WpePage>,
     next_handle: u64,
     captures_dir: Option<PathBuf>,
+    /// Ephemeral network sessions for isolated sessions, by key. One
+    /// per key so every page of the session shares cookies and storage.
+    isolated_sessions: HashMap<String, webkit6::NetworkSession>,
 }
 
 impl Default for WpeBackend {
@@ -106,6 +109,7 @@ impl WpeBackend {
             pages: HashMap::new(),
             next_handle: 1,
             captures_dir: None,
+            isolated_sessions: HashMap::new(),
         }
     }
 
@@ -164,8 +168,21 @@ use super::native_download::{
 // =============================================================================
 
 impl Engine for WpeBackend {
-    fn open(&mut self, url: &str) -> EngineResult<PageHandle> {
-        let web_view = WebView::new();
+    fn open(&mut self, url: &str, store: &DataStore) -> EngineResult<PageHandle> {
+        // An isolated session's pages share one ephemeral (in-memory)
+        // network session; everyone else gets the default persistent
+        // one. The download hook below connects to whichever session
+        // the view ends up with.
+        let web_view = match store {
+            DataStore::Shared => WebView::new(),
+            DataStore::Isolated(key) => {
+                let session = self
+                    .isolated_sessions
+                    .entry(key.clone())
+                    .or_insert_with(webkit6::NetworkSession::new_ephemeral);
+                WebView::builder().network_session(session).build()
+            }
+        };
 
         // Hidden host window for the WebView. v0.1.11 added native
         // input dispatch (XTest / libei) for the cursor primitives;
@@ -328,6 +345,13 @@ impl Engine for WpeBackend {
             // iteration.
             p.window.close();
         }
+        Ok(())
+    }
+
+    fn drop_store(&mut self, key: &str) -> EngineResult<()> {
+        // The session lives on while a closed view still references it;
+        // dropping ours lets GLib free it with the last one.
+        self.isolated_sessions.remove(key);
         Ok(())
     }
 
@@ -1205,8 +1229,9 @@ fn http_response(resp: &webkit6::URIResponse) -> Option<crate::inspector::MainRe
 /// form POST answering with a file, a hidden-iframe download) never
 /// reaches page script. Turn it into a WebKit download, write it to a
 /// temp file, and move the bytes into `downloads` for `vs_download`.
-/// The network session is shared by every page, so the
-/// `download-started` handler checks the download belongs to this one.
+/// The network session is shared by every page of the same store, so
+/// the `download-started` handler checks the download belongs to this
+/// one.
 fn install_download_capture(
     web_view: &WebView,
     downloads: &SharedDownloads,

@@ -33,10 +33,15 @@ tables, see [`codes.md`](codes.md).
 
 ---
 
-## 1. `vs_session_open [--policy=<name>]`
+## 1. `vs_session_open [--policy=<name>] [--isolated]`
 
 Open a new session. Returns the session id and a fresh `state_token` for
 the empty session.
+
+`--isolated` gives the session its own in-memory cookie and storage jar,
+shared by its pages and no one else, discarded on close. The flag is
+kept on the session row, so a daemon restart rebuilds the pages isolated
+but with empty storage. Without it, pages use the shared persistent jar.
 
 - Token in: —
 - Token out: yes

@@ -353,9 +353,10 @@ impl Daemon {
                 .ok_or_else(|| DaemonError::UnknownSession(sid.to_string()))?;
             writeln!(
                 out,
-                "session\t{sid}\tpages={}\tlive={}",
+                "session\t{sid}\tpages={}\tlive={}{}",
                 s.pages.len(),
-                live_pages(s)
+                live_pages(s),
+                isolated_tag(s)
             )
             .ok();
             for (page_id, page) in &s.pages {
@@ -385,15 +386,25 @@ impl Daemon {
             for (id, s) in sessions.iter() {
                 writeln!(
                     out,
-                    "session\t{id}\tpages={}\tlive={}\tidle={}s",
+                    "session\t{id}\tpages={}\tlive={}\tidle={}s{}",
                     s.pages.len(),
                     live_pages(s),
-                    s.last_touched.elapsed().as_secs()
+                    s.last_touched.elapsed().as_secs(),
+                    isolated_tag(s)
                 )
                 .ok();
             }
         }
         Ok(out)
+    }
+}
+
+/// Trailing `\tisolated` field for an isolated session's status row.
+fn isolated_tag(s: &crate::daemon::SessionState) -> &'static str {
+    if s.isolated {
+        "\tisolated"
+    } else {
+        ""
     }
 }
 

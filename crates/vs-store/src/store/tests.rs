@@ -38,6 +38,16 @@ fn session_lifecycle() {
 }
 
 #[test]
+fn session_isolated_flag_round_trips() {
+    let mut s = fresh_store();
+    assert!(!s.create_session("shared", None).unwrap().isolated);
+    let iso = s.create_session_with("iso", None, true).unwrap();
+    assert!(iso.isolated);
+    assert!(s.get_session("iso").unwrap().unwrap().isolated);
+    assert!(!s.get_session("shared").unwrap().unwrap().isolated);
+}
+
+#[test]
 fn page_lifecycle() {
     let mut s = fresh_store();
     s.create_session("sess", None).unwrap();

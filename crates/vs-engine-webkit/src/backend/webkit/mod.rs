@@ -41,9 +41,9 @@ use objc2_web_kit::{
 use vs_protocol::{Ref, Tree};
 
 use crate::engine::{
-    ActTarget, Action, AuthBlob, CaptureScope, CursorOp, Download, DownloadEntry, DownloadSource,
-    Engine, EngineCapabilities, EngineError, EngineResult, InputMode, LayoutBox, PageHandle,
-    Viewport, WaitCondition,
+    ActTarget, Action, AuthBlob, CaptureScope, CursorOp, DataStore, Download, DownloadEntry,
+    DownloadSource, Engine, EngineCapabilities, EngineError, EngineResult, InputMode, LayoutBox,
+    PageHandle, Viewport, WaitCondition,
 };
 
 use eval::{eval_js_string, run_loop_until};
@@ -107,6 +107,9 @@ pub struct WkBackend {
     /// Active recording sinks by page. Present only while a `record`
     /// session is running; the input primitives grab frames through it.
     recording: HashMap<PageHandle, record::RecSink>,
+    /// Non-persistent data stores for isolated sessions, by key. One
+    /// instance per key so every page of the session shares it.
+    isolated_stores: HashMap<String, Retained<objc2_web_kit::WKWebsiteDataStore>>,
 }
 
 impl WkBackend {
@@ -118,6 +121,7 @@ impl WkBackend {
             next_handle: 1,
             captures_dir: None,
             recording: HashMap::new(),
+            isolated_stores: HashMap::new(),
         }
     }
 
@@ -127,6 +131,33 @@ impl WkBackend {
     pub fn with_capture_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.captures_dir = Some(dir.into());
         self
+    }
+
+    /// The data store a new page opens in.
+    ///
+    /// Shared pages pin the persistent default explicitly. The default
+    /// value of `websiteDataStore` is *supposed* to be the persistent
+    /// default, but on headless Cocoa processes the binding can land
+    /// on a non-persistent store and any `Set-Cookie` from in-session
+    /// fetches gets silently dropped between the network and the
+    /// cookie jar. Assigning `defaultDataStore` defensively pins it.
+    ///
+    /// An isolated session gets its own in-memory store instead,
+    /// created on its first page and reused for the rest.
+    fn data_store(&mut self, store: &DataStore) -> Retained<objc2_web_kit::WKWebsiteDataStore> {
+        let mtm = self.mtm;
+        match store {
+            DataStore::Shared => unsafe {
+                objc2_web_kit::WKWebsiteDataStore::defaultDataStore(mtm)
+            },
+            DataStore::Isolated(key) => self
+                .isolated_stores
+                .entry(key.clone())
+                .or_insert_with(|| unsafe {
+                    objc2_web_kit::WKWebsiteDataStore::nonPersistentDataStore(mtm)
+                })
+                .clone(),
+        }
     }
 
     fn alloc_handle(&mut self) -> PageHandle {
@@ -362,19 +393,13 @@ impl WkBackend {
 }
 
 impl Engine for WkBackend {
-    fn open(&mut self, url: &str) -> EngineResult<PageHandle> {
+    fn open(&mut self, url: &str, store: &DataStore) -> EngineResult<PageHandle> {
         let mtm = self.mtm;
 
         let inspector =
             super::inspector_bridge::InspectorSlots::new(crate::inspector::DEFAULT_BUFFER_CAPACITY);
         let config = unsafe { WKWebViewConfiguration::new(mtm) };
-        // Pin the shared persistent data store explicitly. The default
-        // value of `websiteDataStore` is *supposed* to be the persistent
-        // default, but on headless Cocoa processes the binding can land
-        // on a non-persistent store and any `Set-Cookie` from in-session
-        // fetches gets silently dropped between the network and the
-        // cookie jar. Assigning `defaultDataStore` defensively pins it.
-        let data_store = unsafe { objc2_web_kit::WKWebsiteDataStore::defaultDataStore(mtm) };
+        let data_store = self.data_store(store);
         unsafe { config.setWebsiteDataStore(&data_store) };
         // Expose `navigator.mediaDevices`. WKWebView gates the whole
         // MediaDevices surface behind a preference that is off by
@@ -581,6 +606,13 @@ impl Engine for WkBackend {
         if let Some(p) = self.pages.remove(&page) {
             abandon_view(&p.web_view, &p.window, &p.ucc);
         }
+        Ok(())
+    }
+
+    fn drop_store(&mut self, key: &str) -> EngineResult<()> {
+        // Releasing our reference lets WebKit free the in-memory store
+        // once the last web view using it is gone.
+        self.isolated_stores.remove(key);
         Ok(())
     }
 

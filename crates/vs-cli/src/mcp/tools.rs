@@ -43,6 +43,7 @@ fn base_tools() -> Vec<Value> {
     vec![
         tool("vs_session_open", "Create a vibesurfer session. Writes the active-session pointer.", obj(&[
             ("policy", str_prop("Optional policy id (e.g. \"strict\", \"default\").", false)),
+            ("isolated", bool_prop("Own in-memory cookie/storage jar, shared by this session's pages only, discarded on close. Default: the shared persistent jar.", false)),
         ])),
         tool("vs_session_close", "Close the active session. `all` closes every session in the workspace and `idle_for` (e.g. \"2h\") closes only those untouched that long — the cleanup for sessions left behind by agents that died without closing.", obj(&[
             ("all", bool_prop("Close every session, not just this caller's.", false)),
@@ -259,6 +260,7 @@ pub fn build_cli(name: &str, args: &Value) -> Result<(Cli, CallOpts)> {
     let cmd = match name {
         "vs_session_open" => Command::SessionOpen {
             policy: opt_str(args, "policy"),
+            isolated: opt_bool(args, "isolated").unwrap_or(false),
         },
         "vs_session_close" => Command::SessionClose {
             all: opt_bool(args, "all").unwrap_or(false),

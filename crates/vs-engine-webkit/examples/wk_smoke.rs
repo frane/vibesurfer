@@ -33,7 +33,7 @@ fn main() {
 
     eprintln!("[wk_smoke] opening: {url}");
     let mut backend = WkBackend::new(mtm);
-    let page = match backend.open(&url) {
+    let page = match backend.open(&url, &vs_engine_webkit::DataStore::Shared) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("[wk_smoke] open failed: {e}");

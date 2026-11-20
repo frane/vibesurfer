@@ -58,6 +58,8 @@ pub struct Session {
     pub policy_id: Option<String>,
     pub status: SessionStatus,
     pub closed_at: Option<i64>,
+    /// Pages use a private in-memory data store, not the shared jar.
+    pub isolated: bool,
 }
 
 impl Session {
@@ -75,6 +77,7 @@ impl Session {
                 )
             })?,
             closed_at: row.get("closed_at")?,
+            isolated: row.get::<_, i64>("isolated")? != 0,
         })
     }
 }

@@ -9,11 +9,22 @@ use crate::types::{Session, SessionStatus};
 impl Store {
     /// Insert a new session row and return it.
     pub fn create_session(&mut self, id: &str, policy_id: Option<&str>) -> Result<Session> {
+        self.create_session_with(id, policy_id, false)
+    }
+
+    /// Insert a new session row, optionally flagged `isolated` (its
+    /// pages get a private, non-persistent browser data store).
+    pub fn create_session_with(
+        &mut self,
+        id: &str,
+        policy_id: Option<&str>,
+        isolated: bool,
+    ) -> Result<Session> {
         let now = epoch_secs();
         self.conn().execute(
-            "INSERT INTO sessions(id, created_at, policy_id, status, closed_at)
-             VALUES (?1, ?2, ?3, 'open', NULL)",
-            params![id, now, policy_id],
+            "INSERT INTO sessions(id, created_at, policy_id, status, closed_at, isolated)
+             VALUES (?1, ?2, ?3, 'open', NULL, ?4)",
+            params![id, now, policy_id, i64::from(isolated)],
         )?;
         Ok(Session {
             id: id.to_string(),
@@ -21,6 +32,7 @@ impl Store {
             policy_id: policy_id.map(str::to_string),
             status: SessionStatus::Open,
             closed_at: None,
+            isolated,
         })
     }
 

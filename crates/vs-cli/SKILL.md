@@ -36,7 +36,7 @@ Wire form is `vs_<name>` (over the socket); CLI subcommand is `<name>` with hyph
 
 | # | CLI | What |
 |---|-----|------|
-| 1 | `vs session-open [--policy=NAME]` | Create a session. Writes `~/.vibesurfer/active-session`. |
+| 1 | `vs session-open [--policy=NAME] [--isolated]` | Create a session. Writes `~/.vibesurfer/active-session`. `--isolated`: own in-memory cookie/storage jar, shared by the session's pages only, gone on close or daemon restart. Default sessions share the persistent jar (logins persist). |
 | 2 | `vs session-close [--all\|--idle-for=2h]` | Close the active session, or sweep the workspace: `--all`, or only what has been untouched that long. |
 | 3 | `vs open <URL>` | Open a page in the session. |
 | - | `vs goto <PAGE> <URL>` (`g`) | Navigate an existing page in place. Reuses the web view, so it skips browser spin-up and is much faster than open for successive navigations. Refs are fresh afterward. |

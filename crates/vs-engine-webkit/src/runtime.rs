@@ -22,8 +22,9 @@ use std::time::Duration;
 use vs_protocol::{Ref, Tree};
 
 use crate::engine::{
-    ActTarget, Action, AuthBlob, CaptureScope, Download, DownloadEntry, DownloadSource, Engine,
-    EngineCapabilities, EngineError, EngineResult, LayoutBox, PageHandle, Viewport, WaitCondition,
+    ActTarget, Action, AuthBlob, CaptureScope, DataStore, Download, DownloadEntry, DownloadSource,
+    Engine, EngineCapabilities, EngineError, EngineResult, LayoutBox, PageHandle, Viewport,
+    WaitCondition,
 };
 
 /// One unit of work for the engine thread.
@@ -197,9 +198,15 @@ impl EngineRuntime {
     // Synchronous facade for every Engine method.
     // -----------------------------------------------------------------
 
-    pub fn open(&self, url: &str) -> EngineResult<PageHandle> {
+    pub fn open(&self, url: &str, store: &DataStore) -> EngineResult<PageHandle> {
         let url = url.to_string();
-        self.dispatch(move |e| e.open(&url))
+        let store = store.clone();
+        self.dispatch(move |e| e.open(&url, &store))
+    }
+
+    pub fn drop_store(&self, key: &str) -> EngineResult<()> {
+        let key = key.to_string();
+        self.dispatch(move |e| e.drop_store(&key))
     }
 
     pub fn navigate(&self, page: PageHandle, url: &str) -> EngineResult<()> {
@@ -503,7 +510,7 @@ mod tests {
     }
 
     impl Engine for TestEngine {
-        fn open(&mut self, url: &str) -> EngineResult<PageHandle> {
+        fn open(&mut self, url: &str, _store: &DataStore) -> EngineResult<PageHandle> {
             self.next_handle += 1;
             self.last_url = url.to_string();
             Ok(PageHandle(self.next_handle))
@@ -625,7 +632,9 @@ mod tests {
     #[test]
     fn full_primitive_sequence_via_runtime() {
         let rt = spawn_test_runtime();
-        let page = rt.open("https://example.com/login").unwrap();
+        let page = rt
+            .open("https://example.com/login", &DataStore::Shared)
+            .unwrap();
         rt.wait(page, WaitCondition::Stable, Duration::from_millis(0))
             .unwrap();
         let tree = rt.snapshot(page).unwrap();
@@ -648,7 +657,10 @@ mod tests {
         let rt = spawn_test_runtime();
         let mut handles = Vec::new();
         for i in 0..32 {
-            handles.push(rt.open(&format!("https://example.com/{i}")).unwrap());
+            handles.push(
+                rt.open(&format!("https://example.com/{i}"), &DataStore::Shared)
+                    .unwrap(),
+            );
         }
         let mut sorted = handles.clone();
         sorted.sort();

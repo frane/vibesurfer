@@ -51,13 +51,17 @@ pub(crate) struct SessionState {
     /// When a primitive last addressed this session. The reaper reads
     /// it; a session with no pages has nothing else to go on.
     pub(crate) last_touched: Instant,
+    /// Pages use a private in-memory data store keyed by the session
+    /// id instead of the shared persistent one.
+    pub(crate) isolated: bool,
 }
 
 impl SessionState {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(isolated: bool) -> Self {
         Self {
             pages: HashMap::new(),
             last_touched: Instant::now(),
+            isolated,
         }
     }
 }
@@ -242,6 +246,19 @@ impl Daemon {
         DaemonError::UnknownPage(page_id.to_string())
     }
 
+    /// The engine data store a new page of `session_id` opens in.
+    pub(crate) fn data_store_for(&self, session_id: &str) -> Result<vs_engine_webkit::DataStore> {
+        let sessions = self.inner.sessions.lock().expect("poisoned");
+        let s = sessions
+            .get(session_id)
+            .ok_or_else(|| DaemonError::UnknownSession(session_id.to_string()))?;
+        Ok(if s.isolated {
+            vs_engine_webkit::DataStore::Isolated(session_id.to_string())
+        } else {
+            vs_engine_webkit::DataStore::Shared
+        })
+    }
+
     pub(crate) fn engine_handle_for(
         &self,
         session_id: &str,
@@ -265,15 +282,16 @@ impl Daemon {
             (page.url.clone(), page.init_scripts.clone())
         };
         let (url, scripts) = url;
+        let store = self.data_store_for(session_id)?;
         // Dormant page (resurrected from the store): create the engine
         // page now, outside the map lock — engine calls dispatch to
         // the platform main thread and must not deadlock against it.
         // With init scripts, open blank, install them, then load, so
         // the first document already has them.
         let handle = if scripts.is_empty() {
-            self.inner.engine.open(&url)?
+            self.inner.engine.open(&url, &store)?
         } else {
-            let h = self.inner.engine.open("about:blank")?;
+            let h = self.inner.engine.open("about:blank", &store)?;
             for s in &scripts {
                 self.inner.engine.add_init_script(h, s)?;
             }

@@ -17,27 +17,40 @@ impl Daemon {
     /// session-scoped state token (`0000…`); page-scoped tokens come
     /// from `vs_open`.
     pub fn session_open(&self, policy: Option<&str>) -> Result<SessionOpenResponse> {
+        self.session_open_with(policy, false)
+    }
+
+    /// [`Self::session_open`], optionally `isolated`: the session's
+    /// pages get a private, in-memory data store (cookies,
+    /// localStorage, IndexedDB) that no other session sees and that is
+    /// discarded on close or daemon restart.
+    pub fn session_open_with(
+        &self,
+        policy: Option<&str>,
+        isolated: bool,
+    ) -> Result<SessionOpenResponse> {
         let id = format!("s_{}", short_id());
-        let policy_args: Vec<String> = policy.into_iter().map(str::to_string).collect();
+        let mut hash_args: Vec<String> = policy.into_iter().map(str::to_string).collect();
+        let mut flags: Vec<(String, Option<String>)> =
+            policy.map_or(vec![], |p| vec![("policy".into(), Some(p.into()))]);
+        if isolated {
+            hash_args.push("--isolated".into());
+            flags.push(("isolated".into(), None));
+        }
         let ctx = AuditCtx::new("vs_session_open", &id).with_args(
-            redact::redact_args(
-                &[],
-                policy
-                    .map_or(vec![], |p| vec![("policy".into(), Some(p.into()))])
-                    .as_slice(),
-            ),
-            tokens::args_hash("vs_session_open", &policy_args),
+            redact::redact_args(&[], flags.as_slice()),
+            tokens::args_hash("vs_session_open", &hash_args),
         );
         self.audit_call(ctx, |ctx| {
             ctx.after_token = Some(StateToken::ZERO);
             let mut store = self.inner.store.lock().expect("poisoned");
-            let session = store.create_session(&id, policy)?;
+            let session = store.create_session_with(&id, policy, isolated)?;
             drop(store);
             self.inner
                 .sessions
                 .lock()
                 .expect("poisoned")
-                .insert(id.clone(), SessionState::new());
+                .insert(id.clone(), SessionState::new(isolated));
             Ok(SessionOpenResponse {
                 session_id: session.id,
                 token: StateToken::ZERO,
@@ -49,18 +62,24 @@ impl Daemon {
         let ctx = AuditCtx::new("vs_session_close", session_id)
             .with_args(String::new(), tokens::args_hash("vs_session_close", &[]));
         self.audit_call(ctx, |_ctx| {
-            let page_handles: Vec<_> = {
+            let (page_handles, isolated): (Vec<_>, bool) = {
                 let mut sessions = self.inner.sessions.lock().expect("poisoned");
                 let s = sessions
                     .remove(session_id)
                     .ok_or_else(|| DaemonError::UnknownSession(session_id.to_string()))?;
-                s.pages
+                let isolated = s.isolated;
+                let handles = s
+                    .pages
                     .into_values()
                     .filter_map(|p| p.engine_handle)
-                    .collect()
+                    .collect();
+                (handles, isolated)
             };
             for h in page_handles {
                 let _ = self.inner.engine.close(h);
+            }
+            if isolated {
+                let _ = self.inner.engine.drop_store(session_id);
             }
             let mut store = self.inner.store.lock().expect("poisoned");
             store.close_session(session_id)?;
@@ -126,7 +145,8 @@ impl Daemon {
         self.audit_call(ctx, |ctx| {
             self.require_session(session_id)?;
 
-            let engine_handle = self.inner.engine.open(url)?;
+            let store = self.data_store_for(session_id)?;
+            let engine_handle = self.inner.engine.open(url, &store)?;
             let page_id = format!("p_{}", short_id());
             ctx.page_id = Some(page_id.clone());
 
@@ -281,7 +301,7 @@ impl Daemon {
                 let _ = store.close_session(&s.id);
                 continue;
             }
-            let mut state = SessionState::new();
+            let mut state = SessionState::new(s.isolated);
             for p in live {
                 // Dormant: the engine page is created lazily on
                 // first use, so startup stays instant and zombie

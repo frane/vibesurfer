@@ -37,11 +37,11 @@ use super::native_download::{name_from_disposition, temp_path, SharedDownloads, 
 
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2, ICoreWebView2CompositionController, ICoreWebView2Controller,
-    ICoreWebView2Environment, ICoreWebView2Environment3,
-    COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, COREWEBVIEW2_MOUSE_EVENT_KIND,
-    COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOWN, COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP,
-    COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE, COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE,
-    COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC,
+    ICoreWebView2ControllerOptions, ICoreWebView2Environment, ICoreWebView2Environment10,
+    ICoreWebView2Environment3, COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
+    COREWEBVIEW2_MOUSE_EVENT_KIND, COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOWN,
+    COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP, COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE,
+    COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE, COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC,
 };
 use webview2_com::{
     pwstr_from_str, take_pwstr, AddScriptToExecuteOnDocumentCreatedCompletedHandler,
@@ -65,9 +65,9 @@ use crate::backend::inspector_bridge::{
     self, InspectorSlots, NetworkIngestSlot, CONSOLE_HANDLER, NETWORK_HANDLER,
 };
 use crate::engine::{
-    ActTarget, Action, AuthBlob, CaptureScope, CursorOp, Download, DownloadEntry, DownloadSource,
-    Engine, EngineCapabilities, EngineError, EngineResult, InputMode, LayoutBox, PageHandle,
-    Viewport, WaitCondition,
+    ActTarget, Action, AuthBlob, CaptureScope, CursorOp, DataStore, Download, DownloadEntry,
+    DownloadSource, Engine, EngineCapabilities, EngineError, EngineResult, InputMode, LayoutBox,
+    PageHandle, Viewport, WaitCondition,
 };
 // =============================================================================
 // JS payload shared with Mac / Linux backends.
@@ -553,13 +553,51 @@ fn install_inspector(web_view: &ICoreWebView2, slots: &InspectorSlots) -> bool {
 // Engine impl
 // =============================================================================
 
+/// Controller options for an isolated session: InPrivate, with a
+/// profile name derived from `key` so the session's pages share one
+/// profile and no other session's pages do. Profile names allow only a
+/// small character set, so anything else in the key becomes `_`.
+fn isolated_controller_options(
+    environment: &ICoreWebView2Environment,
+    key: &str,
+) -> EngineResult<(ICoreWebView2Environment10, ICoreWebView2ControllerOptions)> {
+    let env10: ICoreWebView2Environment10 = environment.cast().map_err(|e| {
+        EngineError::Other(format!(
+            "isolated sessions need WebView2 runtime with profiles: {e}"
+        ))
+    })?;
+    let options = unsafe { env10.CreateCoreWebView2ControllerOptions() }
+        .map_err(|e| EngineError::Other(format!("CreateControllerOptions: {e}")))?;
+    let name: String = std::iter::once("vsiso_")
+        .chain(std::iter::once(key))
+        .flat_map(str::chars)
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(64)
+        .collect();
+    unsafe {
+        options
+            .SetProfileName(&HSTRING::from(name))
+            .map_err(|e| EngineError::Other(format!("SetProfileName: {e}")))?;
+        options
+            .SetIsInPrivateModeEnabled(true)
+            .map_err(|e| EngineError::Other(format!("SetIsInPrivateModeEnabled: {e}")))?;
+    }
+    Ok((env10, options))
+}
+
 impl Engine for Webview2Backend {
     // The COM bring-up (environment → composition controller →
     // DirectComposition device/target/visual → settings → navigate)
     // is one linear sequence; splitting it would just scatter the
     // handle plumbing.
     #[allow(clippy::too_many_lines)]
-    fn open(&mut self, url: &str) -> EngineResult<PageHandle> {
+    fn open(&mut self, url: &str, store: &DataStore) -> EngineResult<PageHandle> {
         let parent = self.create_host_hwnd()?;
 
         // 1. Environment.
@@ -598,13 +636,28 @@ impl Engine for Webview2Backend {
         let env3: ICoreWebView2Environment3 = environment
             .cast::<ICoreWebView2Environment3>()
             .map_err(|e| EngineError::Other(format!("cast Environment3: {e}")))?;
+        //
+        //    An isolated session's pages open in an InPrivate profile
+        //    named after the session: pages of the session share it,
+        //    nothing else does, and WebView2 deletes its data once the
+        //    last page using it closes.
+        let iso_options = match store {
+            DataStore::Shared => None,
+            DataStore::Isolated(key) => Some(isolated_controller_options(&environment, key)?),
+        };
         let comp_controller: ICoreWebView2CompositionController = {
             let (tx, rx) = mpsc::channel();
             let env = env3.clone();
             CreateCoreWebView2CompositionControllerCompletedHandler::wait_for_async_operation(
                 Box::new(move |handler| unsafe {
-                    env.CreateCoreWebView2CompositionController(parent, &handler)
-                        .map_err(webview2_com::Error::WindowsError)
+                    match iso_options {
+                        None => env.CreateCoreWebView2CompositionController(parent, &handler),
+                        Some((env10, options)) => env10
+                            .CreateCoreWebView2CompositionControllerWithOptions(
+                                parent, &options, &handler,
+                            ),
+                    }
+                    .map_err(webview2_com::Error::WindowsError)
                 }),
                 Box::new(move |error_code, controller| {
                     error_code?;
