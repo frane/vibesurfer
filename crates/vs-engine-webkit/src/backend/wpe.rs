@@ -193,6 +193,14 @@ impl Engine for WpeBackend {
                                 webkit6::NetworkProxyMode::Custom,
                                 Some(&settings),
                             );
+                            // The proxy answers TLS with leaves from the
+                            // daemon's CA, made per host, so they cannot
+                            // be allowed one by one up front. Every TLS
+                            // connection of this session ends at the
+                            // proxy, which verifies upstream itself, so
+                            // certificate errors are ignored here, for
+                            // this network session only.
+                            s.set_tls_errors_policy(webkit6::TLSErrorsPolicy::Ignore);
                         }
                         s
                     });

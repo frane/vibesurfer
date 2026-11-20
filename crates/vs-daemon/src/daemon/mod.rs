@@ -93,6 +93,9 @@ pub(crate) struct Inner {
     pub(crate) pending: Arc<pending::PendingQueue>,
     pub(crate) webentry: Mutex<Option<Arc<webentry::WebEntry>>>,
     pub(crate) recorders: Mutex<HashMap<String, record::RecorderHandle>>,
+    /// Where the intercept CA is kept; `None` keeps it in memory.
+    pub(crate) intercept_ca_dir: Option<std::path::PathBuf>,
+    pub(crate) mitm: Mutex<Option<Arc<crate::net::Mitm>>>,
 }
 
 impl Daemon {
@@ -112,6 +115,8 @@ impl Daemon {
                 pending: pending::PendingQueue::new(),
                 webentry: Mutex::new(None),
                 recorders: Mutex::new(HashMap::new()),
+                intercept_ca_dir: None,
+                mitm: Mutex::new(None),
             }),
         }
     }
@@ -149,6 +154,19 @@ impl Daemon {
             .map_err(|_| ())
             .expect("Daemon::with_skills_dir must run before any clone of the daemon handle");
         inner.skills_dir = dir.into();
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// Keep the intercept CA (`intercept-ca.pem`, `intercept-ca.key`)
+    /// in `dir`. Without this it lives in memory for the process.
+    #[must_use]
+    pub fn with_intercept_ca_dir(self, dir: impl Into<std::path::PathBuf>) -> Self {
+        let mut inner = Arc::try_unwrap(self.inner)
+            .map_err(|_| ())
+            .expect("Daemon::with_intercept_ca_dir must run before any clone of the daemon handle");
+        inner.intercept_ca_dir = Some(dir.into());
         Self {
             inner: Arc::new(inner),
         }
@@ -263,9 +281,12 @@ impl Daemon {
             .get_mut(session_id)
             .ok_or_else(|| DaemonError::UnknownSession(session_id.to_string()))?;
         if s.intercept {
+            let mitm = self.mitm()?;
             return Ok(vs_engine_webkit::DataStore::Proxied {
                 key: session_id.to_string(),
-                port: s.running_net()?.port(),
+                port: s.running_net(self)?.port(),
+                ca: mitm.ca_der().to_vec(),
+                spki_pins: mitm.spki_pins(),
             });
         }
         Ok(if s.isolated {

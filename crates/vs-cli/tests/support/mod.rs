@@ -8,6 +8,7 @@
 #![allow(dead_code)]
 
 pub mod fixture_server;
+pub mod hit_server;
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};

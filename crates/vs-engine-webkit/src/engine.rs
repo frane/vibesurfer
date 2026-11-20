@@ -408,7 +408,18 @@ pub enum DataStore {
     /// engine binds proxy settings to the store (macOS data store,
     /// WebKitGTK network session, WebView2 environment), which is why a
     /// proxied page cannot share the default store.
-    Proxied { key: String, port: u16 },
+    ///
+    /// `ca` is the proxy's CA certificate (DER). The proxy answers the
+    /// browser's TLS with leaves it signs, so the engine trusts it for
+    /// this store's pages, and only for them. `spki_pins` lists the
+    /// base64 SHA-256 of the leaf and CA public keys (comma-separated),
+    /// for engines that pin keys rather than anchors.
+    Proxied {
+        key: String,
+        port: u16,
+        ca: Vec<u8>,
+        spki_pins: String,
+    },
 }
 
 impl DataStore {
@@ -426,6 +437,15 @@ impl DataStore {
     pub fn proxy_port(&self) -> Option<u16> {
         match self {
             Self::Proxied { port, .. } => Some(*port),
+            _ => None,
+        }
+    }
+
+    /// The proxy's CA certificate (DER), for the proxied variant.
+    #[must_use]
+    pub fn proxy_ca(&self) -> Option<&[u8]> {
+        match self {
+            Self::Proxied { ca, .. } => Some(ca),
             _ => None,
         }
     }

@@ -12,14 +12,19 @@
 //! bodies are kept, newest first, up to 16 MiB per session, for
 //! `vs_net_body`.
 //!
-//! Plain HTTP is intercepted. HTTPS arrives as `CONNECT host:port` and
-//! is tunnelled untouched: the client sees a `tun` line, nothing else.
+//! HTTPS arrives as `CONNECT host:port`; the proxy terminates the
+//! browser's TLS with a leaf certificate from the daemon's CA (see
+//! [`tls`]) and handles the requests inside like plain ones, with
+//! `https://` URLs. Upstream TLS is verified as usual.
 
 mod classify;
 pub(crate) mod http;
 mod proxy;
 #[cfg(test)]
 mod tests;
+pub mod tls;
+
+pub use tls::Mitm;
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
@@ -47,7 +52,7 @@ const MAX_EVENTS: usize = 20_000;
 #[derive(Debug, Clone)]
 pub struct ProxyRequest {
     pub method: String,
-    /// Absolute `http://` URL.
+    /// Absolute `http://` or `https://` URL.
     pub url: String,
     pub headers: Headers,
     pub body: Vec<u8>,
@@ -120,6 +125,7 @@ struct Bodies {
 /// One session's proxy and its client-facing state.
 pub struct SessionNet {
     port: u16,
+    mitm: Arc<Mitm>,
     next_id: AtomicU64,
     route: AtomicBool,
     closed: AtomicBool,
@@ -131,11 +137,13 @@ pub struct SessionNet {
 
 impl SessionNet {
     /// Bind a proxy on an ephemeral loopback port and start serving.
-    pub fn start() -> io::Result<Arc<Self>> {
+    /// `mitm` answers the browser's TLS and checks upstream TLS.
+    pub fn start(mitm: Arc<Mitm>) -> io::Result<Arc<Self>> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let port = listener.local_addr()?.port();
         let net = Arc::new(Self {
             port,
+            mitm,
             next_id: AtomicU64::new(1),
             route: AtomicBool::new(false),
             closed: AtomicBool::new(false),
@@ -213,7 +221,7 @@ impl SessionNet {
             .map(|h| h.req.clone())
             .ok_or(FetchError::NotHeld)?;
         let (out, url_changed) = o.apply(&req);
-        proxy::fetch_full(&out, url_changed)
+        proxy::fetch_full(&self.mitm, &out, url_changed)
             .map(|(status, reason, headers, body)| Fetched {
                 status,
                 reason,
@@ -331,10 +339,6 @@ impl SessionNet {
         self.push(format!("fail {id} {}\n", one_line(error)));
     }
 
-    fn ev_tunnel(&self, authority: &str) {
-        self.push(format!("tun {}\n", one_line(authority)));
-    }
-
     fn keep_body(&self, id: u64, body: Vec<u8>) {
         if body.len() > BODY_CACHE_BYTES {
             return;
@@ -435,7 +439,7 @@ mod unit {
 
     #[test]
     fn body_cache_evicts_oldest() {
-        let net = SessionNet::start().unwrap();
+        let net = SessionNet::start(Arc::new(Mitm::new(None, vec![]).unwrap())).unwrap();
         net.keep_body(1, vec![0; BODY_CACHE_BYTES / 2]);
         net.keep_body(2, vec![0; BODY_CACHE_BYTES / 2]);
         net.keep_body(3, vec![1; 10]);

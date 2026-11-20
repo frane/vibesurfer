@@ -591,6 +591,29 @@ fn isolated_controller_options(
     Ok((env10, options))
 }
 
+/// Allow certificate errors in an intercept page (see `open`).
+fn allow_proxy_certificates(web_view: &ICoreWebView2) -> EngineResult<()> {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2_14, COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_ALWAYS_ALLOW,
+    };
+    let wv14: ICoreWebView2_14 = web_view
+        .cast()
+        .map_err(|e| EngineError::Other(format!("cast ICoreWebView2_14: {e}")))?;
+    let handler = webview2_com::ServerCertificateErrorDetectedEventHandler::create(Box::new(
+        |_sender, args| {
+            if let Some(args) = args {
+                unsafe {
+                    args.SetAction(COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_ALWAYS_ALLOW)
+                }?;
+            }
+            Ok(())
+        },
+    ));
+    let mut token: i64 = 0;
+    unsafe { wv14.add_ServerCertificateErrorDetected(&handler, &raw mut token) }
+        .map_err(|e| EngineError::Other(format!("add_ServerCertificateErrorDetected: {e}")))
+}
+
 /// User data folder for a proxied session's own browser process.
 fn proxied_user_data_dir(key: &str) -> std::path::PathBuf {
     let name: String = key
@@ -616,7 +639,12 @@ impl Engine for Webview2Backend {
         //    `<-loopback>` stops Chromium's implicit loopback bypass,
         //    so local test servers are proxied too.
         let proxied = match store {
-            DataStore::Proxied { key, port } => Some((proxied_user_data_dir(key), *port)),
+            DataStore::Proxied {
+                key,
+                port,
+                spki_pins,
+                ..
+            } => Some((proxied_user_data_dir(key), *port, spki_pins.clone())),
             _ => None,
         };
         let environment: ICoreWebView2Environment = {
@@ -629,10 +657,15 @@ impl Engine for Webview2Backend {
                                 &handler,
                             )
                         }
-                        Some((dir, port)) => {
+                        Some((dir, port, pins)) => {
+                            // The proxy answers TLS with leaves from the
+                            // daemon's CA. Chromium accepts a chain with
+                            // any of these public keys despite the
+                            // unknown root; the flag applies to this
+                            // session's browser process only.
                             let options = webview2_com::CoreWebView2EnvironmentOptions::default();
                             options.set_additional_browser_arguments(format!(
-                                "--proxy-server=http://127.0.0.1:{port} --proxy-bypass-list=<-loopback>"
+                                "--proxy-server=http://127.0.0.1:{port} --proxy-bypass-list=<-loopback> --ignore-certificate-errors-spki-list={pins}"
                             ));
                             let options: webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2EnvironmentOptions =
                                 options.into();
@@ -825,6 +858,14 @@ impl Engine for Webview2Backend {
         let mut popup_token: i64 = 0;
         unsafe { web_view.add_NewWindowRequested(&popup_handler, &raw mut popup_token) }
             .map_err(|e| EngineError::Other(format!("add_NewWindowRequested: {e}")))?;
+
+        // An intercept page's TLS ends at the daemon's proxy, which
+        // verifies upstream itself. Should Chromium still report a
+        // certificate error for the proxy's leaves (the SPKI flag above
+        // not taking), allow it: only this session's pages get here.
+        if matches!(store, DataStore::Proxied { .. }) {
+            allow_proxy_certificates(&web_view)?;
+        }
 
         // 4. Navigate + wait for NavigationCompleted.
         let (tx, rx) = mpsc::channel();

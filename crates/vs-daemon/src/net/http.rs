@@ -321,10 +321,12 @@ pub(crate) fn parse_status_line(line: &str) -> io::Result<(u16, String)> {
     Ok((status, it.next().unwrap_or("").trim().to_string()))
 }
 
-/// A parsed `http://` URL, enough to open a connection and write the
-/// request target.
+/// A parsed `http://` or `https://` URL, enough to open a connection
+/// and write the request target.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Target {
+    /// `https`.
+    pub(crate) tls: bool,
     /// Host as written, without brackets for IPv6.
     pub(crate) host: String,
     pub(crate) port: u16,
@@ -335,10 +337,11 @@ pub(crate) struct Target {
 }
 
 pub(crate) fn parse_http_url(url: &str) -> io::Result<Target> {
-    let rest = url
-        .strip_prefix("http://")
-        .or_else(|| url.strip_prefix("HTTP://"))
-        .ok_or_else(|| bad("only http:// URLs can be forwarded"))?;
+    let (tls, rest) = match url.split_once("://") {
+        Some((s, rest)) if s.eq_ignore_ascii_case("http") => (false, rest),
+        Some((s, rest)) if s.eq_ignore_ascii_case("https") => (true, rest),
+        _ => return Err(bad("only http:// and https:// URLs can be forwarded")),
+    };
     let rest = rest.split('#').next().unwrap_or(rest);
     let split = rest.find(['/', '?']).unwrap_or(rest.len());
     let (authority, path) = rest.split_at(split);
@@ -367,8 +370,9 @@ pub(crate) fn parse_http_url(url: &str) -> io::Result<Target> {
         path.to_string()
     };
     Ok(Target {
+        tls,
         host,
-        port: port.unwrap_or(80),
+        port: port.unwrap_or(if tls { 443 } else { 80 }),
         authority: authority.to_string(),
         path,
     })
@@ -401,7 +405,10 @@ mod tests {
         assert_eq!((t.host.as_str(), t.port), ("::1", 9));
         let t = parse_http_url("http://h?q").unwrap();
         assert_eq!(t.path, "/?q");
-        assert!(parse_http_url("https://h/").is_err());
+        let t = parse_http_url("HTTPS://h/").unwrap();
+        assert!(t.tls);
+        assert_eq!(t.port, 443);
+        assert!(parse_http_url("ftp://h/").is_err());
     }
 
     #[test]

@@ -12,12 +12,13 @@ use std::time::{Duration, Instant};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
 
+use crate::support::hit_server::HitServer;
 use crate::support::{assert_err, assert_ok, body_first, each_available_backend, vs, TestContext};
 
 /// One parsed `vs net poll` event.
 #[derive(Debug, Clone)]
 struct Ev {
-    /// `req`, `res`, `fin`, `fail`, `tun`, `drop`.
+    /// `req`, `res`, `fin`, `fail`, `drop`.
     kind: String,
     id: u64,
     /// The rest of the event's first line after kind and id.
@@ -489,6 +490,138 @@ fn cell_intercept_loopback_by_engine() {
             assert!(!seen, "macOS proxied 127.0.0.1 after all: {evs:#?}");
         } else {
             assert!(seen, "127.0.0.1 was not proxied: {evs:#?}");
+        }
+    }
+}
+
+// (h) The Playwright case: a page fetches an https URL whose host does
+// not exist, and the client fulfills it. Upstream is never touched.
+#[test]
+fn cell_intercept_fulfills_https_without_upstream() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let s = intercept_session(&ctx);
+        let r = sv(&ctx, &s, &["open", &purl(&ctx, "/net.html")]);
+        assert_ok("open", &r);
+        let page = body_first(&r);
+        poll(&ctx, &s, 0);
+        assert_ok("route on", &sv(&ctx, &s, &["net", "route", "on"]));
+        eval(
+            &ctx,
+            &s,
+            &page,
+            "(fetch('https://example.invalid/cars').then(r => r.json()).then(j => window.__cars = JSON.stringify(j), e => window.__cars = 'ERR ' + e), 'started')",
+        );
+        let json = B64.encode(r#"[{"name":"Tesla"}]"#);
+        let evs = drive(
+            &ctx,
+            &s,
+            Duration::from_secs(20),
+            |ev| {
+                (ev.url() == "https://example.invalid/cars").then(|| {
+                    vec![
+                        "fulfill".into(),
+                        "--header".into(),
+                        "Content-Type: application/json".into(),
+                        "--header".into(),
+                        "Access-Control-Allow-Origin: *".into(),
+                        "--body-b64".into(),
+                        json.clone(),
+                    ]
+                })
+            },
+            |e| find(e, "fin", "").is_some(),
+        );
+        assert!(find(&evs, "req", "https://example.invalid/cars").is_some());
+        let got = eventually(&ctx, &s, &page, "String(window.__cars)", "Tesla");
+        assert_eq!(got, r#"[{"name":"Tesla"}]"#);
+        assert_ok("route off", &sv(&ctx, &s, &["net", "route", "off"]));
+    }
+}
+
+// (i) A real https response through the proxy: TLS to the browser with
+// the daemon's CA, verified TLS upstream (the test upstream's CA comes
+// from VS_INTERCEPT_EXTRA_ROOTS).
+#[test]
+fn cell_intercept_records_a_real_https_response() {
+    for _ in each_available_backend() {
+        let up = HitServer::tls();
+        let roots = up.ca_pem_path().to_string_lossy().to_string();
+        let ctx = TestContext::start_with_env(&[("VS_INTERCEPT_EXTRA_ROOTS", &roots)]);
+        let s = intercept_session(&ctx);
+        let r = sv(&ctx, &s, &["open", &purl(&ctx, "/net.html")]);
+        assert_ok("open", &r);
+        let page = body_first(&r);
+        let url = up.url("/hit");
+        eval(
+            &ctx,
+            &s,
+            &page,
+            &format!(
+                "(fetch('{url}').then(r => r.text()).then(t => window.__hit = 'got ' + t, e => window.__hit = 'ERR ' + e), 'started')"
+            ),
+        );
+        let got = eventually(&ctx, &s, &page, "String(window.__hit)", "got");
+        assert_eq!(got, "got 1");
+        let evs = poll(&ctx, &s, 0);
+        let req = find(&evs, "req", "/hit").expect("https req");
+        assert_eq!(req.url(), url, "{req:?}");
+        assert_eq!(status_of(&evs, req.id).as_deref(), Some("200"));
+        assert_eq!(up.hits(), 1);
+    }
+}
+
+// (j) Abort is final: the browser must not retry an aborted request
+// (CFNetwork retries an idempotent request whose connection closed
+// with no bytes). Three equal fetches, continue / abort / continue:
+// the page sees ok, failure, ok and the server sees two hits. Over
+// plain http and over https.
+#[test]
+fn cell_intercept_abort_is_not_retried() {
+    for _ in each_available_backend() {
+        let tls = HitServer::tls();
+        let plain = HitServer::plain();
+        let roots = tls.ca_pem_path().to_string_lossy().to_string();
+        let ctx = TestContext::start_with_env(&[("VS_INTERCEPT_EXTRA_ROOTS", &roots)]);
+        let s = intercept_session(&ctx);
+        let r = sv(&ctx, &s, &["open", &purl(&ctx, "/net.html")]);
+        assert_ok("open", &r);
+        let page = body_first(&r);
+        for up in [&plain, &tls] {
+            let url = up.url("/zzz");
+            poll(&ctx, &s, 0);
+            assert_ok("route on", &sv(&ctx, &s, &["net", "route", "on"]));
+            eval(
+                &ctx,
+                &s,
+                &page,
+                &format!(
+                    "(window.__eq = null, (async () => {{ const out = []; for (let i = 0; i < 3; i++) {{ out.push(await fetch('{url}').then(r => r.text().then(t => t, () => 'BODYFAILED'), () => 'FAILED')); }} window.__eq = out.join(','); }})(), 'started')"
+                ),
+            );
+            let mut n = 0;
+            let evs = drive(
+                &ctx,
+                &s,
+                Duration::from_secs(30),
+                |ev| {
+                    if !ev.url().ends_with("/zzz") {
+                        return None;
+                    }
+                    n += 1;
+                    (n == 2).then(|| vec!["abort".into(), "--error".into(), "failed".into()])
+                },
+                |e| e.iter().filter(|x| x.kind == "fin").count() >= 2,
+            );
+            let got = eventually(&ctx, &s, &page, "String(window.__eq)", ",");
+            assert_ok("route off", &sv(&ctx, &s, &["net", "route", "off"]));
+            let lines: Vec<String> = evs
+                .iter()
+                .map(|e| format!("{} {} {}", e.kind, e.id, e.line))
+                .collect();
+            assert_eq!(got, "1,FAILED,2", "{url}: {lines:#?}");
+            assert_eq!(up.hits(), 2, "{url}");
+            assert_eq!(n, 3, "{url}: requests seen");
         }
     }
 }

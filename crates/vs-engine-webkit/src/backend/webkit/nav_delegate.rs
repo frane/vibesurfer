@@ -11,8 +11,8 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly, Message};
 use objc2_foundation::{
-    NSData, NSError, NSHTTPURLResponse, NSObject, NSObjectProtocol, NSRect, NSString, NSURLRequest,
-    NSURLResponse, NSURL,
+    NSData, NSError, NSHTTPURLResponse, NSInteger, NSObject, NSObjectProtocol, NSRect, NSString,
+    NSURLAuthenticationChallenge, NSURLCredential, NSURLRequest, NSURLResponse, NSURL,
 };
 use objc2_web_kit::{
     WKDownload, WKDownloadDelegate, WKNavigation, WKNavigationAction, WKNavigationDelegate,
@@ -62,6 +62,8 @@ pub(super) struct NavDelegateIvars {
     /// HTTP response of the latest main-frame navigation. Cleared at
     /// provisional start, set in `decide_response`.
     pub(super) main_response: RefCell<Option<crate::inspector::MainResponse>>,
+    /// The intercept proxy's CA (DER), for intercept pages only.
+    pub(super) trust_anchor: RefCell<Option<Vec<u8>>>,
 }
 
 fn ns_str(s: Option<Retained<NSString>>) -> String {
@@ -211,6 +213,32 @@ define_class!(
             handler.call((policy,));
         }
 
+        /// Server trust for an intercept page: its TLS ends at the
+        /// daemon's proxy, whose CA is trusted here (see `trust`).
+        /// Everything else gets WebKit's default handling, the same as
+        /// without this method. WebKit sends the challenge for every
+        /// connection of the page, subresources included.
+        #[unsafe(method(webView:didReceiveAuthenticationChallenge:completionHandler:))]
+        fn auth_challenge(
+            &self,
+            _web_view: &WKWebView,
+            challenge: &NSURLAuthenticationChallenge,
+            handler: &block2::DynBlock<dyn Fn(NSInteger, *mut NSURLCredential)>,
+        ) {
+            // NSURLSessionAuthChallengeUseCredential = 0,
+            // PerformDefaultHandling = 1.
+            let cred = self
+                .ivars()
+                .trust_anchor
+                .borrow()
+                .as_deref()
+                .and_then(|ca| super::trust::credential_for(challenge, ca));
+            match cred {
+                Some(c) => handler.call((0, Retained::as_ptr(&c).cast_mut())),
+                None => handler.call((1, std::ptr::null_mut())),
+            }
+        }
+
         #[unsafe(method(webView:navigationResponse:didBecomeDownload:))]
         fn response_became_download(
             &self,
@@ -353,8 +381,15 @@ impl NavDelegate {
             in_flight: RefCell::new(Vec::new()),
             main_became_download: Cell::new(false),
             main_response: RefCell::new(None),
+            trust_anchor: RefCell::new(None),
         });
         unsafe { msg_send![super(this), init] }
+    }
+
+    /// Trust TLS leaves signed by `ca_der` (the intercept proxy's CA)
+    /// for this page's connections.
+    pub(super) fn set_trust_anchor(&self, ca_der: Vec<u8>) {
+        *self.ivars().trust_anchor.borrow_mut() = Some(ca_der);
     }
 
     /// Shared navigation-result slot. Reused by `navigate` to await an

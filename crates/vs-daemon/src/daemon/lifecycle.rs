@@ -54,7 +54,7 @@ impl Daemon {
             let mut state = SessionState::new(isolated);
             if intercept {
                 state.intercept = true;
-                state.running_net()?;
+                state.running_net(self)?;
             }
             let mut store = self.inner.store.lock().expect("poisoned");
             let session = store.create_session_with(&id, policy, isolated, intercept)?;

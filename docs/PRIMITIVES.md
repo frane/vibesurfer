@@ -253,10 +253,30 @@ the port tells the daemon which session a connection belongs to.
 | WebKitGTK 6 | `NetworkSession::set_proxy_settings`, custom `http://127.0.0.1:<port>`, empty ignore list | Proxied. |
 | WebView2 | `--proxy-server=http://127.0.0.1:<port> --proxy-bypass-list=<-loopback>` on a per-session environment and user data folder | Proxied. |
 
-Plain http is intercepted. https arrives as `CONNECT host:port` and is
-tunnelled untouched: a `tun` event, nothing more. On macOS plain http
-also arrives as `CONNECT`; the proxy reads the HTTP inside the tunnel.
-WebSocket upgrades are forwarded and then tunnelled.
+http and https are both intercepted. https arrives as `CONNECT
+host:port`; the proxy answers the browser's TLS with a leaf certificate
+for the host (SNI when sent) signed by the daemon's CA, offers only
+http/1.1 in ALPN, and handles the requests inside like plain ones, with
+`https://` URLs (`:443` left out). On macOS plain http also arrives as
+`CONNECT`; the proxy reads the HTTP inside the tunnel. WebSocket
+upgrades (`ws:` and `wss:`) are forwarded and then piped.
+
+The CA is made on first use and kept as `~/.vibesurfer/intercept-ca.pem`
+and `intercept-ca.key` (0600). Every leaf uses one key pair made at
+daemon start. Upstream TLS is verified against the Mozilla roots
+(webpki-roots) plus any PEM certificates in the file named by
+`VS_INTERCEPT_EXTRA_ROOTS` in the daemon's environment; a failed
+upstream handshake is a `fail <id> tls: ...` and the browser's request
+fails. A fulfilled request never touches upstream, so it works for a
+host that does not exist.
+
+Each engine trusts the CA for intercept sessions only:
+
+| Engine | Trust |
+|--------|-------|
+| macOS WebKit | The page's navigation delegate answers `NSURLAuthenticationMethodServerTrust` challenges: the CA is added as an anchor (system anchors kept) and the trust evaluated again. Every TLS connection of the page gets the challenge, subresources (fetch, XHR, images) included. |
+| WebKitGTK 6 | The session's network session uses `TLSErrorsPolicy::Ignore`. Leaves are made per host on demand, so they cannot be allowed one by one up front; every TLS connection of the session ends at the proxy, which verifies upstream. |
+| WebView2 | `--ignore-certificate-errors-spki-list=<leaf key>,<CA key>` (base64 SHA-256 of each SPKI) on the session's environment, and a `ServerCertificateErrorDetected` handler that allows the error should Chromium still raise one. |
 
 ### `vs_net_poll [--wait-ms=N]`
 
@@ -271,7 +291,6 @@ res <id> <status> <url> <reason>
 h <name>: <value>
 fin <id> size=<n>
 fail <id> <error>
-tun <host>:<port>
 drop <n>
 ```
 
@@ -306,9 +325,12 @@ decides. A request held 30 s without a decision continues unchanged.
 Decide a held request. `--headers` is `name: value` lines joined by
 newlines (the CLI's repeatable `--header` builds it); when given it
 replaces the whole header list. Fulfill defaults to status 200 and an
-empty body; Content-Length is set by the proxy. Abort closes the
-browser's connection with no response and reports `fail <id> <NAME>`
-(default `failed`). `NOT_FOUND request=<id>` if the request is not
+empty body; Content-Length is set by the proxy. Abort fails the
+browser's request and reports `fail <id> <NAME>` (default `failed`).
+The browser must not retry it: CFNetwork (macOS) retries an idempotent
+request whose connection closes with no response, so on macOS the proxy
+first sends a status line with a malformed header field, a protocol
+error it does not retry; elsewhere it closes the connection. `NOT_FOUND request=<id>` if the request is not
 held (unknown, decided, or timed out).
 
 ### `vs_net_fetch <id> [--url=] [--method=] [--headers=] [--body-b64=]`

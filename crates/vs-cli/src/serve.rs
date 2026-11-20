@@ -310,6 +310,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     let mut daemon = Daemon::new(store, engine_runtime.clone())
         .with_captures_dir(captures_dir)
         .with_downloads_dir(downloads_dir)
+        .with_intercept_ca_dir(args.paths.root.clone())
         .with_skills_dir(skills_dir);
 
     if let Some(k) = resolve_master_key(&args.paths) {
@@ -477,6 +478,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     let mut daemon = Daemon::new(store, engine_runtime.clone())
         .with_captures_dir(captures_dir)
         .with_downloads_dir(downloads_dir)
+        .with_intercept_ca_dir(args.paths.root.clone())
         .with_skills_dir(skills_dir);
 
     if let Some(k) = resolve_master_key(&args.paths) {
@@ -626,6 +628,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     let mut daemon = Daemon::new(store, engine_runtime.clone())
         .with_captures_dir(captures_dir)
         .with_downloads_dir(downloads_dir)
+        .with_intercept_ca_dir(args.paths.root.clone())
         .with_skills_dir(skills_dir);
 
     if let Some(k) = resolve_master_key(&args.paths) {

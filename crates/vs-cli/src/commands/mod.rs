@@ -616,8 +616,8 @@ fn net_headers(r: Request, headers: &[String]) -> Request {
 
 #[derive(Debug, Subcommand)]
 pub enum NetSub {
-    /// Print and clear queued events: `req`, `res`, `fin`, `fail`,
-    /// `tun` lines, each `req`/`res` followed by `h name: value` lines.
+    /// Print and clear queued events: `req`, `res`, `fin`, `fail`
+    /// lines, each `req`/`res` followed by `h name: value` lines.
     Poll {
         /// Block up to this long (max 30000) for the first event.
         #[arg(long = "wait-ms", default_value_t = 0)]

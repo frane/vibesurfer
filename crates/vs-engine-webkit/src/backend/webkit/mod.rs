@@ -25,6 +25,7 @@ mod inspector_handler;
 mod nav_delegate;
 mod proxy;
 mod record;
+mod trust;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -507,6 +508,9 @@ impl Engine for WkBackend {
 
         let slot: NavSlot = Rc::new(RefCell::new(NavState::default()));
         let delegate = NavDelegate::new(mtm, slot.clone(), SharedDownloads::default());
+        if let Some(ca) = store.proxy_ca() {
+            delegate.set_trust_anchor(ca.to_vec());
+        }
         let proto: &ProtocolObject<dyn WKNavigationDelegate> = ProtocolObject::from_ref(&*delegate);
         unsafe { web_view.setNavigationDelegate(Some(proto)) };
         // Same object serves as the UI delegate: WebKit sources

@@ -5,8 +5,10 @@
 //! requests in absolute form (`GET http://host/path`) and use
 //! `CONNECT` for https. WebKit on macOS uses `CONNECT host:port` for
 //! everything, so after a `CONNECT` the first byte decides: a TLS
-//! handshake (0x16) is tunnelled blind, anything else is read as HTTP
-//! requests for that authority.
+//! handshake (0x16) is answered with a leaf certificate for the host
+//! from the daemon's CA and the requests inside are read as
+//! `https://` ones; anything else is read as plain HTTP requests for
+//! that authority.
 //!
 //! Each request gets its own connection on both sides, with
 //! `Connection: close`: a browser retries a request whose reused
@@ -14,7 +16,7 @@
 //! Bodies are re-framed (Content-Length when known, chunked otherwise).
 
 use std::io::{self, BufRead, BufReader, Write};
-use std::net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -24,6 +26,7 @@ use super::http::{
     response_framing, strip_hop_by_hop, write_chunk, write_head, write_last_chunk, Framing, Head,
     Headers,
 };
+use super::tls::{Mitm, Stream};
 use super::{Decision, Overrides, ProxyRequest, SessionNet};
 
 /// An idle browser connection is closed after this long.
@@ -49,59 +52,79 @@ pub(super) fn serve(listener: &TcpListener, net: &Arc<SessionNet>) {
     }
 }
 
+/// Inside a `CONNECT`: the scheme and authority requests carry only
+/// a path for.
+struct Tunnel {
+    https: bool,
+    authority: String,
+}
+
 fn handle_conn(net: &SessionNet, stream: TcpStream) -> io::Result<()> {
     stream.set_nodelay(true)?;
     stream.set_read_timeout(Some(BROWSER_IDLE))?;
-    let mut writer = stream.try_clone()?;
-    let mut reader = BufReader::new(stream);
-    // Set inside a CONNECT tunnel: requests then carry only a path.
-    let mut authority: Option<String> = None;
+    let mut conn = BufReader::new(Stream::Plain(stream));
+    let mut tunnel: Option<Tunnel> = None;
     loop {
-        let Some(head) = read_head(&mut reader)? else {
+        let Some(head) = read_head(&mut conn)? else {
+            conn.get_mut().finish();
             return Ok(());
         };
         let mut parts = head.line.split_whitespace();
         let method = parts.next().unwrap_or("").to_string();
         let target = parts.next().unwrap_or("").to_string();
-        let version = parts.next().unwrap_or("HTTP/1.1").to_string();
 
         if method.eq_ignore_ascii_case("CONNECT") {
-            if authority.is_some() {
+            if tunnel.is_some() {
                 return Err(http::bad("CONNECT inside a tunnel"));
             }
-            writer.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")?;
-            let first = reader.fill_buf()?.first().copied();
+            conn.get_mut()
+                .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")?;
+            let first = conn.fill_buf()?.first().copied();
             match first {
                 None => return Ok(()),
                 Some(0x16) => {
-                    net.ev_tunnel(&target);
-                    return blind_tunnel(reader, writer, &target);
+                    let early = conn.buffer().to_vec();
+                    let Stream::Plain(sock) = conn.into_inner() else {
+                        return Err(http::bad("TLS inside TLS"));
+                    };
+                    let host = split_authority(&target, 443).0;
+                    conn = BufReader::new(net.mitm.accept(sock, &early, &host)?);
+                    // Report `https://host/…` without the default port,
+                    // as the browser would.
+                    let a = target.strip_suffix(":443").unwrap_or(&target);
+                    tunnel = Some(Tunnel {
+                        https: true,
+                        authority: a.to_string(),
+                    });
+                    continue;
                 }
                 Some(_) => {
                     // WebKit tunnels plain http as `CONNECT host:80`;
                     // report `http://host/…` as the browser would.
                     let a = target.strip_suffix(":80").unwrap_or(&target);
-                    authority = Some(a.to_string());
+                    tunnel = Some(Tunnel {
+                        https: false,
+                        authority: a.to_string(),
+                    });
                     continue;
                 }
             }
         }
 
-        let url = match &authority {
-            _ if target.starts_with("http://") || target.starts_with("HTTP://") => target.clone(),
-            Some(a) => format!("http://{a}{target}"),
+        let lower = target.to_ascii_lowercase();
+        let url = match &tunnel {
+            _ if lower.starts_with("http://") || lower.starts_with("https://") => target.clone(),
+            Some(t) => format!(
+                "{}://{}{target}",
+                if t.https { "https" } else { "http" },
+                t.authority
+            ),
             None => match head.get("host") {
                 Some(h) if target.starts_with('/') => format!("http://{h}{target}"),
                 _ => return Err(http::bad("request target is not an http URL")),
             },
         };
-        let body = read_body(&mut reader, request_framing(&head.headers))?;
-        // One request per browser connection. A browser that sees a
-        // reused connection close without a response retries the
-        // request, which would turn an abort into a second attempt;
-        // on a fresh connection the abort stands.
-        let _ = wants_keep_alive(&version, &head);
-        let keep_alive = false;
+        let body = read_body(&mut conn, request_framing(&head.headers))?;
         let req = ProxyRequest {
             method,
             url,
@@ -113,34 +136,33 @@ fn handle_conn(net: &SessionNet, stream: TcpStream) -> io::Result<()> {
                 .collect(),
             body,
         };
-        if !exchange(net, &req, &mut reader, &mut writer, keep_alive)? {
-            return Ok(());
-        }
+        // One request per browser connection. A browser that sees a
+        // reused connection close without a response retries the
+        // request, which would turn an abort into a second attempt
+        // (see `abort` for the retry CFNetwork makes even so).
+        return exchange(net, &req, conn);
     }
 }
 
-fn wants_keep_alive(version: &str, head: &Head) -> bool {
-    let says = |name: &str, what: &str| {
-        head.get(name)
-            .is_some_and(|v| v.to_ascii_lowercase().contains(what))
-    };
-    if says("connection", "close") || says("proxy-connection", "close") {
-        return false;
+/// `host` and port of a `host:port` authority (IPv6 unbracketed).
+fn split_authority(authority: &str, default: u16) -> (String, u16) {
+    if let Some(v6) = authority.strip_prefix('[') {
+        let (h, after) = v6.split_once(']').unwrap_or((v6, ""));
+        let port = after
+            .strip_prefix(':')
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(default);
+        return (h.to_string(), port);
     }
-    version.eq_ignore_ascii_case("HTTP/1.1")
-        || says("connection", "keep-alive")
-        || says("proxy-connection", "keep-alive")
+    match authority.rsplit_once(':') {
+        Some((h, p)) => (h.to_string(), p.parse().unwrap_or(default)),
+        None => (authority.to_string(), default),
+    }
 }
 
-/// Record, maybe hold, then answer one request. Returns whether the
-/// browser connection can carry another.
-fn exchange(
-    net: &SessionNet,
-    req: &ProxyRequest,
-    reader: &mut BufReader<TcpStream>,
-    writer: &mut TcpStream,
-    keep_alive: bool,
-) -> io::Result<bool> {
+/// Record, maybe hold, then answer one request. The browser
+/// connection is consumed: it carries one request.
+fn exchange(net: &SessionNet, req: &ProxyRequest, mut conn: BufReader<Stream>) -> io::Result<()> {
     let id = net.next_id();
     net.ev_request(id, req, classify(&req.method, &req.url, &req.headers));
     let decision = if net.routing() {
@@ -151,8 +173,8 @@ fn exchange(
     match decision {
         Decision::Abort(error) => {
             net.ev_failed(id, &error);
-            let _ = writer.shutdown(Shutdown::Both);
-            Ok(false)
+            abort(conn.get_mut());
+            Ok(())
         }
         Decision::Fulfill {
             status,
@@ -163,28 +185,46 @@ fn exchange(
             net.ev_response(id, status, reason, &req.url, &headers);
             let mut hs = strip_hop_by_hop(&headers);
             hs.push(("Content-Length".into(), body.len().to_string()));
-            hs.push(connection_field(keep_alive));
-            write_head(writer, &format!("HTTP/1.1 {status} {reason}"), &hs)?;
+            hs.push(close_field());
+            let w = conn.get_mut();
+            write_head(w, &format!("HTTP/1.1 {status} {reason}"), &hs)?;
             if !req.method.eq_ignore_ascii_case("HEAD") {
-                writer.write_all(&body)?;
+                w.write_all(&body)?;
             }
-            writer.flush()?;
+            w.flush()?;
+            w.finish();
             net.ev_finished(id, body.len() as u64);
             net.keep_body(id, body);
-            Ok(keep_alive)
+            Ok(())
         }
         Decision::Continue(o) => {
             let (out, url_changed) = o.apply(req);
-            forward(net, id, req, &out, url_changed, reader, writer, keep_alive)
+            forward(net, id, req, &out, url_changed, conn)
         }
     }
 }
 
-fn connection_field(keep_alive: bool) -> (String, String) {
-    (
-        "Connection".into(),
-        if keep_alive { "keep-alive" } else { "close" }.into(),
-    )
+/// Fail the browser's request for good.
+///
+/// CFNetwork (WebKit on macOS) retries an idempotent request once when
+/// its connection closes with no response, fresh connection or not,
+/// and it treats junk instead of a status line the same way; the retry
+/// would get the next decision and an aborted fetch would succeed. A
+/// status line followed by a malformed header field is a protocol
+/// error it reports without retrying, before any response reaches the
+/// page. Chromium skips malformed header lines, and it and libsoup do
+/// not retry a fresh connection, so elsewhere the connection is just
+/// dropped.
+fn abort(conn: &mut Stream) {
+    if cfg!(target_os = "macos") {
+        let _ = conn.write_all(b"HTTP/1.1 502 Aborted\r\nvs-abort\r\n\r\n");
+        let _ = conn.flush();
+    }
+    conn.kill();
+}
+
+fn close_field() -> (String, String) {
+    ("Connection".into(), "close".into())
 }
 
 /// Upgrade request (WebSocket): keep `Connection`/`Upgrade` upstream.
@@ -196,17 +236,25 @@ fn upgrade_of(headers: &Headers) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Open an upstream connection, send `out`, read up to the final
-/// response head.
+/// Open an upstream connection (TLS for https, verified), send `out`,
+/// read up to the final response head.
 fn send_upstream(
+    mitm: &Mitm,
     out: &ProxyRequest,
     url_changed: bool,
-) -> io::Result<(TcpStream, BufReader<TcpStream>, u16, String, Head)> {
+) -> io::Result<(BufReader<Stream>, u16, String, Head)> {
     let target = parse_http_url(&out.url)?;
-    let stream = connect(&target.host, target.port)?;
-    stream.set_nodelay(true)?;
-    stream.set_read_timeout(Some(UPSTREAM_READ))?;
-    let mut w = stream.try_clone()?;
+    let sock = connect(&target.host, target.port)?;
+    sock.set_nodelay(true)?;
+    sock.set_read_timeout(Some(UPSTREAM_READ))?;
+    let mut stream = if target.tls {
+        sock.set_read_timeout(Some(CONNECT_TIMEOUT))?;
+        let s = mitm.connect(sock, &target.host)?;
+        s.set_read_timeout(Some(UPSTREAM_READ))?;
+        s
+    } else {
+        Stream::Plain(sock)
+    };
     let upgrade = upgrade_of(&out.headers);
     let mut hs = strip_hop_by_hop(&out.headers);
     let has_host = hs.iter().any(|(k, _)| k.eq_ignore_ascii_case("host"));
@@ -223,16 +271,16 @@ fn send_upstream(
             hs.push(("Connection".into(), "Upgrade".into()));
             hs.push(("Upgrade".into(), u.clone()));
         }
-        None => hs.push(("Connection".into(), "close".into())),
+        None => hs.push(close_field()),
     }
     write_head(
-        &mut w,
+        &mut stream,
         &format!("{} {} HTTP/1.1", out.method, target.path),
         &hs,
     )?;
-    w.write_all(&out.body)?;
-    w.flush()?;
-    let mut r = BufReader::new(stream.try_clone()?);
+    stream.write_all(&out.body)?;
+    stream.flush()?;
+    let mut r = BufReader::new(stream);
     loop {
         let head = read_head(&mut r)?
             .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "empty response"))?;
@@ -241,7 +289,7 @@ fn send_upstream(
         if (100..200).contains(&status) && status != 101 {
             continue;
         }
-        return Ok((stream, r, status, reason, head));
+        return Ok((r, status, reason, head));
     }
 }
 
@@ -266,37 +314,37 @@ fn connect(host: &str, port: u16) -> io::Result<TcpStream> {
     Err(last)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn forward(
     net: &SessionNet,
     id: u64,
     req: &ProxyRequest,
     out: &ProxyRequest,
     url_changed: bool,
-    reader: &mut BufReader<TcpStream>,
-    writer: &mut TcpStream,
-    keep_alive: bool,
-) -> io::Result<bool> {
-    let (upstream, mut up_r, status, reason, head) = match send_upstream(out, url_changed) {
+    mut conn: BufReader<Stream>,
+) -> io::Result<()> {
+    let (mut up_r, status, reason, head) = match send_upstream(&net.mitm, out, url_changed) {
         Ok(v) => v,
         Err(e) => {
             net.ev_failed(id, &e.to_string());
-            let _ = writer.shutdown(Shutdown::Both);
-            return Ok(false);
+            abort(conn.get_mut());
+            return Ok(());
         }
     };
     net.ev_response(id, status, &reason, &req.url, &head.headers);
 
     if status == 101 {
-        write_head(writer, &head.line, &head.headers)?;
-        writer.write_all(up_r.buffer())?;
-        writer.flush()?;
+        let leftover_browser = conn.buffer().to_vec();
+        let leftover_up = up_r.buffer().to_vec();
+        let mut browser = conn.into_inner();
+        let mut upstream = up_r.into_inner();
+        write_head(&mut browser, &head.line, &head.headers)?;
+        browser.write_all(&leftover_up)?;
+        browser.flush()?;
         net.ev_finished(id, 0);
-        let browser = reader.get_ref().try_clone()?;
-        let mut upstream_w = upstream.try_clone()?;
-        upstream_w.write_all(reader.buffer())?;
+        upstream.write_all(&leftover_browser)?;
+        upstream.flush()?;
         pipe(browser, upstream);
-        return Ok(false);
+        return Ok(());
     }
 
     let framing = response_framing(&out.method, status, &head.headers);
@@ -318,12 +366,13 @@ fn forward(
             true
         }
     };
-    hs.push(connection_field(keep_alive));
+    hs.push(close_field());
     let status_line = if reason.is_empty() {
         format!("HTTP/1.1 {status} {}", http::reason(status))
     } else {
         format!("HTTP/1.1 {status} {reason}")
     };
+    let writer = conn.get_mut();
     write_head(writer, &status_line, &hs)?;
 
     let mut kept: Option<Vec<u8>> = Some(Vec::new());
@@ -341,33 +390,35 @@ fn forward(
             writer.write_all(b)
         }
     });
-    drop(upstream);
+    drop(up_r);
     match copied {
         Ok(n) => {
             if chunked {
                 write_last_chunk(writer)?;
             }
             writer.flush()?;
+            writer.finish();
             net.ev_finished(id, n);
             if let Some(k) = kept {
                 net.keep_body(id, k);
             }
-            Ok(keep_alive)
+            Ok(())
         }
         Err(e) => {
             net.ev_failed(id, &e.to_string());
-            let _ = writer.shutdown(Shutdown::Both);
-            Ok(false)
+            writer.kill();
+            Ok(())
         }
     }
 }
 
 /// `vs_net_fetch`: the whole exchange, into memory.
 pub(super) fn fetch_full(
+    mitm: &Mitm,
     out: &ProxyRequest,
     url_changed: bool,
 ) -> io::Result<(u16, String, Headers, Vec<u8>)> {
-    let (_stream, mut r, status, reason, head) = send_upstream(out, url_changed)?;
+    let (mut r, status, reason, head) = send_upstream(mitm, out, url_changed)?;
     let body = read_body(&mut r, response_framing(&out.method, status, &head.headers))?;
     let reason = if reason.is_empty() {
         http::reason(status).to_string()
@@ -377,28 +428,8 @@ pub(super) fn fetch_full(
     Ok((status, reason, head.headers, body))
 }
 
-/// TLS inside CONNECT: pass bytes both ways untouched.
-fn blind_tunnel(
-    reader: BufReader<TcpStream>,
-    writer: TcpStream,
-    authority: &str,
-) -> io::Result<()> {
-    let (host, port) = match authority.rsplit_once(':') {
-        Some((h, p)) => (
-            h.trim_start_matches('[').trim_end_matches(']'),
-            p.parse().unwrap_or(443),
-        ),
-        None => (authority, 443),
-    };
-    let mut upstream = connect(host, port)?;
-    upstream.write_all(reader.buffer())?;
-    drop(writer);
-    pipe(reader.into_inner(), upstream);
-    Ok(())
-}
-
 /// Copy both directions until either side closes.
-fn pipe(a: TcpStream, b: TcpStream) {
+fn pipe(a: Stream, b: Stream) {
     let _ = a.set_read_timeout(None);
     let _ = b.set_read_timeout(None);
     let (Ok(mut a_r), Ok(mut b_w)) = (a.try_clone(), b.try_clone()) else {
@@ -406,10 +437,10 @@ fn pipe(a: TcpStream, b: TcpStream) {
     };
     let t = std::thread::spawn(move || {
         let _ = io::copy(&mut a_r, &mut b_w);
-        let _ = b_w.shutdown(Shutdown::Write);
+        b_w.finish();
     });
     let (mut b_r, mut a_w) = (b, a);
     let _ = io::copy(&mut b_r, &mut a_w);
-    let _ = a_w.shutdown(Shutdown::Write);
+    a_w.finish();
     let _ = t.join();
 }
