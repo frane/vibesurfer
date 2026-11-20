@@ -108,6 +108,26 @@ pub(super) fn handle_open(daemon: &Daemon, req: &Request) -> String {
     }
 }
 
+/// `vs_init_script <page> <source>`: a document-start script for every
+/// later document in the page. Body is empty; the envelope carries the
+/// page's current token.
+pub(super) fn handle_init_script(daemon: &Daemon, req: &Request) -> String {
+    let session_id = match require_session(req) {
+        Ok(s) => s,
+        Err(msg) => return format_error(ErrorCode::BadRequest, vec![msg]),
+    };
+    let (Some(page_id), Some(source)) = (req.args.first(), req.args.get(1)) else {
+        return format_error(
+            ErrorCode::BadRequest,
+            vec!["vs_init_script: usage <page> <source>".into()],
+        );
+    };
+    match daemon.add_init_script(&session_id, page_id, source) {
+        Ok(token) => ResponseHead::ok(token).encode(),
+        Err(e) => format_daemon_error(&e),
+    }
+}
+
 pub(super) fn handle_goto(daemon: &Daemon, req: &Request) -> String {
     let session_id = match require_session(req) {
         Ok(s) => s,

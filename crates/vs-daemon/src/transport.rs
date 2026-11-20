@@ -34,6 +34,21 @@ fn path_to_pipe_key(path: &Path) -> String {
     format!("vibesurfer-{}", &h.to_hex().as_str()[..16])
 }
 
+/// The address a non-Rust client connects to for the daemon at
+/// `path`: the socket path itself on Unix, the named pipe on Windows
+/// (`\\.\pipe\vibesurfer-<hash>`), whose name is a hash of the path.
+#[must_use]
+pub fn client_address(path: &Path) -> String {
+    #[cfg(unix)]
+    {
+        path.display().to_string()
+    }
+    #[cfg(windows)]
+    {
+        format!(r"\\.\pipe\{}", path_to_pipe_key(path))
+    }
+}
+
 /// True if a listener is actually reachable at `path` — a connect
 /// probe on both platforms. A bare existence check on Unix lies
 /// whenever a killed daemon leaves its socket file behind: clients

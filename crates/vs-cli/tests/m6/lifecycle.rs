@@ -1,7 +1,7 @@
 //! Lifecycle cells: vs_session_open, vs_session_close, vs_open,
 //! vs_close, vs_view, vs_read, vs_status.
 
-use crate::helpers::{open_fixture, ref_for, settle};
+use crate::helpers::{eval_js, open_fixture, ref_for, settle};
 use crate::support::{
     assert_ok, body_first, body_rest, each_available_backend, token_of, TestContext,
 };
@@ -543,5 +543,52 @@ fn cell_session_close_sweeps_idle_sessions() {
         let body = body_rest(&r);
         assert!(!body.contains(&stale), "closed session is gone:\n{body}");
         assert!(body.contains(&fresh), "live session remains:\n{body}");
+    }
+}
+
+// `vs init-script` runs at document start of later documents, before
+// the page's own scripts, and leaves the current document alone.
+#[test]
+fn cell_init_script_runs_at_document_start() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/download.html");
+        let r = ctx.vs(&[
+            "init-script",
+            &page,
+            "window.__vsInit = (window.__vsInit || 0) + 1; window.__vsInitSawBody = !!document.body;",
+        ]);
+        assert_ok("init-script", &r);
+        assert_eq!(
+            eval_js(&ctx, &page, "String(window.__vsInit)"),
+            "undefined",
+            "the current document must not run the script"
+        );
+        let r = ctx.vs(&["goto", &page, &ctx.url("/download.html")]);
+        assert_ok("goto", &r);
+        assert_eq!(eval_js(&ctx, &page, "window.__vsInit"), "1");
+        assert_eq!(
+            eval_js(&ctx, &page, "window.__vsInitSawBody"),
+            "false",
+            "the script ran after the document was parsed, not at document start"
+        );
+    }
+}
+
+// A page whose CSP forbids every script still gets the init script.
+#[test]
+fn cell_init_script_ignores_page_csp() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/download.html");
+        let r = ctx.vs(&["init-script", &page, "window.__vsInitCsp = 'ran';"]);
+        assert_ok("init-script", &r);
+        let r = ctx.vs(&["goto", &page, &ctx.url("/csp.html")]);
+        assert_ok("goto csp", &r);
+        assert_eq!(
+            eval_js(&ctx, &page, "String(window.__pageScriptRan)"),
+            "undefined"
+        );
+        assert_eq!(eval_js(&ctx, &page, "window.__vsInitCsp"), "ran");
     }
 }

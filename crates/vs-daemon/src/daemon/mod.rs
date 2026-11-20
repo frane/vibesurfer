@@ -262,12 +262,24 @@ impl Daemon {
             if let Some(h) = page.engine_handle {
                 return Ok(h);
             }
-            page.url.clone()
+            (page.url.clone(), page.init_scripts.clone())
         };
+        let (url, scripts) = url;
         // Dormant page (resurrected from the store): create the engine
         // page now, outside the map lock — engine calls dispatch to
         // the platform main thread and must not deadlock against it.
-        let handle = self.inner.engine.open(&url)?;
+        // With init scripts, open blank, install them, then load, so
+        // the first document already has them.
+        let handle = if scripts.is_empty() {
+            self.inner.engine.open(&url)?
+        } else {
+            let h = self.inner.engine.open("about:blank")?;
+            for s in &scripts {
+                self.inner.engine.add_init_script(h, s)?;
+            }
+            self.inner.engine.navigate(h, &url)?;
+            h
+        };
         let mut sessions = self.inner.sessions.lock().expect("poisoned");
         let page = sessions
             .get_mut(session_id)
@@ -413,6 +425,41 @@ impl Daemon {
             let r = self.inner.engine.eval_js(handle, expr)?;
             ctx.after_token = Some(self.current_token(session_id, page_id)?);
             Ok(r)
+        })
+    }
+
+    /// `vs_init_script`: run `source` at document start in every later
+    /// document of the page. Kept on the page so a rebuilt web view
+    /// gets it again. The audit row records the size, not the source.
+    pub fn add_init_script(
+        &self,
+        session_id: &str,
+        page_id: &str,
+        source: &str,
+    ) -> Result<StateToken> {
+        let summary = format!("{} bytes", source.len());
+        let ctx = AuditCtx::new("vs_init_script", session_id)
+            .with_page(page_id)
+            .with_args(
+                summary.clone(),
+                crate::tokens::args_hash("vs_init_script", &[summary]),
+            );
+        self.audit_call(ctx, |ctx| {
+            self.require_session(session_id)?;
+            let handle = self.engine_handle_for(session_id, page_id)?;
+            self.inner.engine.add_init_script(handle, source)?;
+            {
+                let mut sessions = self.inner.sessions.lock().expect("poisoned");
+                if let Some(page) = sessions
+                    .get_mut(session_id)
+                    .and_then(|s| s.pages.get_mut(page_id))
+                {
+                    page.init_scripts.push(source.to_string());
+                }
+            }
+            let token = self.current_token(session_id, page_id)?;
+            ctx.after_token = Some(token.clone());
+            Ok(token)
         })
     }
 

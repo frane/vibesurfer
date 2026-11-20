@@ -772,6 +772,12 @@ impl Engine for Webview2Backend {
         waited
     }
 
+    fn add_init_script(&mut self, page: PageHandle, source: &str) -> EngineResult<()> {
+        let web_view = self.page_mut(page)?.web_view.clone();
+        add_init_script(&web_view, source)?;
+        Ok(())
+    }
+
     fn enable_webauthn(&mut self, _page: PageHandle) -> EngineResult<()> {
         Err(EngineError::NotImplemented {
             engine: "webview2",

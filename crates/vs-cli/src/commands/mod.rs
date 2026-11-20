@@ -84,6 +84,12 @@ pub enum Command {
     #[command(visible_alias = "g")]
     Goto { page: String, url: String },
 
+    /// Run a script at document start in every later document of the
+    /// page, before its own scripts (like Playwright's addInitScript).
+    /// SOURCE is JavaScript, or `@path` to read it from a file. The
+    /// current document is not touched.
+    InitScript { page: String, source: String },
+
     /// 4. Close a page.
     #[command(visible_alias = "c")]
     Close { page: String },
@@ -493,6 +499,9 @@ pub enum Command {
         #[command(subcommand)]
         sub: RecordSub,
     },
+    /// Print the address clients connect to: the socket path on Unix,
+    /// the named pipe on Windows. For clients in other languages.
+    Socket,
     /// Run the daemon in this process. The `vs` binary doubles as the
 
     /// daemon — `vs serve` is what auto-spawn re-execs when the socket
@@ -636,6 +645,18 @@ impl Command {
                     .flag_value("session", s)
             }
 
+            Self::InitScript { page, source } => {
+                let s = require_session(session_id)?;
+                let js = match source.strip_prefix('@') {
+                    Some(path) => std::fs::read_to_string(path)
+                        .with_context(|| format!("read init script {path}"))?,
+                    None => source.clone(),
+                };
+                Request::new("vs_init_script")
+                    .arg(page.clone())
+                    .arg(js)
+                    .flag_value("session", s)
+            }
             Self::Close { page } => {
                 let s = require_session(session_id)?;
                 Request::new("vs_close")
@@ -1062,6 +1083,9 @@ impl Command {
             Self::Serve { .. } => {
                 anyhow::bail!("vs_serve is local; route via main, not the wire dispatcher");
             }
+            Self::Socket => {
+                anyhow::bail!("vs socket is local; route via main, not the wire dispatcher");
+            }
             Self::Flow { .. } => {
                 anyhow::bail!("vs_flow is local; route via main, not the wire dispatcher");
             }
@@ -1079,6 +1103,7 @@ impl Command {
             Self::SessionOpen { .. }
                 | Self::Status
                 | Self::Serve { .. }
+                | Self::Socket
                 | Self::Mcp
                 | Self::Flow { .. }
                 | Self::Pending { .. }

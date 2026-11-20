@@ -561,6 +561,22 @@ impl Engine for WkBackend {
         Ok(())
     }
 
+    fn add_init_script(&mut self, page: PageHandle, source: &str) -> EngineResult<()> {
+        let mtm = self.mtm;
+        let p = self.page_mut(page)?;
+        unsafe {
+            let src = NSString::from_str(source);
+            let script = WKUserScript::initWithSource_injectionTime_forMainFrameOnly(
+                WKUserScript::alloc(mtm),
+                &src,
+                WKUserScriptInjectionTime::AtDocumentStart,
+                false,
+            );
+            p.ucc.addUserScript(&script);
+        }
+        Ok(())
+    }
+
     fn close(&mut self, page: PageHandle) -> EngineResult<()> {
         if let Some(p) = self.pages.remove(&page) {
             abandon_view(&p.web_view, &p.window, &p.ucc);

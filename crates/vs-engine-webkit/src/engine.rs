@@ -417,6 +417,13 @@ pub trait Engine {
     /// subsequent navigations in the same page.
     fn enable_webauthn(&mut self, page: PageHandle) -> EngineResult<()>;
 
+    /// Run `source` at document start in every frame of every later
+    /// document in `page`, before the page's own scripts. The current
+    /// document is not touched (same as Playwright's addInitScript).
+    /// Scripts accumulate in the order they were added and are not
+    /// subject to the page's Content Security Policy.
+    fn add_init_script(&mut self, page: PageHandle, source: &str) -> EngineResult<()>;
+
     /// Close a page. Idempotent — closing a closed page is a no-op.
     fn close(&mut self, page: PageHandle) -> EngineResult<()>;
 

@@ -215,6 +215,11 @@ impl EngineRuntime {
         self.dispatch(move |e| e.enable_webauthn(page))
     }
 
+    pub fn add_init_script(&self, page: PageHandle, source: &str) -> EngineResult<()> {
+        let source = source.to_string();
+        self.dispatch(move |e| e.add_init_script(page, &source))
+    }
+
     pub fn snapshot(&self, page: PageHandle) -> EngineResult<Tree> {
         self.dispatch(move |e| e.snapshot(page))
     }
@@ -501,6 +506,9 @@ mod tests {
             Ok(())
         }
         fn enable_webauthn(&mut self, _page: PageHandle) -> EngineResult<()> {
+            Ok(())
+        }
+        fn add_init_script(&mut self, _page: PageHandle, _source: &str) -> EngineResult<()> {
             Ok(())
         }
         fn close(&mut self, _page: PageHandle) -> EngineResult<()> {

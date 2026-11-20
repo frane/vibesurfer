@@ -154,6 +154,11 @@ impl Engine for TestEngine {
         Ok(())
     }
 
+    fn add_init_script(&mut self, page: PageHandle, _source: &str) -> EngineResult<()> {
+        let _ = self.page(page)?;
+        Ok(())
+    }
+
     fn close(&mut self, page: PageHandle) -> EngineResult<()> {
         self.pages.remove(&page);
         Ok(())

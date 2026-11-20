@@ -57,6 +57,17 @@ fn main() -> std::process::ExitCode {
         return std::process::ExitCode::SUCCESS;
     }
 
+    if matches!(cli.command, Command::Socket) {
+        let socket = cli.socket.clone().unwrap_or_else(|| {
+            cli.home
+                .clone()
+                .map_or_else(vs_cli::paths::Paths::home, vs_cli::paths::Paths::at)
+                .socket()
+        });
+        println!("{}", vs_daemon::transport::client_address(&socket));
+        return std::process::ExitCode::SUCCESS;
+    }
+
     if matches!(cli.command, Command::Mcp) {
         refresh_skills();
         if let Err(e) = vs_cli::mcp::run(&cli) {

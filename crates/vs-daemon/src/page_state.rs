@@ -42,6 +42,9 @@ pub struct PageState {
     /// either mutation lands. Kept outside the session-map mutex so
     /// the (slow) engine call doesn't block unrelated pages.
     pub mutate_lock: Arc<Mutex<()>>,
+    /// Document-start scripts added with `vs_init_script`, in order.
+    /// Replayed when a dormant page's web view is rebuilt.
+    pub init_scripts: Vec<String>,
 }
 
 impl PageState {
@@ -57,6 +60,7 @@ impl PageState {
             seen_refs: HashSet::new(),
             last_touched: std::time::Instant::now(),
             mutate_lock: Arc::new(Mutex::new(())),
+            init_scripts: Vec::new(),
         }
     }
 
@@ -74,6 +78,7 @@ impl PageState {
             seen_refs: HashSet::new(),
             last_touched: std::time::Instant::now(),
             mutate_lock: Arc::new(Mutex::new(())),
+            init_scripts: Vec::new(),
         }
     }
 

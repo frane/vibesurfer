@@ -289,6 +289,22 @@ impl Engine for WpeBackend {
         wait_for_load(&web_view, "navigate")
     }
 
+    fn add_init_script(&mut self, page: PageHandle, source: &str) -> EngineResult<()> {
+        let manager = self
+            .page_mut(page)?
+            .web_view
+            .user_content_manager()
+            .ok_or_else(|| EngineError::Other("WebView has no UserContentManager".into()))?;
+        manager.add_script(&UserScript::new(
+            source,
+            UserContentInjectedFrames::AllFrames,
+            UserScriptInjectionTime::Start,
+            &[],
+            &[],
+        ));
+        Ok(())
+    }
+
     fn enable_webauthn(&mut self, _page: PageHandle) -> EngineResult<()> {
         Err(EngineError::NotImplemented {
             engine: "wpe",
