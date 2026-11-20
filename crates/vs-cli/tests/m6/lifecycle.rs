@@ -637,3 +637,39 @@ fn cell_same_origin_frame_is_in_the_tree() {
         );
     }
 }
+
+// document.open() replaces the document but keeps the window. The
+// view cache must notice changes in the new document, not keep
+// answering with the first walk of it.
+#[test]
+fn cell_view_tracks_a_rewritten_document() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/download.html");
+        eval_js(
+            &ctx,
+            &page,
+            "(document.open(), document.write('<button id=\"b\" onclick=\"this.textContent=\\'done\\'\">Go</button>'), document.close(), 'ok')",
+        );
+        let r = ctx.vs(&["view", &page, "--full"]);
+        assert_ok("view", &r);
+        let body = body_rest(&r);
+        let token = token_of(&r);
+        let b = ref_for(&body, "btn", "Go");
+        let r = ctx.vs(&[
+            "act",
+            &page,
+            &b.to_string(),
+            "click",
+            &format!("--token={token}"),
+        ]);
+        assert_ok("click", &r);
+        settle(200);
+        let r = ctx.vs(&["view", &page, "--full"]);
+        assert!(
+            r.stdout.contains("done"),
+            "stale view after document.open:\n{}",
+            r.stdout
+        );
+    }
+}

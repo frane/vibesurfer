@@ -11,6 +11,9 @@ All notable changes to vibesurfer are recorded here. The format follows
 - Same-origin iframes are part of the tree. Their content appears as the `ifr` node's children with ordinary refs; `act`, `layout`, `click-at` and the macOS native click reach them, with rects offset by the frame's position and border so coordinates land in the right place. A change inside a frame invalidates the cached view. Action scripts bind DOM constructors to the element's own window, so fills on framework-controlled inputs work inside frames. Cross-origin frames stay leaves carrying their URL. Fixtures `frames.html`, `frame-inner.html`; cell `cell_same_origin_frame_is_in_the_tree`.
 - `vs socket` prints the address a client in another language connects to: the socket path on Unix, the named pipe on Windows, whose name is a hash of the path.
 
+### Fixed
+- The view no longer goes stale after `document.open()`. The walker caches its result until a MutationObserver sees a change, and `document.open()` replaces the document while keeping the window, so the observer stayed on the old root: after the first walk of the rewritten page, clicks and fills changed the page but `vs view` kept returning the first result. The observer now re-attaches when the root element changes. Cell `cell_view_tracks_a_rewritten_document`.
+
 ## [0.2.14] - 2026-11-19
 
 ### Fixed
