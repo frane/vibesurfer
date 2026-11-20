@@ -736,3 +736,40 @@ fn cell_refs_stay_out_of_the_markup() {
         );
     }
 }
+
+// A viewport smaller than the host window must not shift pointer
+// input. WebKitGTK centered the resized web view in its 1280x800
+// window while clicks assumed it sat at the top-left, so every
+// click-at after `vs viewport` missed by the gap.
+#[test]
+fn cell_click_at_lands_after_viewport_resize() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/form.html");
+        let r = ctx.vs(&["viewport", &page, "1024x600"]);
+        assert_ok("viewport", &r);
+        eval_js(
+            &ctx,
+            &page,
+            "(function(){document.body.innerHTML='<button id=b style=\"position:fixed;left:40px;top:40px;width:120px;height:40px\">hit me</button>';document.getElementById('b').addEventListener('click',function(e){window.__hit=(window.__hit||0)+(e.isTrusted?1:100);});return 'ok';})()",
+        );
+        settle(300);
+        let r = ctx.vs(&["view", &page, "--full"]);
+        let token = token_of(&r);
+        let r = ctx.vs(&[
+            "click-at",
+            &page,
+            "100",
+            "60",
+            "-M",
+            "robotic",
+            &format!("--token={token}"),
+        ]);
+        assert_ok("click-at", &r);
+        assert_eq!(
+            eval_js(&ctx, &page, "String(window.__hit)"),
+            "1",
+            "one trusted click must land on the button after the resize"
+        );
+    }
+}

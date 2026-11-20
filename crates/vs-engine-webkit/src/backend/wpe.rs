@@ -196,6 +196,11 @@ impl Engine for WpeBackend {
         let window = gtk::Window::new();
         window.set_decorated(false);
         window.set_default_size(1280, 800);
+        // Pin the view to the window's top-left corner: a viewport
+        // smaller than the window (set_viewport) must not be centered,
+        // or pointer input at page coordinates would miss by the gap.
+        web_view.set_halign(gtk::Align::Start);
+        web_view.set_valign(gtk::Align::Start);
         window.set_child(Some(&web_view));
         window.present();
 
@@ -750,7 +755,13 @@ impl Engine for WpeBackend {
         // `GdkX11Surface::xid()` + `XTranslateCoordinates` to read the
         // real origin. Until then, page-local CSS px == screen px,
         // which is fine for CI and most headless setups.
-        let (origin_x, origin_y) = (0.0_f64, 0.0_f64);
+        // Within the window, add where the web view actually sits (it
+        // is pinned top-left, so this is normally zero).
+        let offset = p
+            .web_view
+            .compute_point(&p.window, &gtk::graphene::Point::new(0.0, 0.0))
+            .map_or((0.0, 0.0), |pt| (f64::from(pt.x()), f64::from(pt.y())));
+        let (origin_x, origin_y) = offset;
         let start = p.last_mouse.get();
         let seed = humanize_seed(op);
         let landed = match op {
