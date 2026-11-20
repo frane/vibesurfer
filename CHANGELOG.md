@@ -4,7 +4,7 @@ All notable changes to vibesurfer are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.15] - 2026-11-20
 
 ### Added
 - `vs init-script <PAGE> <SOURCE|@FILE>` (wire `vs_init_script`) runs a script at document start in every frame of every later document in the page, before the page's own scripts, like Playwright's `addInitScript`. Page CSP does not apply to it. The current document is not touched. The daemon keeps the page's scripts and installs them again when it rebuilds a dormant page, before that page loads. Cells `cell_init_script_runs_at_document_start` and `cell_init_script_ignores_page_csp`.
