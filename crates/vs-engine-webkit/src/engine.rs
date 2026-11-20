@@ -654,6 +654,17 @@ pub trait Engine {
     ) -> EngineResult<crate::inspector::PerformanceMetrics> {
         Ok(crate::inspector::PerformanceMetrics::default())
     }
+
+    /// HTTP response of the latest main-frame navigation. `None` when
+    /// the engine has not recorded one (non-HTTP load, failed load,
+    /// engine without support).
+    fn main_response(
+        &mut self,
+        _page: PageHandle,
+    ) -> EngineResult<Option<crate::inspector::MainResponse>> {
+        Ok(None)
+    }
+
     /// Capabilities the daemon should advertise for this engine.
     fn capabilities(&self) -> EngineCapabilities;
 }

@@ -59,6 +59,9 @@ pub(super) struct NavDelegateIvars {
     /// The main-frame response just became a download. WebKit then
     /// fails the provisional navigation, which is not a failed load.
     pub(super) main_became_download: Cell<bool>,
+    /// HTTP response of the latest main-frame navigation. Cleared at
+    /// provisional start, set in `decide_response`.
+    pub(super) main_response: RefCell<Option<crate::inspector::MainResponse>>,
 }
 
 fn ns_str(s: Option<Retained<NSString>>) -> String {
@@ -79,6 +82,32 @@ fn disposition(r: &NSURLResponse) -> String {
         .and_then(|h| h.valueForHTTPHeaderField(&NSString::from_str("Content-Disposition")))
         .map(|s| s.to_string())
         .unwrap_or_default()
+}
+
+/// Status, headers and URL of `r` if it is an HTTP response. WebKit
+/// folds repeated headers into one comma-joined value and does not
+/// expose the server's reason phrase, so the standard one is used.
+fn http_response(r: &NSURLResponse) -> Option<crate::inspector::MainResponse> {
+    let url = response_url(r);
+    let h = r.retain().downcast::<NSHTTPURLResponse>().ok()?;
+    let status = u16::try_from(h.statusCode()).unwrap_or(0);
+    let (keys, values) = h.allHeaderFields().to_vecs();
+    let mut headers: Vec<(String, String)> = keys
+        .into_iter()
+        .zip(values)
+        .filter_map(|(k, v)| {
+            let k = k.downcast::<NSString>().ok()?.to_string();
+            let v = v.downcast::<NSString>().ok()?.to_string();
+            Some((k.to_ascii_lowercase(), v))
+        })
+        .collect();
+    headers.sort();
+    Some(crate::inspector::MainResponse {
+        url,
+        status,
+        status_text: crate::inspector::reason_phrase(status).to_string(),
+        headers,
+    })
 }
 
 /// Whether a navigation response should be saved instead of shown:
@@ -106,6 +135,7 @@ define_class!(
         #[unsafe(method(webView:didStartProvisionalNavigation:))]
         fn did_start(&self, _web_view: &WKWebView, _nav: Option<&WKNavigation>) {
             self.ivars().slot.borrow_mut().started = true;
+            self.ivars().main_response.borrow_mut().take();
         }
 
         #[unsafe(method(webView:didCommitNavigation:))]
@@ -165,12 +195,17 @@ define_class!(
             resp: &WKNavigationResponse,
             handler: &block2::DynBlock<dyn Fn(WKNavigationResponsePolicy)>,
         ) {
+            let main = unsafe { resp.isForMainFrame() };
             let policy = if wants_download(resp) {
-                if unsafe { resp.isForMainFrame() } {
+                if main {
                     self.ivars().main_became_download.set(true);
                 }
                 WKNavigationResponsePolicy::Download
             } else {
+                if main {
+                    let r = unsafe { resp.response() };
+                    *self.ivars().main_response.borrow_mut() = http_response(&r);
+                }
                 WKNavigationResponsePolicy::Allow
             };
             handler.call((policy,));
@@ -317,6 +352,7 @@ impl NavDelegate {
             downloads,
             in_flight: RefCell::new(Vec::new()),
             main_became_download: Cell::new(false),
+            main_response: RefCell::new(None),
         });
         unsafe { msg_send![super(this), init] }
     }
@@ -330,6 +366,11 @@ impl NavDelegate {
     /// Downloads this page's responses turned into.
     pub(super) fn downloads(&self) -> SharedDownloads {
         self.ivars().downloads.clone()
+    }
+
+    /// HTTP response of the latest main-frame navigation, if any.
+    pub(super) fn main_response(&self) -> Option<crate::inspector::MainResponse> {
+        self.ivars().main_response.borrow().clone()
     }
 
     /// Whether the page has asked for a new window we have not loaded.

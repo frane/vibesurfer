@@ -116,6 +116,38 @@ struct W2Page {
     new_window: std::rc::Rc<std::cell::RefCell<Option<String>>>,
     /// Downloads this page's responses turned into.
     downloads: SharedDownloads,
+    /// Main-document response of the latest navigation, assembled by
+    /// the handlers from `install_response_capture`.
+    responses: std::rc::Rc<std::cell::RefCell<ResponseCapture>>,
+}
+
+/// What `install_response_capture` has seen of the latest navigation.
+/// WebView2 reports the status on `NavigationCompleted` and headers on
+/// `WebResourceResponseReceived`, which has no frame or resource-type
+/// information, so responses are kept by URL while the navigation is in
+/// flight and matched against the final `Source` when it completes.
+#[derive(Default)]
+struct ResponseCapture {
+    in_flight: bool,
+    responses: Vec<crate::inspector::MainResponse>,
+    /// Final URL and HTTP status of the completed navigation.
+    done: Option<(String, u16)>,
+}
+
+impl ResponseCapture {
+    /// Responses kept per navigation; the main document's comes early.
+    const MAX: usize = 64;
+
+    fn main_response(&self) -> Option<crate::inspector::MainResponse> {
+        let (url, status) = self.done.clone()?;
+        let found = self.responses.iter().rev().find(|r| r.url == url).cloned();
+        Some(found.unwrap_or_else(|| crate::inspector::MainResponse {
+            url,
+            status,
+            status_text: crate::inspector::reason_phrase(status).to_string(),
+            headers: Vec::new(),
+        }))
+    }
 }
 
 // =============================================================================
@@ -679,6 +711,7 @@ impl Engine for Webview2Backend {
         let _ = add_init_script(&web_view, super::common::DOWNLOAD_SHIM_JS);
         let downloads = SharedDownloads::default();
         install_download_capture(&web_view, &downloads)?;
+        let responses = install_response_capture(&web_view)?;
 
         // A headless page has no second window. WebView2 would open a
         // separate popup the agent cannot address; mark the request
@@ -739,6 +772,7 @@ impl Engine for Webview2Backend {
                 last_mouse: std::cell::Cell::new(vs_humanize::Point { x: 0.0, y: 0.0 }),
                 new_window,
                 downloads,
+                responses,
             },
         );
         Ok(handle)
@@ -1131,6 +1165,13 @@ impl Engine for Webview2Backend {
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
         super::common::run_performance(move |js, _budget| execute_script(&web_view, js))
+    }
+
+    fn main_response(
+        &mut self,
+        page: PageHandle,
+    ) -> EngineResult<Option<crate::inspector::MainResponse>> {
+        Ok(self.page_mut(page)?.responses.borrow().main_response())
     }
 
     fn cookie_events(
@@ -1534,6 +1575,133 @@ mod wv2_cookies {
             same_site,
         }
     }
+}
+
+/// Read a `PWSTR` out-parameter; empty on failure or null.
+fn out_pwstr(f: impl FnOnce(*mut PWSTR) -> windows::core::Result<()>) -> String {
+    let mut p = PWSTR(std::ptr::null_mut());
+    if f(&raw mut p).is_ok() && !p.0.is_null() {
+        take_pwstr(p)
+    } else {
+        String::new()
+    }
+}
+
+/// Track the main document's response for `Engine::main_response`.
+///
+/// `NavigationStarting` (main frame only) clears the record, response
+/// events are kept by URL until `NavigationCompleted`, and completion
+/// stores the final `Source` and `HttpStatusCode`. A status of 0 (a
+/// failed load, `data:`, `about:blank`) or a non-HTTP source records
+/// nothing.
+fn install_response_capture(
+    web_view: &ICoreWebView2,
+) -> EngineResult<std::rc::Rc<std::cell::RefCell<ResponseCapture>>> {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2NavigationCompletedEventArgs2, ICoreWebView2_2,
+    };
+    use webview2_com::{NavigationStartingEventHandler, WebResourceResponseReceivedEventHandler};
+    use windows::core::BOOL;
+
+    let state = std::rc::Rc::new(std::cell::RefCell::new(ResponseCapture::default()));
+
+    let s = state.clone();
+    let starting = NavigationStartingEventHandler::create(Box::new(move |_sender, _args| {
+        let mut st = s.borrow_mut();
+        st.in_flight = true;
+        st.responses.clear();
+        st.done = None;
+        Ok(())
+    }));
+    let mut token: i64 = 0;
+    unsafe { web_view.add_NavigationStarting(&starting, &raw mut token) }
+        .map_err(|e| EngineError::Other(format!("add_NavigationStarting: {e}")))?;
+
+    let s = state.clone();
+    let completed = NavigationCompletedEventHandler::create(Box::new(move |sender, args| {
+        let mut st = s.borrow_mut();
+        st.in_flight = false;
+        let mut status: i32 = 0;
+        if let Some(a2) =
+            args.and_then(|a| a.cast::<ICoreWebView2NavigationCompletedEventArgs2>().ok())
+        {
+            let _ = unsafe { a2.HttpStatusCode(&raw mut status) };
+        }
+        let source = sender
+            .map(|v| out_pwstr(|p| unsafe { v.Source(p) }))
+            .unwrap_or_default();
+        let http = source.starts_with("http:") || source.starts_with("https:");
+        st.done = match u16::try_from(status) {
+            Ok(code) if code > 0 && http => Some((source.clone(), code)),
+            _ => None,
+        };
+        st.responses.retain(|r| r.url == source);
+        Ok(())
+    }));
+    let mut token: i64 = 0;
+    unsafe { web_view.add_NavigationCompleted(&completed, &raw mut token) }
+        .map_err(|e| EngineError::Other(format!("add_NavigationCompleted: {e}")))?;
+
+    let v2: ICoreWebView2_2 = web_view
+        .cast()
+        .map_err(|e| EngineError::Other(format!("cast to ICoreWebView2_2: {e}")))?;
+    let s = state.clone();
+    let received =
+        WebResourceResponseReceivedEventHandler::create(Box::new(move |_sender, args| {
+            let Some(args) = args else { return Ok(()) };
+            let uri = out_pwstr(|p| unsafe { args.Request()?.Uri(p) });
+            {
+                let st = s.borrow();
+                // While the navigation is in flight, keep everything up to
+                // the cap. After it, only a late response for the document.
+                let wanted = if st.in_flight {
+                    st.responses.len() < ResponseCapture::MAX
+                } else {
+                    st.done.as_ref().is_some_and(|(u, _)| *u == uri)
+                        && !st.responses.iter().any(|r| r.url == uri)
+                };
+                if !wanted {
+                    return Ok(());
+                }
+            }
+            let resp = unsafe { args.Response() }?;
+            let mut status: i32 = 0;
+            unsafe { resp.StatusCode(&raw mut status) }?;
+            let status = u16::try_from(status).unwrap_or(0);
+            let mut status_text = out_pwstr(|p| unsafe { resp.ReasonPhrase(p) });
+            if status_text.is_empty() {
+                status_text = crate::inspector::reason_phrase(status).to_string();
+            }
+            let mut headers = Vec::new();
+            let iter = unsafe { resp.Headers()?.GetIterator() }?;
+            loop {
+                let mut has = BOOL::default();
+                unsafe { iter.HasCurrentHeader(&raw mut has) }?;
+                if !has.as_bool() {
+                    break;
+                }
+                let mut name = PWSTR(std::ptr::null_mut());
+                let mut value = PWSTR(std::ptr::null_mut());
+                unsafe { iter.GetCurrentHeader(&raw mut name, &raw mut value) }?;
+                headers.push((take_pwstr(name).to_ascii_lowercase(), take_pwstr(value)));
+                let mut next = BOOL::default();
+                unsafe { iter.MoveNext(&raw mut next) }?;
+            }
+            s.borrow_mut()
+                .responses
+                .push(crate::inspector::MainResponse {
+                    url: uri,
+                    status,
+                    status_text,
+                    headers,
+                });
+            Ok(())
+        }));
+    let mut token: i64 = 0;
+    unsafe { v2.add_WebResourceResponseReceived(&received, &raw mut token) }
+        .map_err(|e| EngineError::Other(format!("add_WebResourceResponseReceived: {e}")))?;
+
+    Ok(state)
 }
 
 /// Take over WebView2's own downloads.

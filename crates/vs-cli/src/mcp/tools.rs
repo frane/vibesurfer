@@ -127,7 +127,7 @@ fn base_tools() -> Vec<Value> {
             ("page", str_prop("Page id (passed for audit context; the primitive itself does not touch the page).", true)),
             ("message", str_prop("Prompt text shown to the human. State what they are confirming.", true)),
         ])),
-        tool("vs_move_to", "Move the cursor to (x, y) along a humanized Bezier path. Trusted NSEvent dispatch on macOS; ENGINE_UNSUPPORTED on Linux/Windows for now.", obj(&[
+        tool("vs_move_to", "Move the cursor to (x, y) along a humanized Bezier path. Trusted (isTrusted=true) on all platforms.", obj(&[
             ("page", str_prop("Page id.", true)),
             ("x", num_prop("Target X in CSS pixels (client space, top-left origin).", true)),
             ("y", num_prop("Target Y in CSS pixels.", true)),

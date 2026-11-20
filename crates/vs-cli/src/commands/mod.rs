@@ -279,7 +279,7 @@ pub enum Command {
         rest: Vec<String>,
     },
     /// 20. Inspect engine state — console, network, request detail,
-    ///     storage, scripts, dom, performance. The first positional is
+    ///     storage, scripts, dom, performance, response. The first positional is
     ///     the page id; the second is the kind. Trailing positionals
     ///     are kind-specific (e.g. `request <seq>`, `eval <expr>`,
     ///     `storage <scope>`, `script <seq>`).
@@ -303,8 +303,7 @@ pub enum Command {
         unsafe_log: bool,
     },
     /// Move the cursor to `(x, y)` along a humanized Bezier path.
-    /// Native trusted-event dispatch on macOS; ENGINE_UNSUPPORTED
-    /// elsewhere until M7 wires GDK / CDP input.
+    /// Trusted events on all platforms.
     #[command(visible_alias = "mt")]
     MoveTo {
         page: String,
@@ -1131,6 +1130,7 @@ fn normalize_inspect_kind(kind: &str) -> &str {
         "s" => "storage",
         "scr" => "scripts",
         "src" => "script",
+        "res" => "response",
         "d" => "dom",
         "p" => "performance",
         "ce" => "cookie-events",

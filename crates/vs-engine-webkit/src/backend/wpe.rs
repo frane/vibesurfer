@@ -72,6 +72,9 @@ struct WpePage {
     /// The shared network session's `download-started` handler for
     /// this page. Disconnected on close.
     download_hook: Option<(webkit6::NetworkSession, glib::SignalHandlerId)>,
+    /// HTTP response of the latest main-frame navigation. Kept by the
+    /// `load-changed` handler from `install_response_capture`.
+    main_response: Rc<RefCell<Option<crate::inspector::MainResponse>>>,
 }
 
 // =============================================================================
@@ -218,6 +221,7 @@ impl Engine for WpeBackend {
         });
         let downloads = SharedDownloads::default();
         let download_hook = install_download_capture(&web_view, &downloads);
+        let main_response = install_response_capture(&web_view);
         web_view.load_uri(url);
 
         // Wait for LoadEvent::Finished or LoadEvent::Failed via signal.
@@ -274,6 +278,7 @@ impl Engine for WpeBackend {
                 new_window,
                 downloads,
                 download_hook,
+                main_response,
             },
         );
         Ok(handle)
@@ -605,6 +610,13 @@ impl Engine for WpeBackend {
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
         super::common::run_performance(move |js, budget| eval_js_string(&web_view, js, budget))
+    }
+
+    fn main_response(
+        &mut self,
+        page: PageHandle,
+    ) -> EngineResult<Option<crate::inspector::MainResponse>> {
+        Ok(self.page_mut(page)?.main_response.borrow().clone())
     }
 
     fn cookie_events(
@@ -1139,6 +1151,52 @@ fn load_result(err: &glib::Error) -> Result<(), String> {
     } else {
         Err(err.message().to_string())
     }
+}
+
+/// Keep the HTTP response of each main-frame navigation.
+///
+/// `load-changed` fires for the main frame only. The slot is cleared
+/// when a load starts, so a failed or non-HTTP load reports nothing,
+/// and filled at commit, when the main resource has its response.
+fn install_response_capture(
+    web_view: &WebView,
+) -> Rc<RefCell<Option<crate::inspector::MainResponse>>> {
+    let slot: Rc<RefCell<Option<crate::inspector::MainResponse>>> = Rc::new(RefCell::new(None));
+    let sink = slot.clone();
+    web_view.connect_load_changed(move |view, event| match event {
+        LoadEvent::Started => {
+            sink.borrow_mut().take();
+        }
+        LoadEvent::Committed => {
+            *sink.borrow_mut() = view
+                .main_resource()
+                .and_then(|r| r.response())
+                .and_then(|r| http_response(&r));
+        }
+        _ => {}
+    });
+    slot
+}
+
+fn http_response(resp: &webkit6::URIResponse) -> Option<crate::inspector::MainResponse> {
+    let url = resp.uri().map(|u| u.to_string()).unwrap_or_default();
+    if !(url.starts_with("http:") || url.starts_with("https:")) {
+        return None;
+    }
+    let status = u16::try_from(resp.status_code()).unwrap_or(0);
+    if status == 0 {
+        return None;
+    }
+    let mut headers = Vec::new();
+    if let Some(h) = resp.http_headers() {
+        h.foreach(|name, value| headers.push((name.to_ascii_lowercase(), value.to_string())));
+    }
+    Some(crate::inspector::MainResponse {
+        url,
+        status,
+        status_text: crate::inspector::reason_phrase(status).to_string(),
+        headers,
+    })
 }
 
 /// Save attachments instead of dropping them.

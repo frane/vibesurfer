@@ -6,6 +6,9 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `vs inspect <PAGE> response` (`i <PAGE> res`, wire `vs_inspect response`) reports the HTTP response of the page's last main-frame navigation: `url=` (after redirects), `status=`, `status_text=`, then one `h <name>: <value>` line per header with lower-cased names. The body is `none` for `data:`, `about:blank`, `file:` or a failed load. Page script cannot read the status, so each engine records it: `decidePolicyForNavigationResponse` on macOS, `load-changed` at commit on Linux, `NavigationCompleted` plus `WebResourceResponseReceived` on Windows. macOS folds repeated headers into one comma-joined value and has no server reason phrase, so the standard one is used there and on Linux. Fixture routes `/missing` and `/redirect-static`; cell `cell_inspect_response`.
+
 ### Changed
 - Refs are no longer written into the page as `data-vs-ref` attributes. The walker keeps them in its own maps (element to ref, ref to element), so a page's markup, `outerHTML`, attribute selectors and mutation observers never see them, and a page cannot read or forge one. `window.__vsRefOf(el)` gives an element's ref to scripts that need it. Cell `cell_refs_stay_out_of_the_markup`.
 

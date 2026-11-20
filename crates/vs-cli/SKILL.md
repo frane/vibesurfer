@@ -51,6 +51,7 @@ Wire form is `vs_<name>` (over the socket); CLI subcommand is `<name>` with hyph
 | 6 | `vs read <PAGE> <REF>` | Full text of one ref. |
 | 13 | `vs status` | Sessions, pages, and `live=` — how many still hold a web view. `live` is the number that costs memory and processes. |
 | 14 | `vs log [--page=<P>] [--group=<G>] [--since=<EPOCH>] [--limit=N]` | Audit log slice. |
+| - | `vs inspect <PAGE> response` (`i <PAGE> res`) | Main document's HTTP response from the last navigation: `url=`, `status=`, `status_text=`, then `h <name>: <value>` per header. `none` for `data:`, `about:blank`, `file:`, or a failed load. |
 
 ### Mutate (7, 9–12, 17)
 

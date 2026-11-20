@@ -161,7 +161,7 @@ Every primitive has a one-to-three-letter alias. Long forms exist for documentat
 | `wait`         | `w`   | | `layout`   | `lay` |
 | `auth`         | `au`  | | `inspect`  | `i`   |
 
-Frequent flags: `--session=` / `-S`, `--full` / `-F`, `--since=` / `-s`, `--limit=` / `-n`, `--page=` / `-P`, `--json` / `-j`. Inspect subcommands have one-or-two-letter aliases too (`i co` for `inspect console`, `i n` for `network`, `i req` for `request`, `i e` for `eval`, `i s` for `storage`, `i scr` for `scripts`, `i src` for `script`, `i d` for `dom`, `i p` for `performance`).
+Frequent flags: `--session=` / `-S`, `--full` / `-F`, `--since=` / `-s`, `--limit=` / `-n`, `--page=` / `-P`, `--json` / `-j`. Inspect subcommands have one-or-two-letter aliases too (`i co` for `inspect console`, `i n` for `network`, `i req` for `request`, `i e` for `eval`, `i s` for `storage`, `i scr` for `scripts`, `i src` for `script`, `i res` for `response`, `i d` for `dom`, `i p` for `performance`).
 
 Both forms work everywhere. The integration tests assert that the wire request from a short form is byte-identical to the wire request from the long form.
 

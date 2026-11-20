@@ -243,6 +243,15 @@ fn alias_inspect_kind_scripts() {
 }
 
 #[test]
+fn alias_inspect_kind_response() {
+    assert_parity(
+        &["inspect", "p_1", "response"],
+        &["i", "p_1", "res"],
+        "inspect response / i res",
+    );
+}
+
+#[test]
 fn alias_inspect_kind_script() {
     assert_parity(
         &["inspect", "p_1", "script", "0"],

@@ -566,6 +566,7 @@ pub(super) fn handle_inspect(daemon: &Daemon, req: &Request) -> String {
         "storage" => render_storage(daemon, &session_id, &page_id, req),
         "scripts" => render_scripts(daemon, &session_id, &page_id),
         "script" => render_script(daemon, &session_id, &page_id, req),
+        "response" => render_response(daemon, &session_id, &page_id),
         "dom" => render_dom(daemon, &session_id, &page_id, req),
         "performance" => render_performance(daemon, &session_id, &page_id),
         "cookie-events" => render_cookie_events(daemon, &session_id, &page_id, req),
@@ -915,6 +916,26 @@ fn render_scripts(daemon: &Daemon, session_id: &str, page_id: &str) -> String {
         );
     }
     format!("{}{body}", ResponseHead::ok(StateToken::ZERO).encode())
+}
+
+fn render_response(daemon: &Daemon, session_id: &str, page_id: &str) -> String {
+    use std::fmt::Write as _;
+    let resp = match daemon.inspect_response(session_id, page_id) {
+        Ok(r) => r,
+        Err(e) => return format_daemon_error(&e),
+    };
+    let head = ResponseHead::ok(StateToken::ZERO).encode();
+    let Some(r) = resp else {
+        return format!("{head}none\n");
+    };
+    let mut body = format!(
+        "url={}\nstatus={}\nstatus_text={}\n",
+        r.url, r.status, r.status_text
+    );
+    for (name, value) in &r.headers {
+        let _ = writeln!(body, "h {name}: {value}");
+    }
+    format!("{head}{body}")
 }
 
 fn render_script(daemon: &Daemon, session_id: &str, page_id: &str, req: &Request) -> String {

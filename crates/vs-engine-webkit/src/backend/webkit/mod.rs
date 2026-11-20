@@ -936,6 +936,13 @@ impl Engine for WkBackend {
         super::common::run_performance(move |js, budget| eval_js_string(&web_view, js, budget))
     }
 
+    fn main_response(
+        &mut self,
+        page: PageHandle,
+    ) -> EngineResult<Option<crate::inspector::MainResponse>> {
+        Ok(self.page_mut(page)?.nav_delegate.main_response())
+    }
+
     fn cookie_events(
         &mut self,
         page: PageHandle,

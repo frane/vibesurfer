@@ -354,3 +354,60 @@ fn cell_engine_unsupported_when_install_disabled() {
         );
     }
 }
+
+/// `vs inspect <PAGE> response` reports the main document's HTTP
+/// response from the last navigation, and `none` once a non-HTTP load
+/// replaces it.
+#[test]
+fn cell_inspect_response() {
+    for backend in each_available_backend() {
+        eprintln!("== cell_inspect_response: backend={} ==", backend.name());
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/static.html");
+
+        let r = ctx.vs(&["inspect", &page, "response"]);
+        assert_ok("inspect response after open", &r);
+        let body = body_rest(&r);
+        let url = ctx.url("/static.html");
+        assert!(
+            body.contains(&format!("url={url}\n")),
+            "200 url; got:\n{body}"
+        );
+        assert!(body.contains("status=200\n"), "status 200; got:\n{body}");
+        assert!(body.contains("status_text=OK\n"), "OK; got:\n{body}");
+        assert!(
+            body.contains("h cache-control: no-store"),
+            "headers; got:\n{body}"
+        );
+
+        let r = ctx.vs(&["goto", &page, &ctx.url("/missing")]);
+        assert_ok("goto /missing", &r);
+        let r = ctx.vs(&["i", &page, "res"]);
+        assert_ok("inspect response after 404", &r);
+        let body = body_rest(&r);
+        assert!(body.contains("status=404\n"), "status 404; got:\n{body}");
+        assert!(
+            body.contains("status_text=Not Found\n"),
+            "reason; got:\n{body}"
+        );
+        assert!(
+            body.contains("h x-test: yes"),
+            "x-test header; got:\n{body}"
+        );
+
+        let r = ctx.vs(&["goto", &page, &ctx.url("/redirect-static")]);
+        assert_ok("goto /redirect-static", &r);
+        let r = ctx.vs(&["inspect", &page, "response"]);
+        let body = body_rest(&r);
+        assert!(
+            body.contains(&format!("url={url}\n")) && body.contains("status=200\n"),
+            "redirect reports the final response; got:\n{body}"
+        );
+
+        let r = ctx.vs(&["goto", &page, "data:text/html,<p>data</p>"]);
+        assert_ok("goto data:", &r);
+        let r = ctx.vs(&["inspect", &page, "response"]);
+        assert_ok("inspect response after data:", &r);
+        assert_eq!(body_rest(&r).trim(), "none", "data: has no response");
+    }
+}

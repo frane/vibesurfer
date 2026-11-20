@@ -19,6 +19,8 @@
 //!   attachment`, the shape of a citation-export endpoint.
 //! - `GET  /static/script-a.js`, `/static/script-b.js` — small JS
 //!   files, used by `scripts.html`.
+//! - `GET  /missing` — 404 HTML page with `X-Test: yes`.
+//! - `GET  /redirect-static` — 302 to `/static.html`.
 //!
 //! Every response gets `Cache-Control: no-store` to keep WebKit's
 //! caches out of the test loop.
@@ -152,6 +154,20 @@ fn handle(mut req: Request) -> std::io::Result<()> {
     }
     if path.starts_with("/static/") {
         return handle_static(req, &path);
+    }
+    if path == "/missing" {
+        let resp = Response::from_string("<!doctype html><title>missing</title><p>missing</p>")
+            .with_status_code(404)
+            .with_header(header("Content-Type", "text/html; charset=utf-8"))
+            .with_header(header("X-Test", "yes"))
+            .with_header(no_store());
+        return req.respond(resp);
+    }
+    if path == "/redirect-static" {
+        let resp = Response::empty(StatusCode(302))
+            .with_header(header("Location", "/static.html"))
+            .with_header(no_store());
+        return req.respond(resp);
     }
 
     let rel = path.trim_start_matches('/');

@@ -423,6 +423,13 @@ impl EngineRuntime {
         self.dispatch(move |e| e.performance(page))
     }
 
+    pub fn main_response(
+        &self,
+        page: PageHandle,
+    ) -> EngineResult<Option<crate::inspector::MainResponse>> {
+        self.dispatch(move |e| e.main_response(page))
+    }
+
     pub fn capabilities(&self) -> EngineResult<EngineCapabilities> {
         self.dispatch(|e| Ok(e.capabilities()))
     }

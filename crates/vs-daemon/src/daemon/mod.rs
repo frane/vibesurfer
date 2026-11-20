@@ -599,6 +599,26 @@ impl Daemon {
         })
     }
 
+    pub fn inspect_response(
+        &self,
+        session_id: &str,
+        page_id: &str,
+    ) -> Result<Option<vs_engine_webkit::inspector::MainResponse>> {
+        let ctx = AuditCtx::new("vs_inspect", session_id)
+            .with_page(page_id)
+            .with_args(
+                "response".into(),
+                crate::tokens::args_hash("vs_inspect", &["response".into()]),
+            );
+        self.audit_call(ctx, |ctx| {
+            self.require_session(session_id)?;
+            let handle = self.engine_handle_for(session_id, page_id)?;
+            let resp = self.inner.engine.main_response(handle)?;
+            ctx.after_token = Some(self.current_token(session_id, page_id)?);
+            Ok(resp)
+        })
+    }
+
     pub fn inspect_script_source(
         &self,
         session_id: &str,
