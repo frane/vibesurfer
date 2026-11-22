@@ -128,6 +128,15 @@ fn drive(
                 a.push(&id);
                 a.extend(args[1..].iter().map(String::as_str));
                 let r = sv(ctx, s, &a);
+                // The browser may give up on a request before the
+                // decision lands (WebView2 drops its own background
+                // requests); the proxy then answers NOT_FOUND. A
+                // request the test cares about is checked below.
+                if r.stdout.starts_with("! NOT_FOUND") {
+                    eprintln!("drive: {} {} already gone", ev.id, ev.url());
+                    seen.push(ev);
+                    continue;
+                }
                 assert_ok(&format!("net {args:?} {id}"), &r);
             }
             seen.push(ev);

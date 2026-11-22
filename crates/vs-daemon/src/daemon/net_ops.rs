@@ -19,9 +19,7 @@ impl SessionState {
         let net = SessionNet::start(daemon.mitm()?)
             .map_err(|e| DaemonError::Other(anyhow::anyhow!("intercept proxy: {e}")))?;
         if self.popups {
-            if let Some(f) = daemon.popups_settled_fn() {
-                net.set_popups_settled(f);
-            }
+            net.set_popups_settled(daemon.popups_settled_fn());
         }
         self.net = Some(net.clone());
         Ok(net)

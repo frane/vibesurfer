@@ -295,11 +295,8 @@ impl SessionNet {
         self.events_cv.notify_all();
     }
 
-    /// Park the calling connection thread until the client decides, or
-    /// until `gone()` says the browser gave up on the request (the page
-    /// aborted the fetch, removed the frame, navigated away): then it is
-    /// dropped as `cancelled`, and a late decision gets NOT_FOUND.
-    fn hold(&self, id: u64, req: &ProxyRequest, gone: &dyn Fn() -> bool) -> Decision {
+    /// Register `req` as held, so a decision for `id` finds it.
+    fn park(&self, id: u64, req: &ProxyRequest) -> mpsc::Receiver<Decision> {
         let (tx, rx) = mpsc::channel();
         self.held.lock().expect("poisoned").insert(
             id,
@@ -308,6 +305,18 @@ impl SessionNet {
                 tx,
             },
         );
+        rx
+    }
+
+    /// Park the calling connection thread until the client decides, or
+    /// until `gone()` says the browser gave up on the request (the page
+    /// aborted the fetch, removed the frame, navigated away): then it is
+    /// dropped as `cancelled`, and a late decision gets NOT_FOUND.
+    ///
+    /// The request must be parked (see [`Self::park`]) before its `req`
+    /// event goes out: a client that answers at once otherwise finds
+    /// nothing held and gets NOT_FOUND.
+    fn hold(&self, id: u64, rx: &mpsc::Receiver<Decision>, gone: &dyn Fn() -> bool) -> Decision {
         // Routing may have been switched off between the caller's check
         // and the insert; nothing would release this one then.
         if !self.routing() {

@@ -29,7 +29,10 @@ const TICK: Duration = Duration::from_millis(5);
 /// handled.
 #[derive(Default)]
 pub(crate) struct Counters {
-    feed: OnceLock<Option<Arc<PopupFeed>>>,
+    /// Filled by the adoption thread on its first tick, the only place
+    /// that asks the engine for it; callers holding the session lock
+    /// must not wait on the engine thread.
+    feed: Arc<OnceLock<Option<Arc<PopupFeed>>>>,
     handled: Arc<AtomicU64>,
     /// Serializes draining, so events are handled in order.
     drain: Mutex<()>,
@@ -47,12 +50,14 @@ impl Daemon {
     /// True once every popup event the engine raised is handled. The
     /// intercept proxy holds a main-frame navigation on it briefly, so
     /// a popup's `page` line reaches the client before its request.
-    pub(crate) fn popups_settled_fn(&self) -> Option<Arc<dyn Fn() -> bool + Send + Sync>> {
-        let feed = self.feed()?;
+    /// Never calls the engine: before the feed is known, it is settled.
+    pub(crate) fn popups_settled_fn(&self) -> Arc<dyn Fn() -> bool + Send + Sync> {
+        let feed = self.inner.popups.feed.clone();
         let handled = self.inner.popups.handled.clone();
-        Some(Arc::new(move || {
-            handled.load(Ordering::SeqCst) >= feed.raised()
-        }))
+        Arc::new(move || match feed.get() {
+            Some(Some(f)) => handled.load(Ordering::SeqCst) >= f.raised(),
+            _ => true,
+        })
     }
 
     /// Turn real popups on for a fresh engine page of a `--popups`

@@ -662,10 +662,14 @@ impl Engine for Webview2Backend {
                             // daemon's CA. Chromium accepts a chain with
                             // any of these public keys despite the
                             // unknown root; the flag applies to this
-                            // session's browser process only.
+                            // session's browser process only. Edge's own
+                            // background traffic (component updates,
+                            // telemetry) would otherwise reach the proxy
+                            // and the session's event stream as if the
+                            // page had made it.
                             let options = webview2_com::CoreWebView2EnvironmentOptions::default();
                             options.set_additional_browser_arguments(format!(
-                                "--proxy-server=http://127.0.0.1:{port} --proxy-bypass-list=<-loopback> --ignore-certificate-errors-spki-list={pins}"
+                                "--proxy-server=http://127.0.0.1:{port} --proxy-bypass-list=<-loopback> --ignore-certificate-errors-spki-list={pins} --disable-background-networking --disable-component-update --disable-domain-reliability"
                             ));
                             let options: webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2EnvironmentOptions =
                                 options.into();

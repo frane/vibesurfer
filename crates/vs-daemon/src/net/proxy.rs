@@ -177,12 +177,15 @@ fn browser_gone(sock: &TcpStream) -> bool {
 /// connection is consumed: it carries one request.
 fn exchange(net: &SessionNet, req: &ProxyRequest, mut conn: BufReader<Stream>) -> io::Result<()> {
     let id = net.next_id();
+    // Held before it is announced, so an immediate decision finds it.
+    let parked = net.routing().then(|| net.park(id, req));
     net.ev_request(id, req, classify(&req.method, &req.url, &req.headers));
-    let decision = if net.routing() {
-        let gone = || browser_gone(conn.get_ref().sock());
-        net.hold(id, req, &gone)
-    } else {
-        Decision::Continue(Overrides::default())
+    let decision = match parked {
+        Some(rx) => {
+            let gone = || browser_gone(conn.get_ref().sock());
+            net.hold(id, &rx, &gone)
+        }
+        None => Decision::Continue(Overrides::default()),
     };
     match decision {
         Decision::Abort(error) => {
