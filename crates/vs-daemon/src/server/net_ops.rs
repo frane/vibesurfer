@@ -162,6 +162,29 @@ pub(super) fn handle_abort(daemon: &Daemon, req: &Request) -> String {
     run().unwrap_or_else(|e| e)
 }
 
+/// `vs_net_dialog <id> accept|dismiss [--text=T]`: answer a `dialog`
+/// event. A prompt accepted without `--text` gets its default.
+pub(super) fn handle_dialog(daemon: &Daemon, req: &Request) -> String {
+    let run = || -> Result<String, String> {
+        let (_net, id) = net_and_id(daemon, req)?;
+        let id = need_id(req, id)?;
+        let accept = match req.args.get(1).map(String::as_str) {
+            Some("accept") => true,
+            Some("dismiss") => false,
+            _ => return Err(bad("vs_net_dialog: <id> accept|dismiss")),
+        };
+        if daemon.answer_dialog(id, accept, flag_value(req, "text")) {
+            Ok(ok(""))
+        } else {
+            Err(format_error(
+                ErrorCode::EngineUnsupported,
+                vec!["vs_net_dialog".into()],
+            ))
+        }
+    };
+    run().unwrap_or_else(|e| e)
+}
+
 pub(super) fn handle_fetch(daemon: &Daemon, req: &Request) -> String {
     let run = || -> Result<String, String> {
         let (net, id) = net_and_id(daemon, req)?;

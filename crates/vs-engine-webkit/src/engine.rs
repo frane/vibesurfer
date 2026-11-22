@@ -784,16 +784,63 @@ pub enum PopupEvent {
     Opened(Popup),
     /// The page called `window.close()`; the engine releases it.
     Closed(PageHandle),
+    /// The page opened `alert()`, `confirm()` or `prompt()` and waits
+    /// for [`PopupFeed::answer`] (dismissed after [`DIALOG_TIMEOUT`]).
+    Dialog(Dialog),
 }
 
-/// See [`Engine::popup_feed`].
+/// A JavaScript dialog a page is blocked on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dialog {
+    pub page: PageHandle,
+    pub id: u64,
+    /// `alert`, `confirm` or `prompt`.
+    pub kind: &'static str,
+    pub message: String,
+    /// A prompt's default text.
+    pub default: String,
+}
+
+/// How a dialog is closed: OK (with a prompt's text) or Cancel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DialogAnswer {
+    pub accept: bool,
+    pub text: Option<String>,
+}
+
+/// A dialog nobody answers is dismissed after this long, so a page is
+/// never left blocked.
+pub const DIALOG_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// See [`Engine::popup_feed`]. Carries dialogs too: they need the same
+/// off-thread path, since the page's script is blocked until answered.
 #[derive(Debug, Default)]
 pub struct PopupFeed {
     events: std::sync::Mutex<Vec<PopupEvent>>,
     raised: std::sync::atomic::AtomicU64,
+    answers: std::sync::Mutex<std::collections::HashMap<u64, DialogAnswer>>,
+    last_dialog: std::sync::atomic::AtomicU64,
 }
 
 impl PopupFeed {
+    /// A fresh dialog id.
+    pub fn next_dialog_id(&self) -> u64 {
+        self.last_dialog
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1
+    }
+
+    /// Answer dialog `id`. The engine applies it on its next check
+    /// (within a few milliseconds), from any thread.
+    pub fn answer(&self, id: u64, answer: DialogAnswer) {
+        self.answers.lock().expect("poisoned").insert(id, answer);
+    }
+
+    /// The answer for `id`, once given.
+    pub fn take_answer(&self, id: u64) -> Option<DialogAnswer> {
+        self.answers.lock().expect("poisoned").remove(&id)
+    }
+
     pub fn push(&self, e: PopupEvent) {
         self.events.lock().expect("poisoned").push(e);
         self.raised

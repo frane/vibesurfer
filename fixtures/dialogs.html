@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Dialogs</title></head>
+<body>
+  <button onclick="document.getElementById('o').textContent = confirm('Sure?') ? 'yes' : 'no'">Confirm</button>
+  <button onclick="document.getElementById('o').textContent = String(prompt('Name?', 'def'))">Prompt</button>
+  <p id="o"></p>
+</body>
+</html>

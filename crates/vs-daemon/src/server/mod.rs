@@ -192,6 +192,7 @@ pub fn dispatch(daemon: &Daemon, req: &Request) -> String {
         "vs_net_continue" => net_ops::handle_continue(daemon, req),
         "vs_net_fulfill" => net_ops::handle_fulfill(daemon, req),
         "vs_net_abort" => net_ops::handle_abort(daemon, req),
+        "vs_net_dialog" => net_ops::handle_dialog(daemon, req),
         "vs_net_fetch" => net_ops::handle_fetch(daemon, req),
         "vs_net_body" => net_ops::handle_body(daemon, req),
         other => format_error(

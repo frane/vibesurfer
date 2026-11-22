@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use vs_engine_webkit::{PageHandle, Popup, PopupEvent, PopupFeed};
+use vs_engine_webkit::{Dialog, DialogAnswer, PageHandle, Popup, PopupEvent, PopupFeed};
 
 use super::Daemon;
 use crate::page_state::PageState;
@@ -86,6 +86,7 @@ impl Daemon {
             match e {
                 PopupEvent::Opened(p) => self.adopt(&p),
                 PopupEvent::Closed(h) => self.forget_closed(h),
+                PopupEvent::Dialog(d) => self.report_dialog(&feed, &d),
             }
             self.inner.popups.handled.fetch_add(1, Ordering::SeqCst);
         }
@@ -133,6 +134,49 @@ impl Daemon {
                 let _ = self.inner.engine.close(p.page);
             }
         }
+    }
+
+    /// `dialog <page> <id> <kind> <message-b64> <default-b64>` on the
+    /// page's event stream; with no stream to answer on, dismissed now.
+    fn report_dialog(&self, feed: &PopupFeed, d: &Dialog) {
+        use base64::Engine as _;
+        let b64 = |s: &str| base64::engine::general_purpose::STANDARD.encode(s);
+        let found = {
+            let sessions = self.inner.sessions.lock().expect("poisoned");
+            sessions.values().find_map(|s| {
+                let page = s
+                    .pages
+                    .values()
+                    .find(|pg| pg.engine_handle == Some(d.page))?;
+                Some((page.id.clone(), s.net.clone()))
+            })
+        };
+        match found {
+            Some((page_id, Some(net))) => net.push_line(format!(
+                "dialog {page_id} {} {} {} {}\n",
+                d.id,
+                d.kind,
+                b64(&d.message),
+                b64(&d.default)
+            )),
+            _ => feed.answer(
+                d.id,
+                DialogAnswer {
+                    accept: false,
+                    text: None,
+                },
+            ),
+        }
+    }
+
+    /// Answer dialog `id` (see `report_dialog`). False when the engine
+    /// has no dialogs to answer.
+    pub(crate) fn answer_dialog(&self, id: u64, accept: bool, text: Option<String>) -> bool {
+        let Some(feed) = self.feed() else {
+            return false;
+        };
+        feed.answer(id, DialogAnswer { accept, text });
+        true
     }
 
     fn forget_closed(&self, handle: PageHandle) {

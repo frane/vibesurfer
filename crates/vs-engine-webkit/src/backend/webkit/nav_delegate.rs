@@ -8,16 +8,16 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use objc2::rc::Retained;
-use objc2::runtime::ProtocolObject;
+use objc2::runtime::{Bool, ProtocolObject};
 use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly, Message};
 use objc2_foundation::{
     NSData, NSError, NSHTTPURLResponse, NSInteger, NSObject, NSObjectProtocol, NSRect, NSString,
     NSURLAuthenticationChallenge, NSURLCredential, NSURLRequest, NSURLResponse, NSURL,
 };
 use objc2_web_kit::{
-    WKDownload, WKDownloadDelegate, WKNavigation, WKNavigationAction, WKNavigationDelegate,
-    WKNavigationResponse, WKNavigationResponsePolicy, WKUIDelegate, WKWebView,
-    WKWebViewConfiguration, WKWindowFeatures,
+    WKDownload, WKDownloadDelegate, WKFrameInfo, WKNavigation, WKNavigationAction,
+    WKNavigationDelegate, WKNavigationResponse, WKNavigationResponsePolicy, WKUIDelegate,
+    WKWebView, WKWebViewConfiguration, WKWindowFeatures,
 };
 
 use crate::backend::native_download::{
@@ -336,6 +336,67 @@ define_class!(
                 super::popup_closed(&queue, page);
             }
         }
+
+        /// `alert()`. Reported and held when the page has a popup feed;
+        /// otherwise closed at once, as WebKit does with no UI delegate.
+        #[unsafe(method(webView:runJavaScriptAlertPanelWithMessage:initiatedByFrame:completionHandler:))]
+        fn alert(
+            &self,
+            _web_view: &WKWebView,
+            message: &NSString,
+            _frame: &WKFrameInfo,
+            handler: &block2::DynBlock<dyn Fn()>,
+        ) {
+            let h = handler.copy();
+            let finish = Box::new(move |_: Option<crate::engine::DialogAnswer>| h.call(()));
+            if !self.report_dialog("alert", message, None, finish) {
+                handler.call(());
+            }
+        }
+
+        /// `confirm()`: OK only when the client accepts it.
+        #[unsafe(method(webView:runJavaScriptConfirmPanelWithMessage:initiatedByFrame:completionHandler:))]
+        fn confirm(
+            &self,
+            _web_view: &WKWebView,
+            message: &NSString,
+            _frame: &WKFrameInfo,
+            handler: &block2::DynBlock<dyn Fn(Bool)>,
+        ) {
+            let h = handler.copy();
+            let finish = Box::new(move |a: Option<crate::engine::DialogAnswer>| {
+                h.call((Bool::new(a.is_some_and(|a| a.accept)),));
+            });
+            if !self.report_dialog("confirm", message, None, finish) {
+                handler.call((Bool::NO,));
+            }
+        }
+
+        /// `prompt()`: the client's text (else the default) on accept,
+        /// null on dismiss.
+        #[unsafe(method(webView:runJavaScriptTextInputPanelWithPrompt:defaultText:initiatedByFrame:completionHandler:))]
+        fn prompt(
+            &self,
+            _web_view: &WKWebView,
+            prompt: &NSString,
+            default_text: Option<&NSString>,
+            _frame: &WKFrameInfo,
+            handler: &block2::DynBlock<dyn Fn(*mut NSString)>,
+        ) {
+            let default = default_text.map(ToString::to_string).unwrap_or_default();
+            let h = handler.copy();
+            let fallback = default.clone();
+            let finish = Box::new(move |a: Option<crate::engine::DialogAnswer>| match a {
+                Some(a) if a.accept => {
+                    let text = NSString::from_str(&a.text.unwrap_or_else(|| fallback.clone()));
+                    h.call((Retained::as_ptr(&text).cast_mut(),));
+                }
+                _ => h.call((std::ptr::null_mut(),)),
+            });
+            if !self.report_dialog("prompt", prompt, Some(default), finish) {
+                handler.call((std::ptr::null_mut(),));
+            }
+        }
     }
 
     unsafe impl NSObjectProtocol for NavDelegate {}
@@ -435,6 +496,33 @@ impl NavDelegate {
     /// Whether this page opens real popup windows.
     pub(super) fn popups(&self) -> bool {
         self.ivars().popups.borrow().is_some()
+    }
+
+    /// Put a dialog on the popup feed and hand `finish` its answer
+    /// later. False when the page has no feed: the caller closes the
+    /// dialog itself.
+    fn report_dialog(
+        &self,
+        kind: &'static str,
+        message: &NSString,
+        default: Option<String>,
+        finish: Box<dyn Fn(Option<crate::engine::DialogAnswer>)>,
+    ) -> bool {
+        let queue = self.ivars().popups.borrow().clone();
+        let (Some(queue), Some(page)) = (queue, self.ivars().page.get()) else {
+            return false;
+        };
+        let feed = queue.borrow().feed.clone();
+        let id = feed.next_dialog_id();
+        feed.push(crate::engine::PopupEvent::Dialog(crate::engine::Dialog {
+            page,
+            id,
+            kind,
+            message: message.to_string(),
+            default: default.unwrap_or_default(),
+        }));
+        super::dialogs::await_answer(feed, id, finish);
+        true
     }
 
     /// Shared navigation-result slot. Reused by `navigate` to await an

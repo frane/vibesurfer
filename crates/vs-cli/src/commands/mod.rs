@@ -653,6 +653,15 @@ pub enum NetSub {
         #[arg(long = "body-b64", value_name = "B64")]
         body_b64: Option<String>,
     },
+    /// Answer a `dialog` event (`--popups` sessions): `accept` or
+    /// `dismiss`. A prompt takes `--text`, else its default. Dialogs
+    /// nobody answers are dismissed after 10 s.
+    Dialog {
+        id: u64,
+        action: String,
+        #[arg(long)]
+        text: Option<String>,
+    },
     /// Fail a held request: the browser connection is closed.
     Abort {
         id: u64,
@@ -1223,6 +1232,15 @@ impl Command {
                         o.apply(Request::new("vs_net_fetch").arg(id.to_string()))
                     }
                     NetSub::Body { id } => Request::new("vs_net_body").arg(id.to_string()),
+                    NetSub::Dialog { id, action, text } => {
+                        let r = Request::new("vs_net_dialog")
+                            .arg(id.to_string())
+                            .arg(action.clone());
+                        match text {
+                            Some(t) => r.flag_value("text", t.clone()),
+                            None => r,
+                        }
+                    }
                 };
                 r.flag_value("session", s)
             }

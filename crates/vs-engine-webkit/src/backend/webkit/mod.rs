@@ -17,6 +17,7 @@
 
 mod capture;
 mod cookie_store;
+mod dialogs;
 mod eval;
 mod frames;
 mod headless_webview;

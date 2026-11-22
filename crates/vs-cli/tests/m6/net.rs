@@ -722,3 +722,73 @@ fn cell_popups_open_their_own_page() {
         );
     }
 }
+
+// `--popups` sessions report `alert`/`confirm`/`prompt` as `dialog`
+// lines and hold them for `vs net dialog`, even while the click that
+// opened one is still running; the click returns after the answer.
+#[test]
+fn cell_dialogs_wait_for_an_answer() {
+    for _ in each_available_backend() {
+        if !cfg!(target_os = "macos") {
+            continue;
+        }
+        let ctx = TestContext::start();
+        let r = ctx.vs(&["session-open", "--intercept", "--popups"]);
+        assert_ok("session-open --popups", &r);
+        let s = body_first(&r);
+        let r = sv(&ctx, &s, &["open", &purl(&ctx, "/dialogs.html")]);
+        assert_ok("open", &r);
+        let page = body_first(&r);
+        poll(&ctx, &s, 0);
+
+        for (label, answer, want) in [
+            ("Confirm", vec!["accept"], "yes"),
+            ("Confirm", vec!["dismiss"], "no"),
+            ("Prompt", vec!["accept", "--text", "Ada"], "Ada"),
+            ("Prompt", vec!["accept"], "def"),
+            ("Prompt", vec!["dismiss"], "null"),
+        ] {
+            let r = sv(&ctx, &s, &["view", &page, "--full"]);
+            let target = crate::helpers::ref_for(&crate::support::body_rest(&r), "btn", label);
+            let token = r
+                .stdout
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim_start_matches('@')
+                .to_string();
+            let home = ctx.home_path().to_path_buf();
+            let (pg, sess) = (page.clone(), s.clone());
+            let click = std::thread::spawn(move || {
+                vs(
+                    &home,
+                    &[
+                        "act",
+                        &pg,
+                        &target.to_string(),
+                        "click",
+                        &format!("--token={token}"),
+                        &format!("--session={sess}"),
+                    ],
+                )
+            });
+            let start = Instant::now();
+            let mut dialog = None;
+            while dialog.is_none() && start.elapsed() < Duration::from_secs(10) {
+                dialog = poll(&ctx, &s, 500).into_iter().find(|e| e.kind == "dialog");
+            }
+            // dialog <page> <id> <kind> <message-b64> <default-b64>
+            let d = dialog.expect("dialog event");
+            let id = d.line.split(' ').next().unwrap_or("").to_string();
+            let mut a = vec!["net", "dialog", &id];
+            a.extend(answer.iter().copied());
+            assert_ok("net dialog", &sv(&ctx, &s, &a));
+            assert_ok("click", &click.join().unwrap());
+            assert_eq!(
+                eval(&ctx, &s, &page, "document.getElementById('o').textContent"),
+                want,
+                "{label} {answer:?}"
+            );
+        }
+    }
+}
