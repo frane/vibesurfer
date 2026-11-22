@@ -368,6 +368,16 @@ impl EngineRuntime {
         self.dispatch(move |e| e.eval_js(page, &expr))
     }
 
+    pub fn eval_js_in_frame(
+        &self,
+        page: PageHandle,
+        frame: &str,
+        expr: &str,
+    ) -> EngineResult<crate::inspector::EvalResult> {
+        let (frame, expr) = (frame.to_string(), expr.to_string());
+        self.dispatch(move |e| e.eval_js_in_frame(page, &frame, &expr))
+    }
+
     pub fn storage(
         &self,
         page: PageHandle,
@@ -439,6 +449,14 @@ impl EngineRuntime {
 
     pub fn capabilities(&self) -> EngineResult<EngineCapabilities> {
         self.dispatch(|e| Ok(e.capabilities()))
+    }
+
+    pub fn set_popups(&self, page: PageHandle, on: bool) -> EngineResult<()> {
+        self.dispatch(move |e| e.set_popups(page, on))
+    }
+
+    pub fn popup_feed(&self) -> EngineResult<Option<std::sync::Arc<crate::engine::PopupFeed>>> {
+        self.dispatch(|e| Ok(e.popup_feed()))
     }
 }
 

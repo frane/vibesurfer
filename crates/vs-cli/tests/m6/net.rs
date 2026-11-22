@@ -625,3 +625,91 @@ fn cell_intercept_abort_is_not_retried() {
         }
     }
 }
+
+// `--popups`: a window.open() becomes its own page in the session, with
+// `window.opener`, and the opener stays where it was. The `page` event
+// reaches the poll stream before the popup's first request, so a client
+// can tell whose request it is; `window.close()` reports `close`. Other
+// engines still load new windows in place.
+#[test]
+fn cell_popups_open_their_own_page() {
+    for _ in each_available_backend() {
+        if !cfg!(target_os = "macos") {
+            continue;
+        }
+        let ctx = TestContext::start();
+        let r = ctx.vs(&["session-open", "--intercept", "--popups"]);
+        assert_ok("session-open --popups", &r);
+        let s = body_first(&r);
+        let r = sv(&ctx, &s, &["open", &purl(&ctx, "/popup.html")]);
+        assert_ok("open", &r);
+        let page = body_first(&r);
+        poll(&ctx, &s, 0);
+
+        let r = sv(&ctx, &s, &["view", &page, "--full"]);
+        let target = crate::helpers::ref_for(&crate::support::body_rest(&r), "btn", "Window open");
+        let token = r
+            .stdout
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim_start_matches('@')
+            .to_string();
+        let r = sv(
+            &ctx,
+            &s,
+            &[
+                "act",
+                &page,
+                &target.to_string(),
+                "click",
+                &format!("--token={token}"),
+            ],
+        );
+        assert_ok("click", &r);
+
+        let start = Instant::now();
+        let mut evs = Vec::new();
+        while start.elapsed() < Duration::from_secs(10) && !evs.iter().any(|e: &Ev| e.kind == "fin")
+        {
+            evs.extend(poll(&ctx, &s, 500));
+        }
+        let at = |kind: &str| evs.iter().position(|e| e.kind == kind);
+        let (pg, req) = (
+            at("page").expect("page event"),
+            at("req").expect("popup request"),
+        );
+        assert!(pg < req, "page before its request: {evs:#?}");
+        // page <opener> <popup> <url>
+        let line = &evs[pg].line;
+        assert!(line.ends_with("/multi-page-2.html"), "{line}");
+        let popup = line.split(' ').next().unwrap_or("").to_string();
+
+        assert_eq!(
+            eventually(&ctx, &s, &popup, "document.title", "Multi-page B"),
+            "Multi-page B"
+        );
+        assert_eq!(eval(&ctx, &s, &popup, "String(!!window.opener)"), "true");
+        assert!(eval(&ctx, &s, &page, "location.pathname").ends_with("/popup.html"));
+        let r = sv(&ctx, &s, &["status"]);
+        assert!(
+            r.stdout.contains(&popup),
+            "status lists the popup: {}",
+            r.stdout
+        );
+
+        eval(&ctx, &s, &popup, "(window.close(), 1)");
+        let start = Instant::now();
+        let mut closed = false;
+        while start.elapsed() < Duration::from_secs(10) && !closed {
+            closed = poll(&ctx, &s, 500).iter().any(|e| e.kind == "close");
+        }
+        assert!(closed, "close event");
+        let r = sv(&ctx, &s, &["status"]);
+        assert!(
+            !r.stdout.contains(&popup),
+            "closed popup gone: {}",
+            r.stdout
+        );
+    }
+}

@@ -62,6 +62,8 @@ pub struct Session {
     pub isolated: bool,
     /// Pages go through the daemon's intercepting HTTP proxy.
     pub intercept: bool,
+    /// Pages open real popup windows instead of loading them in place.
+    pub popups: bool,
 }
 
 impl Session {
@@ -81,6 +83,7 @@ impl Session {
             closed_at: row.get("closed_at")?,
             isolated: row.get::<_, i64>("isolated")? != 0,
             intercept: row.get::<_, i64>("intercept")? != 0,
+            popups: row.get::<_, i64>("popups")? != 0,
         })
     }
 }

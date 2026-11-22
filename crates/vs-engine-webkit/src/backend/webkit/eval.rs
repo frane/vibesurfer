@@ -37,6 +37,17 @@ pub(super) fn eval_js_string(
     js: &str,
     budget: Duration,
 ) -> EngineResult<String> {
+    eval_js_string_in(web_view, None, js, budget)
+}
+
+/// [`eval_js_string`] in one frame of the page (its page world), or
+/// the main frame for `None`.
+pub(super) fn eval_js_string_in(
+    web_view: &WKWebView,
+    frame: Option<&objc2_web_kit::WKFrameInfo>,
+    js: &str,
+    budget: Duration,
+) -> EngineResult<String> {
     let slot: Rc<RefCell<Option<Result<String, String>>>> = Rc::new(RefCell::new(None));
     let slot_for_block = slot.clone();
     let block = RcBlock::new(move |result: *mut AnyObject, error: *mut NSError| {
@@ -53,8 +64,20 @@ pub(super) fn eval_js_string(
         *slot_for_block.borrow_mut() = Some(Ok(s.to_string()));
     });
     let ns_js = NSString::from_str(js);
-    unsafe {
-        web_view.evaluateJavaScript_completionHandler(&ns_js, Some(&block));
+    match frame {
+        None => unsafe {
+            web_view.evaluateJavaScript_completionHandler(&ns_js, Some(&block));
+        },
+        Some(frame) => unsafe {
+            let world =
+                objc2_web_kit::WKContentWorld::pageWorld(objc2::MainThreadOnly::mtm(web_view));
+            web_view.evaluateJavaScript_inFrame_inContentWorld_completionHandler(
+                &ns_js,
+                Some(frame),
+                &world,
+                Some(&block),
+            );
+        },
     }
     let slot_check = slot.clone();
     let ok = run_loop_until(move || slot_check.borrow().is_some(), budget);

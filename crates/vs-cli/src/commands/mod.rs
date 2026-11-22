@@ -69,6 +69,12 @@ pub enum Command {
         /// request. Implies a private jar, as `--isolated`.
         #[arg(long)]
         intercept: bool,
+        /// Open a new page in the session for each `target="_blank"`
+        /// link or `window.open()`, with `window.opener` set, instead
+        /// of loading it in the clicked page. `vs status` lists it;
+        /// an `--intercept` session also reports it on `vs net poll`.
+        #[arg(long)]
+        popups: bool,
     },
     /// 2. Close the active session, or a whole sweep of them.
     #[command(visible_alias = "sc")]
@@ -309,6 +315,10 @@ pub enum Command {
         max: Option<String>,
         #[arg(long, short = 'F')]
         full: bool,
+        /// `eval` only: evaluate in the subframe with this URL (or `#N`,
+        /// the Nth subframe, newest first), cross-origin ones too.
+        #[arg(long)]
+        frame: Option<String>,
         #[arg(long = "unsafe-log")]
         unsafe_log: bool,
     },
@@ -719,6 +729,7 @@ impl Command {
                 policy,
                 isolated,
                 intercept,
+                popups,
             } => {
                 let mut r = Request::new("vs_session_open");
                 if let Some(p) = policy {
@@ -729,6 +740,9 @@ impl Command {
                 }
                 if *intercept {
                     r = r.flag("intercept");
+                }
+                if *popups {
+                    r = r.flag("popups");
                 }
                 r
             }
@@ -1003,6 +1017,7 @@ impl Command {
                 max,
                 full,
                 unsafe_log,
+                frame,
             } => {
                 let s = require_session(session_id)?;
                 let kind_long = normalize_inspect_kind(kind);
@@ -1030,6 +1045,9 @@ impl Command {
                 }
                 if *unsafe_log {
                     req = req.flag("unsafe-log");
+                }
+                if let Some(v) = frame {
+                    req = req.flag_value("frame", v.clone());
                 }
                 req
             }

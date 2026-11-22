@@ -33,7 +33,7 @@ tables, see [`codes.md`](codes.md).
 
 ---
 
-## 1. `vs_session_open [--policy=<name>] [--isolated] [--intercept]`
+## 1. `vs_session_open [--policy=<name>] [--isolated] [--intercept] [--popups]`
 
 Open a new session. Returns the session id and a fresh `state_token` for
 the empty session.
@@ -48,6 +48,14 @@ proxy, so the `vs_net_*` primitives (19b) can observe and route every
 request. It implies a private in-memory jar, as `--isolated`: each
 engine binds proxy settings to the data store. The flag is kept on the
 session row; after a restart a fresh proxy starts with the first page.
+
+`--popups` opens a new page in the session for each `target="_blank"`
+link or form and each `window.open()`, with `window.opener` where the
+page asked for it, instead of loading it in the clicked page. A page
+that calls `window.close()` leaves the session. In an `--intercept`
+session `vs_net_poll` also reports `page <opener> <page> <url>`, before
+the popup's first request, and `close <page>`. macOS only; the other
+engines keep loading new windows in place.
 
 - Token in: —
 - Token out: yes

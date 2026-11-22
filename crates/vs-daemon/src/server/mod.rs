@@ -78,6 +78,7 @@ pub async fn serve(
     // never reaches `vs_session_close` — so the daemon reaps what they
     // leave behind. See `daemon::reaper`.
     crate::daemon::reaper::spawn(&daemon);
+    crate::daemon::popups::spawn(&daemon);
 
     let daemon = Arc::new(daemon);
     loop {

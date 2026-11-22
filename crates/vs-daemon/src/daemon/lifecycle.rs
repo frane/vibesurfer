@@ -17,7 +17,7 @@ impl Daemon {
     /// session-scoped state token (`0000…`); page-scoped tokens come
     /// from `vs_open`.
     pub fn session_open(&self, policy: Option<&str>) -> Result<SessionOpenResponse> {
-        self.session_open_with(policy, false, false)
+        self.session_open_with(policy, false, false, false)
     }
 
     /// [`Self::session_open`], optionally `isolated`: the session's
@@ -26,12 +26,15 @@ impl Daemon {
     /// discarded on close or daemon restart. `intercept` also routes
     /// the pages through a per-session HTTP proxy (see [`crate::net`]);
     /// it implies a private store, since every engine binds the proxy
-    /// to the store.
+    /// to the store. `popups` gives the pages real popup windows: a
+    /// `target="_blank"` link or `window.open()` opens a new page in
+    /// the session instead of loading in place.
     pub fn session_open_with(
         &self,
         policy: Option<&str>,
         isolated: bool,
         intercept: bool,
+        popups: bool,
     ) -> Result<SessionOpenResponse> {
         let id = format!("s_{}", short_id());
         let mut hash_args: Vec<String> = policy.into_iter().map(str::to_string).collect();
@@ -45,6 +48,10 @@ impl Daemon {
             hash_args.push("--intercept".into());
             flags.push(("intercept".into(), None));
         }
+        if popups {
+            hash_args.push("--popups".into());
+            flags.push(("popups".into(), None));
+        }
         let ctx = AuditCtx::new("vs_session_open", &id).with_args(
             redact::redact_args(&[], flags.as_slice()),
             tokens::args_hash("vs_session_open", &hash_args),
@@ -52,12 +59,16 @@ impl Daemon {
         self.audit_call(ctx, |ctx| {
             ctx.after_token = Some(StateToken::ZERO);
             let mut state = SessionState::new(isolated);
+            state.popups = popups;
             if intercept {
                 state.intercept = true;
                 state.running_net(self)?;
             }
             let mut store = self.inner.store.lock().expect("poisoned");
             let session = store.create_session_with(&id, policy, isolated, intercept)?;
+            if popups {
+                store.set_session_popups(&id, true)?;
+            }
             drop(store);
             self.inner
                 .sessions
@@ -163,6 +174,7 @@ impl Daemon {
 
             let store = self.data_store_for(session_id)?;
             let engine_handle = self.inner.engine.open(url, &store)?;
+            self.apply_popups(session_id, engine_handle);
             let page_id = format!("p_{}", short_id());
             ctx.page_id = Some(page_id.clone());
 
@@ -321,6 +333,7 @@ impl Daemon {
             // The proxy starts with the first rebuilt page; see
             // `data_store_for`.
             state.intercept = s.intercept;
+            state.popups = s.popups;
             for p in live {
                 // Dormant: the engine page is created lazily on
                 // first use, so startup stays instant and zombie

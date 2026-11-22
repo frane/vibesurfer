@@ -11,7 +11,8 @@ pub(super) fn handle_session_open(daemon: &Daemon, req: &Request) -> String {
     let policy = flag_value(req, "policy");
     let isolated = req.flags.contains_key("isolated");
     let intercept = req.flags.contains_key("intercept");
-    match daemon.session_open_with(policy.as_deref(), isolated, intercept) {
+    let popups = req.flags.contains_key("popups");
+    match daemon.session_open_with(policy.as_deref(), isolated, intercept, popups) {
         Ok(SessionOpenResponse { session_id, token }) => {
             let head = ResponseHead::ok(token).encode();
             format!("{head}{session_id}\n")

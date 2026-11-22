@@ -22,6 +22,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0003_session_intercept",
         include_str!("../migrations/0003_session_intercept.sql"),
     ),
+    (
+        "0004_session_popups",
+        include_str!("../migrations/0004_session_popups.sql"),
+    ),
 ];
 
 /// Apply any not-yet-applied migrations against `conn`. Idempotent.

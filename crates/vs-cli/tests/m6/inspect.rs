@@ -97,6 +97,58 @@ fn cell_inspect_eval() {
     }
 }
 
+// 39a. vs_inspect eval --frame reaches a cross-origin iframe, which
+// the page's own script cannot read. macOS only: WebKitGTK and
+// WebView2 have no per-frame evaluate yet, and say so.
+#[test]
+fn cell_inspect_eval_in_cross_origin_frame() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/frame-xo.html");
+        settle(800);
+        let blocked = eval_js(
+            &ctx,
+            &page,
+            "String(document.getElementById('xo').contentDocument)",
+        );
+        assert_eq!(blocked.trim(), "null", "the frame must be cross-origin");
+        let r = ctx.vs(&["inspect", &page, "eval", "document.title", "--frame=#0"]);
+        if !cfg!(target_os = "macos") {
+            assert!(
+                r.stdout.contains("ENGINE_UNSUPPORTED"),
+                "other engines must refuse plainly, got {}",
+                r.stdout
+            );
+            continue;
+        }
+        assert_ok("eval --frame=#0", &r);
+        assert!(r.stdout.contains("result=Inner"), "got {}", r.stdout);
+        // By URL, and the frame's own DOM is live.
+        let src = eval_js(&ctx, &page, "document.getElementById('xo').src");
+        let r = ctx.vs(&[
+            "inspect",
+            &page,
+            "eval",
+            "document.getElementById('greet').click(), document.getElementById('out').textContent",
+            &format!("--frame={}", src.trim()),
+        ]);
+        assert_ok("eval --frame=<url>", &r);
+        assert!(r.stdout.contains("result=Hello"), "got {}", r.stdout);
+        let r = ctx.vs(&[
+            "inspect",
+            &page,
+            "eval",
+            "1",
+            "--frame=http://nowhere.invalid/",
+        ]);
+        assert!(
+            r.stdout.contains("NOT_FOUND"),
+            "unknown frame: got {}",
+            r.stdout
+        );
+    }
+}
+
 // 39b. vs_inspect eval — a multiline expression must survive the
 // line-framed wire instead of being split into bogus request lines
 // (the old behaviour returned an opaque BAD_REQUEST).

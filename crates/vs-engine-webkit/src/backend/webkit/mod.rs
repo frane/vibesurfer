@@ -18,6 +18,7 @@
 mod capture;
 mod cookie_store;
 mod eval;
+mod frames;
 mod headless_webview;
 mod headless_window;
 mod input;
@@ -93,6 +94,9 @@ struct WkPage {
     /// path start for the next move. Initial value (0,0) is the
     /// page-load default before the agent has moved the pointer.
     last_mouse: std::cell::Cell<vs_humanize::Point>,
+    /// Subframes that reported in, for `eval_js_in_frame`. Shared with
+    /// popups, which share the content controller.
+    frames: frames::FrameList,
 }
 
 // =============================================================================
@@ -104,7 +108,6 @@ struct WkPage {
 pub struct WkBackend {
     mtm: MainThreadMarker,
     pages: HashMap<PageHandle, WkPage>,
-    next_handle: u64,
     captures_dir: Option<PathBuf>,
     /// Active recording sinks by page. Present only while a `record`
     /// session is running; the input primitives grab frames through it.
@@ -112,6 +115,9 @@ pub struct WkBackend {
     /// Non-persistent data stores for isolated sessions, by key. One
     /// instance per key so every page of the session shares it.
     isolated_stores: HashMap<String, Retained<objc2_web_kit::WKWebsiteDataStore>>,
+    /// Windows pages with real popups opened, and pages that closed
+    /// themselves, not yet adopted or released.
+    popup_queue: PopupQueue,
 }
 
 impl WkBackend {
@@ -120,10 +126,10 @@ impl WkBackend {
         Self {
             mtm,
             pages: HashMap::new(),
-            next_handle: 1,
             captures_dir: None,
             recording: HashMap::new(),
             isolated_stores: HashMap::new(),
+            popup_queue: PopupQueue::default(),
         }
     }
 
@@ -168,12 +174,61 @@ impl WkBackend {
     }
 
     fn alloc_handle(&mut self) -> PageHandle {
-        let h = PageHandle(self.next_handle);
-        self.next_handle += 1;
-        h
+        self.popup_queue.borrow_mut().alloc()
+    }
+
+    /// Take in the windows pages opened and release the pages that
+    /// closed themselves since the last call. Runs before any page
+    /// lookup, so a popup's handle works as soon as it is reported.
+    fn sync_popups(&mut self) {
+        let (born, closed) = {
+            let mut q = self.popup_queue.borrow_mut();
+            (std::mem::take(&mut q.born), std::mem::take(&mut q.closed))
+        };
+        for b in born {
+            // The opener's inspector buffers and content controller:
+            // the popup shares its configuration, so its console and
+            // scripts land there too.
+            let (inspector, inspector_installed, ucc, frames) =
+                match b.opener.and_then(|h| self.pages.get(&h)) {
+                    Some(o) => (
+                        o.inspector.clone(),
+                        o.inspector_installed,
+                        o.ucc.clone(),
+                        o.frames.clone(),
+                    ),
+                    None => (
+                        super::inspector_bridge::InspectorSlots::new(
+                            crate::inspector::DEFAULT_BUFFER_CAPACITY,
+                        ),
+                        false,
+                        unsafe { b.web_view.configuration().userContentController() },
+                        frames::FrameList::default(),
+                    ),
+                };
+            self.pages.insert(
+                b.handle,
+                WkPage {
+                    web_view: b.web_view,
+                    window: b.window,
+                    nav_delegate: b.delegate,
+                    ucc,
+                    inspector,
+                    inspector_installed,
+                    cookie_baseline: std::cell::RefCell::new(None),
+                    cookie_next_seq: std::cell::RefCell::new(0),
+                    last_mouse: std::cell::Cell::new(vs_humanize::Point { x: 0.0, y: 0.0 }),
+                    frames: frames.clone(),
+                },
+            );
+        }
+        for h in closed {
+            let _ = self.close(h);
+        }
     }
 
     fn page_mut(&mut self, h: PageHandle) -> EngineResult<&mut WkPage> {
+        self.sync_popups();
         self.pages.get_mut(&h).ok_or(EngineError::NotFound {
             kind: "page",
             id: h.0.to_string(),
@@ -197,6 +252,157 @@ fn abandon_view(web_view: &WKWebView, window: &NSWindow, ucc: &WKUserContentCont
         window.setContentView(None);
         window.close();
     }
+}
+
+/// [`abandon_view`] for a page whose user content controller another
+/// page still uses (a popup and its opener).
+fn abandon_view_keep_ucc(web_view: &WKWebView, window: &NSWindow) {
+    unsafe {
+        web_view.stopLoading();
+        web_view.setNavigationDelegate(None);
+        web_view.setUIDelegate(None);
+        window.setContentView(None);
+        window.close();
+    }
+}
+
+/// Create a web view of `size` for `config` in an offscreen host
+/// window, with a Safari user agent and its navigation/UI delegate.
+/// `ca` is the intercept proxy's CA to trust, for proxied pages.
+fn host_view(
+    mtm: MainThreadMarker,
+    config: &WKWebViewConfiguration,
+    size: NSSize,
+    ca: Option<Vec<u8>>,
+) -> (
+    Retained<WKWebView>,
+    Retained<NSWindow>,
+    Retained<NavDelegate>,
+) {
+    let frame = NSRect::new(NSPoint::new(0.0, 0.0), size);
+    // VsHeadlessWebView refuses system drag sessions; see
+    // headless_webview.rs.
+    let web_view = headless_webview::HeadlessWebView::create(mtm, frame, config);
+
+    // Host the webview in an offscreen NSWindow so synthesized
+    // `NSEvent`s have a responder chain to traverse. Borderless
+    // style with `Buffered` backing keeps the window cheap and
+    // avoids any visible decoration; `setReleasedWhenClosed`
+    // false because we manage the Retained handle ourselves.
+    let window: Retained<NSWindow> = unsafe {
+        // VsHeadlessWindow reports itself visible/unoccluded so the
+        // headless page's timers + requestAnimationFrame keep running
+        // (see headless_window.rs); it is still never ordered on
+        // screen, so nothing is shown.
+        let w = headless_window::HeadlessWindow::host(
+            mtm,
+            frame,
+            NSWindowStyleMask::Borderless,
+            NSBackingStoreType::Buffered,
+        );
+        w.setReleasedWhenClosed(false);
+        w.setContentView(Some(&web_view));
+        // Give the web view first-responder status. Together with
+        // the window's `isKeyWindow` override this is what makes
+        // `document.hasFocus()` true, so the page does not think it
+        // is a backgrounded tab.
+        w.makeFirstResponder(Some(&web_view));
+        w
+    };
+
+    // Set a current Safari user agent. Default WKWebView UA is
+    // `Mozilla/5.0 (...) AppleWebKit/605.1.15 (KHTML, like Gecko)`,
+    // missing the `Version/X Safari/X` suffix that real Safari tacks
+    // on. Sites that fingerprint UAs flag this immediately (Google's
+    // anti-bot is a regular offender).
+    let ua = NSString::from_str(crate::engine::DEFAULT_USER_AGENT);
+    unsafe { web_view.setCustomUserAgent(Some(&ua)) };
+
+    let slot: NavSlot = Rc::new(RefCell::new(NavState::default()));
+    let delegate = NavDelegate::new(mtm, slot, SharedDownloads::default());
+    if let Some(ca) = ca {
+        delegate.set_trust_anchor(ca);
+    }
+    let proto: &ProtocolObject<dyn WKNavigationDelegate> = ProtocolObject::from_ref(&*delegate);
+    unsafe { web_view.setNavigationDelegate(Some(proto)) };
+    // Same object serves as the UI delegate: WebKit sources
+    // `window.outerWidth` / `outerHeight` from the UI client, and
+    // with none installed the page saw a zero-sized outer window.
+    let ui_proto: &ProtocolObject<dyn WKUIDelegate> = ProtocolObject::from_ref(&*delegate);
+    unsafe { web_view.setUIDelegate(Some(ui_proto)) };
+    (web_view, window, delegate)
+}
+
+/// A window a page opened, waiting for the backend to adopt it.
+pub(super) struct PopupBirth {
+    handle: PageHandle,
+    opener: Option<PageHandle>,
+    web_view: Retained<WKWebView>,
+    window: Retained<NSWindow>,
+    delegate: Retained<NavDelegate>,
+}
+
+/// New windows and script-closed pages, for pages with real popups,
+/// and the page-handle counter (a popup gets its handle at birth, so
+/// the daemon can name it before the backend adopts it).
+#[derive(Default)]
+pub(super) struct PopupState {
+    born: Vec<PopupBirth>,
+    closed: Vec<PageHandle>,
+    feed: std::sync::Arc<crate::engine::PopupFeed>,
+    last_handle: u64,
+    /// The feed count when the current input primitive started.
+    raised_at_input: u64,
+}
+
+impl PopupState {
+    fn alloc(&mut self) -> PageHandle {
+        self.last_handle += 1;
+        PageHandle(self.last_handle)
+    }
+}
+
+pub(super) type PopupQueue = Rc<RefCell<PopupState>>;
+
+/// Build the window WebKit asked for from `opener` (UI delegate
+/// `createWebView`) at the opener's size, and report it. The
+/// configuration is WebKit's: same process pool, data store and user
+/// content controller, so the opener's scripts run in it too.
+pub(super) fn spawn_popup(
+    mtm: MainThreadMarker,
+    opener: Option<PageHandle>,
+    opener_view: &WKWebView,
+    config: &WKWebViewConfiguration,
+    url: String,
+    ca: Option<Vec<u8>>,
+    queue: &PopupQueue,
+) -> Retained<WKWebView> {
+    let size = opener_view.frame().size;
+    let (web_view, window, delegate) = host_view(mtm, config, size, ca);
+    let mut q = queue.borrow_mut();
+    let handle = q.alloc();
+    delegate.set_popups(Some(queue.clone()), Some(handle));
+    q.born.push(PopupBirth {
+        handle,
+        opener,
+        web_view: web_view.clone(),
+        window,
+        delegate,
+    });
+    q.feed
+        .push(crate::engine::PopupEvent::Opened(crate::engine::Popup {
+            opener,
+            page: handle,
+            url,
+        }));
+    web_view
+}
+
+/// `window.close()` from `page`: report it; the backend releases it.
+pub(super) fn popup_closed(queue: &PopupQueue, page: PageHandle) {
+    let mut q = queue.borrow_mut();
+    q.closed.push(page);
+    q.feed.push(crate::engine::PopupEvent::Closed(page));
 }
 
 impl Drop for WkBackend {
@@ -363,6 +569,8 @@ impl WkBackend {
     /// follows what it caused.
     fn forget_new_window(&mut self, page: PageHandle) -> EngineResult<()> {
         let _ = self.page_mut(page)?.nav_delegate.take_new_window();
+        let raised = self.popup_queue.borrow().feed.raised();
+        self.popup_queue.borrow_mut().raised_at_input = raised;
         Ok(())
     }
 
@@ -382,6 +590,18 @@ impl WkBackend {
                 Duration::from_secs(2),
             );
             if super::common::new_window_hinted(&hint) {
+                if delegate.popups() {
+                    // A real window: wait for WebKit to ask for it, so
+                    // the popup exists when the click returns.
+                    let queue = self.popup_queue.clone();
+                    let feed = queue.borrow().feed.clone();
+                    let before = queue.borrow().raised_at_input;
+                    let _ = run_loop_until(
+                        move || feed.raised() > before,
+                        super::common::NEW_WINDOW_SETTLE,
+                    );
+                    return Ok(());
+                }
                 let waiting = delegate.clone();
                 let _ = run_loop_until(
                     move || waiting.has_new_window(),
@@ -462,62 +682,15 @@ impl Engine for WkBackend {
             ucc.addUserScript(&shim);
         }
         let inspector_installed = inspector_handler::install(mtm, &ucc, &inspector);
+        let frames = frames::FrameList::default();
+        frames::install(mtm, &ucc, &frames);
         // Default browser window: a natural 1440x900 (MacBook-class),
         // the logical size pages render at. Retina still doubles the
         // pixel density for screenshots; recordings capture at this size.
-        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1440.0, 900.0));
-        // VsHeadlessWebView refuses system drag sessions; see
-        // headless_webview.rs.
-        let web_view = headless_webview::HeadlessWebView::create(mtm, frame, &config);
-
-        // Host the webview in an offscreen NSWindow so synthesized
-        // `NSEvent`s have a responder chain to traverse. Borderless
-        // style with `Buffered` backing keeps the window cheap and
-        // avoids any visible decoration; `setReleasedWhenClosed`
-        // false because we manage the Retained handle ourselves.
-        let window: Retained<NSWindow> = unsafe {
-            // VsHeadlessWindow reports itself visible/unoccluded so the
-            // headless page's timers + requestAnimationFrame keep running
-            // (see headless_window.rs); it is still never ordered on
-            // screen, so nothing is shown.
-            let w = headless_window::HeadlessWindow::host(
-                mtm,
-                frame,
-                NSWindowStyleMask::Borderless,
-                NSBackingStoreType::Buffered,
-            );
-            w.setReleasedWhenClosed(false);
-            w.setContentView(Some(&web_view));
-            // Give the web view first-responder status. Together with
-            // the window's `isKeyWindow` override this is what makes
-            // `document.hasFocus()` true, so the page does not think it
-            // is a backgrounded tab.
-            w.makeFirstResponder(Some(&web_view));
-            w
-        };
-
-        // Set a current Safari user agent. Default WKWebView UA is
-        // `Mozilla/5.0 (...) AppleWebKit/605.1.15 (KHTML, like Gecko)`
-        // — missing the `Version/X Safari/X` suffix that real Safari
-        // tacks on. Sites that fingerprint UAs flag this immediately
-        // (Google's anti-bot is a regular offender). The string here
-        // matches a recent shipping Safari; override per-page later
-        // if you need to spoof something else.
-        let ua = NSString::from_str(crate::engine::DEFAULT_USER_AGENT);
-        unsafe { web_view.setCustomUserAgent(Some(&ua)) };
-
-        let slot: NavSlot = Rc::new(RefCell::new(NavState::default()));
-        let delegate = NavDelegate::new(mtm, slot.clone(), SharedDownloads::default());
-        if let Some(ca) = store.proxy_ca() {
-            delegate.set_trust_anchor(ca.to_vec());
-        }
-        let proto: &ProtocolObject<dyn WKNavigationDelegate> = ProtocolObject::from_ref(&*delegate);
-        unsafe { web_view.setNavigationDelegate(Some(proto)) };
-        // Same object serves as the UI delegate: WebKit sources
-        // `window.outerWidth` / `outerHeight` from the UI client, and
-        // with none installed the page saw a zero-sized outer window.
-        let ui_proto: &ProtocolObject<dyn WKUIDelegate> = ProtocolObject::from_ref(&*delegate);
-        unsafe { web_view.setUIDelegate(Some(ui_proto)) };
+        let size = NSSize::new(1440.0, 900.0);
+        let (web_view, window, delegate) =
+            host_view(mtm, &config, size, store.proxy_ca().map(<[u8]>::to_vec));
+        let slot = delegate.slot();
 
         let ns_url_str = NSString::from_str(url);
         let ns_url = NSURL::URLWithString(&ns_url_str)
@@ -552,6 +725,7 @@ impl Engine for WkBackend {
                 cookie_baseline: std::cell::RefCell::new(None),
                 cookie_next_seq: std::cell::RefCell::new(0),
                 last_mouse: std::cell::Cell::new(vs_humanize::Point { x: 0.0, y: 0.0 }),
+                frames: frames.clone(),
             },
         );
         Ok(handle)
@@ -614,9 +788,31 @@ impl Engine for WkBackend {
 
     fn close(&mut self, page: PageHandle) -> EngineResult<()> {
         if let Some(p) = self.pages.remove(&page) {
-            abandon_view(&p.web_view, &p.window, &p.ucc);
+            // A popup shares its opener's user content controller; only
+            // the last page using it may strip it.
+            let shared = self
+                .pages
+                .values()
+                .any(|o| Retained::as_ptr(&o.ucc) == Retained::as_ptr(&p.ucc));
+            if shared {
+                abandon_view_keep_ucc(&p.web_view, &p.window);
+            } else {
+                abandon_view(&p.web_view, &p.window, &p.ucc);
+            }
         }
         Ok(())
+    }
+
+    fn set_popups(&mut self, page: PageHandle, on: bool) -> EngineResult<()> {
+        let queue = on.then(|| self.popup_queue.clone());
+        self.page_mut(page)?
+            .nav_delegate
+            .set_popups(queue, Some(page));
+        Ok(())
+    }
+
+    fn popup_feed(&mut self) -> Option<std::sync::Arc<crate::engine::PopupFeed>> {
+        Some(self.popup_queue.borrow().feed.clone())
     }
 
     fn drop_store(&mut self, key: &str) -> EngineResult<()> {
@@ -908,6 +1104,25 @@ impl Engine for WkBackend {
         let web_view = p.web_view.clone();
         super::common::run_eval(
             move |js, budget| eval_js_string(&web_view, js, budget),
+            expr,
+        )
+    }
+
+    fn eval_js_in_frame(
+        &mut self,
+        page: PageHandle,
+        frame: &str,
+        expr: &str,
+    ) -> EngineResult<crate::inspector::EvalResult> {
+        let p = self.page_mut(page)?;
+        let web_view = p.web_view.clone();
+        let info =
+            frames::find(&p.frames, &web_view, frame).ok_or_else(|| EngineError::NotFound {
+                kind: "frame",
+                id: frame.to_string(),
+            })?;
+        super::common::run_eval(
+            move |js, budget| eval::eval_js_string_in(&web_view, Some(&info), js, budget),
             expr,
         )
     }

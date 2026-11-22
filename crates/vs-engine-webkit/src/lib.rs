@@ -49,8 +49,8 @@ pub mod test_support;
 pub use backend::auth::normalize as normalize_auth_blob;
 pub use engine::{
     ActTarget, Action, AuthBlob, CaptureScope, DataStore, Download, DownloadEntry, DownloadSource,
-    Engine, EngineCapabilities, EngineError, EngineResult, LayoutBox, PageHandle, RecFrame,
-    Viewport, WaitCondition,
+    Engine, EngineCapabilities, EngineError, EngineResult, LayoutBox, PageHandle, Popup,
+    PopupEvent, PopupFeed, RecFrame, Viewport, WaitCondition,
 };
 pub use inspector::{
     ConsoleEntry, ConsoleLevel, Header, NetworkEntry, NetworkStatus, RequestDetail, RingBuffer,

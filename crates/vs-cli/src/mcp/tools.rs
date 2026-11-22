@@ -45,6 +45,7 @@ fn base_tools() -> Vec<Value> {
             ("policy", str_prop("Optional policy id (e.g. \"strict\", \"default\").", false)),
             ("isolated", bool_prop("Own in-memory cookie/storage jar, shared by this session's pages only, discarded on close. Default: the shared persistent jar.", false)),
             ("intercept", bool_prop("Route pages through a daemon HTTP proxy for `vs net` (observe/hold/fulfill/abort requests). Implies an own jar.", false)),
+            ("popups", bool_prop("Open target=_blank links and window.open() as new pages in the session instead of in place.", false)),
         ])),
         tool("vs_session_close", "Close the active session. `all` closes every session in the workspace and `idle_for` (e.g. \"2h\") closes only those untouched that long — the cleanup for sessions left behind by agents that died without closing.", obj(&[
             ("all", bool_prop("Close every session, not just this caller's.", false)),
@@ -263,6 +264,7 @@ pub fn build_cli(name: &str, args: &Value) -> Result<(Cli, CallOpts)> {
             policy: opt_str(args, "policy"),
             isolated: opt_bool(args, "isolated").unwrap_or(false),
             intercept: opt_bool(args, "intercept").unwrap_or(false),
+            popups: opt_bool(args, "popups").unwrap_or(false),
         },
         "vs_session_close" => Command::SessionClose {
             all: opt_bool(args, "all").unwrap_or(false),

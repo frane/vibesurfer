@@ -19,6 +19,7 @@ mod lifecycle;
 mod net_ops;
 mod page_ops;
 pub mod pending;
+pub(crate) mod popups;
 pub(crate) mod reaper;
 mod record;
 mod store_ops;
@@ -62,6 +63,8 @@ pub(crate) struct SessionState {
     /// for an intercepting one rebuilt after a restart until its first
     /// page needs it.
     pub(crate) net: Option<Arc<crate::net::SessionNet>>,
+    /// Pages open real popup windows (see `Daemon::adopt_popups`).
+    pub(crate) popups: bool,
 }
 
 impl SessionState {
@@ -72,6 +75,7 @@ impl SessionState {
             isolated,
             intercept: false,
             net: None,
+            popups: false,
         }
     }
 }
@@ -96,6 +100,9 @@ pub(crate) struct Inner {
     /// Where the intercept CA is kept; `None` keeps it in memory.
     pub(crate) intercept_ca_dir: Option<std::path::PathBuf>,
     pub(crate) mitm: Mutex<Option<Arc<crate::net::Mitm>>>,
+    /// Popup events the engine has raised and the daemon has handled;
+    /// see `daemon::popups`.
+    pub(crate) popups: popups::Counters,
 }
 
 impl Daemon {
@@ -117,6 +124,7 @@ impl Daemon {
                 recorders: Mutex::new(HashMap::new()),
                 intercept_ca_dir: None,
                 mitm: Mutex::new(None),
+                popups: popups::Counters::default(),
             }),
         }
     }
@@ -335,6 +343,7 @@ impl Daemon {
             self.inner.engine.navigate(h, &url)?;
             h
         };
+        self.apply_popups(session_id, handle);
         let mut sessions = self.inner.sessions.lock().expect("poisoned");
         let page = sessions
             .get_mut(session_id)
@@ -465,6 +474,7 @@ impl Daemon {
         &self,
         session_id: &str,
         page_id: &str,
+        frame: Option<&str>,
         expr: &str,
     ) -> Result<vs_engine_webkit::inspector::EvalResult> {
         let redacted_expr = crate::redact::redact_string(expr);
@@ -477,7 +487,10 @@ impl Daemon {
         self.audit_call(ctx, |ctx| {
             self.require_session(session_id)?;
             let handle = self.engine_handle_for(session_id, page_id)?;
-            let r = self.inner.engine.eval_js(handle, expr)?;
+            let r = match frame {
+                Some(f) => self.inner.engine.eval_js_in_frame(handle, f, expr)?,
+                None => self.inner.engine.eval_js(handle, expr)?,
+            };
             ctx.after_token = Some(self.current_token(session_id, page_id)?);
             Ok(r)
         })

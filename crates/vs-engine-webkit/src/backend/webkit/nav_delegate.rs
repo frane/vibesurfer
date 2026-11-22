@@ -23,6 +23,7 @@ use objc2_web_kit::{
 use crate::backend::native_download::{
     is_attachment, name_from_disposition, temp_path, SharedDownloads, MAX_BYTES,
 };
+use crate::engine::PageHandle;
 
 /// Slot shared between the delegate and the Rust caller. Both ends
 /// live on the main thread, so `Rc<RefCell<...>>` is fine.
@@ -64,6 +65,11 @@ pub(super) struct NavDelegateIvars {
     pub(super) main_response: RefCell<Option<crate::inspector::MainResponse>>,
     /// The intercept proxy's CA (DER), for intercept pages only.
     pub(super) trust_anchor: RefCell<Option<Vec<u8>>>,
+    /// Set for pages with real popup windows (`Engine::set_popups`):
+    /// where a new window and a script-closed page are reported.
+    pub(super) popups: RefCell<Option<super::PopupQueue>>,
+    /// This page's engine handle, for popup events.
+    pub(super) page: Cell<Option<PageHandle>>,
 }
 
 fn ns_str(s: Option<Retained<NSString>>) -> String {
@@ -296,14 +302,39 @@ define_class!(
         #[unsafe(method(webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:))]
         fn create_web_view(
             &self,
-            _web_view: &WKWebView,
-            _config: &WKWebViewConfiguration,
+            web_view: &WKWebView,
+            config: &WKWebViewConfiguration,
             action: &WKNavigationAction,
             _features: &WKWindowFeatures,
         ) -> *mut WKWebView {
             let request = unsafe { action.request() };
+            let queue = self.ivars().popups.borrow().clone();
+            if let Some(queue) = queue {
+                // A real window: WebKit loads the request into the view
+                // returned here, with `window.opener` set. The queue
+                // keeps it alive until the backend adopts it.
+                let url = request
+                    .URL()
+                    .and_then(|u| u.absoluteString())
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
+                let anchor = self.ivars().trust_anchor.borrow().clone();
+                let opener = self.ivars().page.get();
+                let view =
+                    super::spawn_popup(self.mtm(), opener, web_view, config, url, anchor, &queue);
+                return Retained::as_ptr(&view).cast_mut();
+            }
             *self.ivars().new_window.borrow_mut() = Some(request);
             std::ptr::null_mut()
+        }
+
+        /// `window.close()` from a page with real popups.
+        #[unsafe(method(webViewDidClose:))]
+        fn did_close(&self, _web_view: &WKWebView) {
+            let queue = self.ivars().popups.borrow().clone();
+            if let (Some(queue), Some(page)) = (queue, self.ivars().page.get()) {
+                super::popup_closed(&queue, page);
+            }
         }
     }
 
@@ -382,6 +413,8 @@ impl NavDelegate {
             main_became_download: Cell::new(false),
             main_response: RefCell::new(None),
             trust_anchor: RefCell::new(None),
+            popups: RefCell::new(None),
+            page: Cell::new(None),
         });
         unsafe { msg_send![super(this), init] }
     }
@@ -390,6 +423,18 @@ impl NavDelegate {
     /// for this page's connections.
     pub(super) fn set_trust_anchor(&self, ca_der: Vec<u8>) {
         *self.ivars().trust_anchor.borrow_mut() = Some(ca_der);
+    }
+
+    /// Report new windows and `window.close()` to `queue` (real
+    /// popups), or load new windows in place (`None`).
+    pub(super) fn set_popups(&self, queue: Option<super::PopupQueue>, page: Option<PageHandle>) {
+        *self.ivars().popups.borrow_mut() = queue;
+        self.ivars().page.set(page);
+    }
+
+    /// Whether this page opens real popup windows.
+    pub(super) fn popups(&self) -> bool {
+        self.ivars().popups.borrow().is_some()
     }
 
     /// Shared navigation-result slot. Reused by `navigate` to await an

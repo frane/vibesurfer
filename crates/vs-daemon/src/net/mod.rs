@@ -133,6 +133,10 @@ pub struct SessionNet {
     events_cv: Condvar,
     held: Mutex<HashMap<u64, Held>>,
     bodies: Mutex<Bodies>,
+    /// Popup sessions: true once the daemon has adopted every popup the
+    /// engine opened. A main-frame navigation waits for it briefly, so
+    /// a popup's `page` line precedes its first request.
+    popups_settled: Mutex<Option<Arc<dyn Fn() -> bool + Send + Sync>>>,
 }
 
 impl SessionNet {
@@ -151,6 +155,7 @@ impl SessionNet {
             events_cv: Condvar::new(),
             held: Mutex::new(HashMap::new()),
             bodies: Mutex::new(Bodies::default()),
+            popups_settled: Mutex::new(None),
         });
         let for_thread = net.clone();
         std::thread::Builder::new()
@@ -273,6 +278,12 @@ impl SessionNet {
         self.next_id.fetch_add(1, Ordering::SeqCst)
     }
 
+    /// Queue an event line from outside the proxy (popups opening and
+    /// closing), ending in a newline.
+    pub(crate) fn push_line(&self, line: String) {
+        self.push(line);
+    }
+
     fn push(&self, text: String) {
         let mut ev = self.events.lock().expect("poisoned");
         if ev.q.len() >= MAX_EVENTS {
@@ -321,7 +332,21 @@ impl SessionNet {
         Decision::Continue(Overrides::default())
     }
 
+    /// See `popups_settled`.
+    pub(crate) fn set_popups_settled(&self, f: Arc<dyn Fn() -> bool + Send + Sync>) {
+        *self.popups_settled.lock().expect("poisoned") = Some(f);
+    }
+
     fn ev_request(&self, id: u64, req: &ProxyRequest, kind: classify::Kind) {
+        if kind.nav && kind.frame == Some("main") {
+            let settled = self.popups_settled.lock().expect("poisoned").clone();
+            if let Some(settled) = settled {
+                let until = std::time::Instant::now() + Duration::from_millis(300);
+                while !settled() && std::time::Instant::now() < until {
+                    std::thread::sleep(Duration::from_millis(3));
+                }
+            }
+        }
         let mut s = format!(
             "req {id} {} {} type={} nav={}",
             req.method,

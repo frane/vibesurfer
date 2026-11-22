@@ -633,6 +633,22 @@ pub trait Engine {
         })
     }
 
+    /// [`Self::eval_js`] in one subframe of `page`, including a
+    /// cross-origin one the page's own script cannot reach. `frame` is
+    /// the frame's URL (the newest frame with it wins), or `#N` for the
+    /// Nth subframe, newest first.
+    fn eval_js_in_frame(
+        &mut self,
+        _page: PageHandle,
+        _frame: &str,
+        _expr: &str,
+    ) -> EngineResult<crate::inspector::EvalResult> {
+        Err(EngineError::Unsupported {
+            engine: self.capabilities().name,
+            primitive: "vs_inspect eval --frame",
+        })
+    }
+
     /// List storage entries for the requested scope.
     fn storage(
         &mut self,
@@ -730,8 +746,69 @@ pub trait Engine {
         Ok(None)
     }
 
+    /// Give `page` real popup windows: a `target="_blank"` link or
+    /// form, or `window.open()`, opens a new engine page with an
+    /// `opener`, instead of loading in `page`. Popups of a popup
+    /// inherit the setting. Engines without support keep loading in
+    /// place.
+    fn set_popups(&mut self, _page: PageHandle, _on: bool) -> EngineResult<()> {
+        Ok(())
+    }
+
+    /// Where pages with real popups report windows they open and
+    /// pages that close themselves. Readable from any thread, so the
+    /// daemon learns of a popup without waiting for the engine thread,
+    /// which may be busy with the click that opened it. The engine
+    /// handle in an event is usable at once.
+    fn popup_feed(&mut self) -> Option<std::sync::Arc<PopupFeed>> {
+        None
+    }
+
     /// Capabilities the daemon should advertise for this engine.
     fn capabilities(&self) -> EngineCapabilities;
+}
+
+/// A page another page opened (see [`Engine::set_popups`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Popup {
+    /// `None` when the opener was not an engine page (it closed).
+    pub opener: Option<PageHandle>,
+    pub page: PageHandle,
+    /// The URL it was asked to load (empty for `window.open()` with none).
+    pub url: String,
+}
+
+/// One entry of a [`PopupFeed`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PopupEvent {
+    Opened(Popup),
+    /// The page called `window.close()`; the engine releases it.
+    Closed(PageHandle),
+}
+
+/// See [`Engine::popup_feed`].
+#[derive(Debug, Default)]
+pub struct PopupFeed {
+    events: std::sync::Mutex<Vec<PopupEvent>>,
+    raised: std::sync::atomic::AtomicU64,
+}
+
+impl PopupFeed {
+    pub fn push(&self, e: PopupEvent) {
+        self.events.lock().expect("poisoned").push(e);
+        self.raised
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Events since the last drain, oldest first.
+    pub fn drain(&self) -> Vec<PopupEvent> {
+        std::mem::take(&mut *self.events.lock().expect("poisoned"))
+    }
+
+    /// Events pushed so far.
+    pub fn raised(&self) -> u64 {
+        self.raised.load(std::sync::atomic::Ordering::SeqCst)
+    }
 }
 
 /// The role a node in `Node` would carry — re-exported for convenience.

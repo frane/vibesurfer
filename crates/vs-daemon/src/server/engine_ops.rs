@@ -835,7 +835,8 @@ fn render_eval(daemon: &Daemon, session_id: &str, page_id: &str, req: &Request) 
         .and_then(|s| s.parse().ok())
         .unwrap_or(4096);
     let truncate = !req.flags.contains_key("full");
-    match daemon.inspect_eval(session_id, page_id, &expr) {
+    let frame = flag_value(req, "frame");
+    match daemon.inspect_eval(session_id, page_id, frame.as_deref(), &expr) {
         Ok(EvalResult::Ok { value, js_type }) => {
             let len = value.len();
             let body = if truncate && len > max {

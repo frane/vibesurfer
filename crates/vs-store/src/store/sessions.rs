@@ -36,7 +36,17 @@ impl Store {
             closed_at: None,
             isolated,
             intercept,
+            popups: false,
         })
+    }
+
+    /// Give a session real popup windows (see [`Session::popups`]).
+    pub fn set_session_popups(&mut self, id: &str, on: bool) -> Result<()> {
+        self.conn().execute(
+            "UPDATE sessions SET popups=?2 WHERE id=?1",
+            params![id, i64::from(on)],
+        )?;
+        Ok(())
     }
 
     /// Mark a session closed (and stamp `closed_at`). Returns the row.
