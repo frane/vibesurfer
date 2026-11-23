@@ -18,12 +18,19 @@ pub(super) fn run_loop_until<F: FnMut() -> bool>(mut done: F, budget: Duration) 
     use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSRunLoop};
     let deadline = std::time::Instant::now() + budget;
     let run_loop = NSRunLoop::currentRunLoop();
-    while std::time::Instant::now() < deadline {
+    loop {
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            break;
+        }
         if done() {
             return true;
         }
-        // 50ms slices: snappy enough for completion, no CPU spin.
-        let slice = NSDate::dateWithTimeIntervalSinceNow(0.05);
+        // Up to 50ms per slice, never past the deadline: runMode only
+        // returns early when a source fires, so a full slice turned a
+        // 2ms settle into a 50ms one (every click paid ~60ms for it).
+        let left = deadline.duration_since(now).as_secs_f64().min(0.05);
+        let slice = NSDate::dateWithTimeIntervalSinceNow(left);
         unsafe { run_loop.runMode_beforeDate(NSDefaultRunLoopMode, &slice) };
     }
     done()

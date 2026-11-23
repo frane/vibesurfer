@@ -142,13 +142,27 @@ impl WpeBackend {
 fn run_loop_until<F: FnMut() -> bool>(mut done: F, budget: Duration) -> bool {
     let main_ctx = glib::MainContext::default();
     let deadline = std::time::Instant::now() + budget;
-    while std::time::Instant::now() < deadline {
+    loop {
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            break;
+        }
         if done() {
             return true;
         }
-        // Iterate non-blocking; if no work, sleep briefly.
-        if !main_ctx.iteration(false) {
-            std::thread::sleep(Duration::from_millis(10));
+        if main_ctx.iteration(false) {
+            continue;
+        }
+        // Nothing ready: block until a source fires or the slice ends.
+        // A fixed sleep here noticed every eval result and input event
+        // up to 10ms late.
+        let left = deadline.duration_since(now).min(Duration::from_millis(50));
+        let fired = std::rc::Rc::new(Cell::new(false));
+        let flag = fired.clone();
+        let timer = glib::timeout_add_local_once(left, move || flag.set(true));
+        main_ctx.iteration(true);
+        if !fired.get() {
+            timer.remove();
         }
     }
     done()
@@ -816,7 +830,7 @@ impl Engine for WpeBackend {
                     seed,
                     false,
                 )?;
-                cursor_press_release(dispatcher, landed, (origin_x, origin_y))?;
+                cursor_press_release(dispatcher, landed, (origin_x, origin_y), humanize_mode)?;
                 landed
             }
             CursorOp::Drag { x1, y1, x2, y2 } => {
@@ -963,22 +977,31 @@ fn cursor_move_along_path(
 }
 
 /// Press-then-release left button at the current pointer position.
-/// Matches the `mouseDown` / 15 ms / `mouseUp` cadence the macOS
-/// backend uses so JS sees a coherent `click` event.
+/// Same cadence as the macOS backend (robotic 2 ms / 6 ms, otherwise
+/// 15 ms / 30 ms), so JS sees a coherent `click` event.
 fn cursor_press_release(
     dispatcher: &dyn super::wpe_input::InputDispatcher,
     _at: vs_humanize::Point,
     _origin: (f64, f64),
+    mode: vs_humanize::InputMode,
 ) -> EngineResult<()> {
+    // Robotic input holds the button briefly, as on macOS; the other
+    // modes keep a human press. The waits pump the main loop (a plain
+    // sleep stalled GTK, which then saw the events only afterwards).
+    let (down_ms, up_ms) = match mode {
+        vs_humanize::InputMode::Robotic => (2, 6),
+        _ => (15, 30),
+    };
     dispatcher.dispatch(super::wpe_input::InputEvent::Press(
         super::wpe_input::Button::Left,
     ))?;
-    std::thread::sleep(Duration::from_millis(15));
+    dispatcher.flush()?;
+    let _ = run_loop_until(|| false, Duration::from_millis(down_ms));
     dispatcher.dispatch(super::wpe_input::InputEvent::Release(
         super::wpe_input::Button::Left,
     ))?;
     dispatcher.flush()?;
-    std::thread::sleep(Duration::from_millis(30));
+    let _ = run_loop_until(|| false, Duration::from_millis(up_ms));
     Ok(())
 }
 
