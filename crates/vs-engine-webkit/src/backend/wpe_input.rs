@@ -134,6 +134,10 @@ pub(crate) trait InputDispatcher: Send + Sync {
     /// windows share one screen position and input goes by position.
     /// Best-effort, like focus.
     fn raise_window(&self, _title: &str) {}
+
+    /// Move the pointer off every page window, so a page that opens
+    /// under it does not start out hovered. Best-effort.
+    fn park_pointer(&self) {}
 }
 
 // =============================================================================
@@ -425,6 +429,21 @@ impl InputDispatcher for XtestDispatcher {
             cookie.ignore_error();
         }
         let _ = self.conn.sync();
+    }
+
+    fn park_pointer(&self) {
+        // The bottom-right pixel of the screen: page windows sit at the
+        // origin and are at most as large as the viewport, which on a
+        // test display leaves this corner outside every one of them.
+        let Some(screen) = self.conn.setup().roots.first() else {
+            return;
+        };
+        let at = ScreenPoint {
+            x: i32::from(screen.width_in_pixels) - 1,
+            y: i32::from(screen.height_in_pixels) - 1,
+        };
+        let _ = self.dispatch(InputEvent::Move(at));
+        let _ = self.flush();
     }
 }
 
