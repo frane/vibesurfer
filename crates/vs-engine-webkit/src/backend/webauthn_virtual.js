@@ -204,15 +204,30 @@
   window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable = () => Promise.resolve(true);
   window.PublicKeyCredential.isConditionalMediationAvailable = () => Promise.resolve(false);
 
-  if (!navigator.credentials) navigator.credentials = {};
-  navigator.credentials.create = function (options) {
+  const vCreate = function (options) {
     if (options && options.publicKey) return create(options);
     return Promise.reject(new DOMException('unsupported credential type', 'NotSupportedError'));
   };
-  navigator.credentials.get = function (options) {
+  const vGet = function (options) {
     if (options && options.publicKey) return get(options);
     return Promise.reject(new DOMException('unsupported credential type', 'NotSupportedError'));
   };
+  // On the prototype, not only the instance: WebKit may collect the
+  // `navigator.credentials` wrapper and hand out a fresh one without
+  // the properties set on the old, which left the native create()
+  // in place now and then.
+  const define = (obj) => {
+    for (const [name, fn] of [['create', vCreate], ['get', vGet]]) {
+      try {
+        Object.defineProperty(obj, name, { value: fn, configurable: true, writable: true });
+      } catch (e) {
+        /* not configurable here */
+      }
+    }
+  };
+  if (window.CredentialsContainer && window.CredentialsContainer.prototype) define(window.CredentialsContainer.prototype);
+  if (!navigator.credentials) navigator.credentials = {};
+  define(navigator.credentials);
 
   store.installed = true;
   return 'installed';
