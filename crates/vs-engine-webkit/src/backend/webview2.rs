@@ -48,8 +48,9 @@ use webview2_com::{
     CallDevToolsProtocolMethodCompletedHandler, CapturePreviewCompletedHandler,
     CreateCoreWebView2CompositionControllerCompletedHandler,
     CreateCoreWebView2EnvironmentCompletedHandler, ExecuteScriptCompletedHandler,
-    NavigationCompletedEventHandler, NewWindowRequestedEventHandler,
-    WebMessageReceivedEventHandler,
+    FrameCreatedEventHandler, NavigationCompletedEventHandler, NewWindowRequestedEventHandler,
+    ScriptDialogOpeningEventHandler, WebMessageReceivedEventHandler,
+    WindowCloseRequestedEventHandler,
 };
 use windows::core::{Interface, HSTRING, PWSTR};
 use windows::Win32::Foundation::{E_POINTER, HWND, POINT, RECT};
@@ -119,7 +120,26 @@ struct W2Page {
     /// Main-document response of the latest navigation, assembled by
     /// the handlers from `install_response_capture`.
     responses: std::rc::Rc<std::cell::RefCell<ResponseCapture>>,
+    /// The page's session asked for real popups (`Engine::set_popups`):
+    /// a new window becomes a page, `window.close()` releases it, and
+    /// dialogs wait for an answer. Read by the view's event handlers.
+    popups_on: std::rc::Rc<std::cell::Cell<bool>>,
+    /// The page's own handle, for those handlers (set once allocated).
+    me: std::rc::Rc<std::cell::Cell<Option<PageHandle>>>,
+    /// Subframes, for evaluating in one (`webview2_extras`).
+    frames: super::webview2_extras::Frames,
 }
+
+/// What a popup's view needs from its opener: the same environment and
+/// profile, and whether the session is proxied.
+#[derive(Clone)]
+struct ViewOrigin {
+    environment: ICoreWebView2Environment,
+    profile_key: Option<String>,
+    proxied: bool,
+}
+
+type Popups = std::rc::Rc<std::cell::RefCell<super::webview2_extras::PopupState<W2Page>>>;
 
 /// What `install_response_capture` has seen of the latest navigation.
 /// WebView2 reports the status on `NavigationCompleted` and headers on
@@ -158,7 +178,9 @@ impl ResponseCapture {
 /// thread; subsequent calls assume that same thread.
 pub struct Webview2Backend {
     pages: HashMap<PageHandle, W2Page>,
-    next_handle: u64,
+    /// Popups and closed pages from the views' event handlers, the
+    /// popup feed, and the page-handle counter.
+    popups: Popups,
     captures_dir: Option<PathBuf>,
     /// Hidden parent HWND used as the root of every WebView2
     /// controller's host window. Lazily initialized on the first
@@ -195,6 +217,8 @@ impl Webview2Backend {
     /// only follows what it caused.
     fn forget_new_window(&mut self, page: PageHandle) -> EngineResult<()> {
         let _ = self.page_mut(page)?.new_window.borrow_mut().take();
+        let mut s = self.popups.borrow_mut();
+        s.raised_at_input = s.feed.raised();
         Ok(())
     }
 
@@ -206,9 +230,9 @@ impl Webview2Backend {
         use windows::Win32::UI::WindowsAndMessaging::{
             DispatchMessageW, PeekMessageW, MSG, PM_REMOVE,
         };
-        let (parked, web_view) = {
+        let (parked, web_view, popups_on) = {
             let p = self.page_mut(page)?;
-            (p.new_window.clone(), p.web_view.clone())
+            (p.new_window.clone(), p.web_view.clone(), p.popups_on.get())
         };
         let wait = settle
             && parked.borrow().is_none()
@@ -222,7 +246,20 @@ impl Webview2Backend {
             } else {
                 Duration::ZERO
             };
-        while parked.borrow().is_none() && std::time::Instant::now() < deadline {
+        // A real window: wait for WebView2 to report it, so the popup
+        // exists when the click returns.
+        let (feed, before) = {
+            let s = self.popups.borrow();
+            (s.feed.clone(), s.raised_at_input)
+        };
+        let arrived = || {
+            if popups_on {
+                feed.raised() > before
+            } else {
+                parked.borrow().is_some()
+            }
+        };
+        while !arrived() && std::time::Instant::now() < deadline {
             let mut msg = MSG::default();
             unsafe {
                 while PeekMessageW(&raw mut msg, None, 0, 0, PM_REMOVE).as_bool() {
@@ -244,7 +281,7 @@ impl Webview2Backend {
     pub fn new() -> Self {
         Self {
             pages: HashMap::new(),
-            next_handle: 1,
+            popups: Popups::default(),
             captures_dir: None,
             parent_hwnd: None,
         }
@@ -258,24 +295,50 @@ impl Webview2Backend {
     }
 
     fn alloc_handle(&mut self) -> PageHandle {
-        let h = PageHandle(self.next_handle);
-        self.next_handle += 1;
-        h
+        self.popups.borrow_mut().alloc()
+    }
+
+    /// Take in the windows pages opened and release the pages that
+    /// closed themselves since the last call. Runs before any page
+    /// lookup, so a popup's handle works as soon as it is reported.
+    fn sync_popups(&mut self) {
+        let (born, closed) = {
+            let mut s = self.popups.borrow_mut();
+            (std::mem::take(&mut s.born), std::mem::take(&mut s.closed))
+        };
+        for b in born {
+            self.pages.insert(b.handle, b.page);
+        }
+        for h in closed {
+            let _ = self.close(h);
+        }
     }
 
     fn page_mut(&mut self, h: PageHandle) -> EngineResult<&mut W2Page> {
+        self.sync_popups();
         self.pages.get_mut(&h).ok_or(EngineError::NotFound {
             kind: "page",
             id: h.0.to_string(),
         })
     }
 
-    /// Create a fresh message-only HWND to host this page's WebView2
-    /// composition target. DirectComposition rejects a second
-    /// `CreateTargetForHwnd` on a window that already has a target
-    /// (`DCOMPOSITION_ERROR_WINDOW_ALREADY_COMPOSED`), so every page
-    /// gets its own HWND under the same shared class.
+    /// A host HWND for a new page (see `new_host_hwnd`).
     fn create_host_hwnd(&mut self) -> EngineResult<HWND> {
+        let hwnd = new_host_hwnd()?;
+        // Remember the most recent HWND only so `Default::default()`
+        // is satisfied; per-page HWNDs live on `W2Page::parent_hwnd`.
+        self.parent_hwnd = Some(hwnd);
+        Ok(hwnd)
+    }
+}
+
+/// Create a fresh message-only HWND to host a page's WebView2
+/// composition target. DirectComposition rejects a second
+/// `CreateTargetForHwnd` on a window that already has a target
+/// (`DCOMPOSITION_ERROR_WINDOW_ALREADY_COMPOSED`), so every page gets its
+/// own HWND under the same shared class.
+fn new_host_hwnd() -> EngineResult<HWND> {
+    {
         // SAFETY: CoInitializeEx is required by the caller per the
         // module docs; we ignore RPC_E_CHANGED_MODE (already
         // initialized as STA on this thread).
@@ -313,9 +376,6 @@ impl Webview2Backend {
             )
         }
         .map_err(|e| EngineError::Other(format!("CreateWindowExW: {e}")))?;
-        // Remember the most recent HWND only so `Default::default()`
-        // is satisfied; per-page HWNDs live on `W2Page::parent_hwnd`.
-        self.parent_hwnd = Some(hwnd);
         Ok(hwnd)
     }
 }
@@ -623,6 +683,300 @@ fn proxied_user_data_dir(key: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("vibesurfer-intercept-{name}"))
 }
 
+/// Make `comp_controller` (hosted on `parent`) a page: DirectComposition
+/// wiring, bounds, visibility and focus, the inspector bridge, download
+/// and response capture, and the new-window, close, dialog and frame
+/// handlers. Used for pages `open` creates and for windows a page opens,
+/// so a popup is the same kind of page. The caller sets `me` once the
+/// page has a handle.
+#[allow(clippy::too_many_lines)]
+fn host_view(
+    origin: &ViewOrigin,
+    parent: HWND,
+    comp_controller: ICoreWebView2CompositionController,
+    popups: &Popups,
+) -> EngineResult<W2Page> {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_4;
+
+    let controller: ICoreWebView2Controller = comp_controller
+        .cast::<ICoreWebView2Controller>()
+        .map_err(|e| EngineError::Other(format!("cast Controller: {e}")))?;
+
+    // DirectComposition wiring. CompositionController needs a root
+    // visual to render into: one bound to the hidden parent HWND, handed
+    // to the controller and committed once. The device, target and
+    // visual are stored on the page so their refcounts outlive this call.
+    let dcomp_device: IDCompositionDevice = unsafe {
+        DCompositionCreateDevice2::<_, IDCompositionDevice>(None)
+            .map_err(|e| EngineError::Other(format!("DCompositionCreateDevice2: {e}")))?
+    };
+    let dcomp_target: IDCompositionTarget = unsafe {
+        dcomp_device
+            .CreateTargetForHwnd(parent, true)
+            .map_err(|e| EngineError::Other(format!("CreateTargetForHwnd: {e}")))?
+    };
+    let dcomp_visual: IDCompositionVisual = unsafe {
+        dcomp_device
+            .CreateVisual()
+            .map_err(|e| EngineError::Other(format!("CreateVisual: {e}")))?
+    };
+    unsafe {
+        dcomp_target
+            .SetRoot(&dcomp_visual)
+            .map_err(|e| EngineError::Other(format!("SetRoot: {e}")))?;
+        comp_controller
+            .SetRootVisualTarget(&dcomp_visual)
+            .map_err(|e| EngineError::Other(format!("SetRootVisualTarget: {e}")))?;
+        dcomp_device
+            .Commit()
+            .map_err(|e| EngineError::Other(format!("DComposition Commit: {e}")))?;
+    }
+
+    unsafe {
+        controller.SetBounds(RECT {
+            left: 0,
+            top: 0,
+            right: 1280,
+            bottom: 800,
+        })
+    }
+    .map_err(|e| EngineError::Other(format!("SetBounds: {e}")))?;
+
+    // Mark the (offscreen, composition-hosted) controller visible.
+    // `IsVisible` defaults to FALSE, which suspends rendering, and after
+    // a `viewport`/`SetBounds` an invisible controller never re-renders,
+    // so the next `CapturePreview` never completes. Visible + offscreen
+    // composition = continuous frames, nothing shown on screen.
+    unsafe { controller.SetIsVisible(true) }
+        .map_err(|e| EngineError::Other(format!("SetIsVisible: {e}")))?;
+    // Give the page focus. Without it `document.hasFocus()` is false and
+    // the page behaves as a backgrounded tab (`autofocus`,
+    // `:focus-visible`, IME). Not fatal if it fails.
+    if let Err(e) = unsafe { controller.MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC) } {
+        eprintln!("vs: MoveFocus failed ({e:?}); document.hasFocus() will be false");
+    }
+
+    let web_view: ICoreWebView2 = unsafe { controller.CoreWebView2() }
+        .map_err(|e| EngineError::Other(format!("CoreWebView2: {e}")))?;
+
+    // Deliberately no User-Agent override: WebView2 is Chromium, and a
+    // UA that disagrees with the engine underneath is the loudest
+    // inconsistency a fingerprinter can find.
+
+    // Inspector bridge before any navigation, so the document-start hook
+    // fires on the loaded page. Download capture, same shim as macOS and
+    // Linux (`AddScriptToExecuteOnDocumentCreated` covers every frame).
+    let inspector = InspectorSlots::new(crate::inspector::DEFAULT_BUFFER_CAPACITY);
+    let inspector_installed = install_inspector(&web_view, &inspector);
+    let _ = add_init_script(&web_view, super::common::DOWNLOAD_SHIM_JS);
+    let downloads = SharedDownloads::default();
+    install_download_capture(&web_view, &downloads)?;
+    let responses = install_response_capture(&web_view)?;
+
+    // Dialogs go through `ScriptDialogOpening`: held for an answer in a
+    // page with popups on, dismissed at once otherwise (as on macOS).
+    if let Ok(settings) = unsafe { web_view.Settings() } {
+        let _ = unsafe { settings.SetAreDefaultScriptDialogsEnabled(false) };
+    }
+
+    let popups_on = Rc::new(Cell::new(false));
+    let me: Rc<Cell<Option<PageHandle>>> = Rc::new(Cell::new(None));
+    let frames: super::webview2_extras::Frames = Rc::default();
+
+    // A new window. With popups on it becomes a page of its own in the
+    // same environment and profile (`spawn_popup`). Otherwise there is
+    // no second window: mark the request handled and park its URL, and
+    // the input primitive that caused it navigates this page there
+    // (`follow_new_window`). WebView2 does not expose the request body,
+    // so a POSTed blank-target form arrives as a GET.
+    let new_window: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    {
+        let parked = new_window.clone();
+        let on = popups_on.clone();
+        let me = me.clone();
+        let popups = popups.clone();
+        let origin = origin.clone();
+        let handler = NewWindowRequestedEventHandler::create(Box::new(move |_sender, args| {
+            let Some(args) = args else { return Ok(()) };
+            let mut uri = PWSTR(std::ptr::null_mut());
+            let url = if unsafe { args.Uri(&raw mut uri) }.is_ok() {
+                take_pwstr(uri)
+            } else {
+                String::new()
+            };
+            if on.get() {
+                spawn_popup(&origin, &args, me.get(), url, &popups);
+                return Ok(());
+            }
+            *parked.borrow_mut() = Some(url);
+            unsafe { args.SetHandled(true) }?;
+            Ok(())
+        }));
+        let mut token: i64 = 0;
+        unsafe { web_view.add_NewWindowRequested(&handler, &raw mut token) }
+            .map_err(|e| EngineError::Other(format!("add_NewWindowRequested: {e}")))?;
+    }
+    // `window.close()`: with popups on, report it; the backend releases
+    // the page on its next lookup.
+    {
+        let on = popups_on.clone();
+        let me = me.clone();
+        let popups = popups.clone();
+        let handler = WindowCloseRequestedEventHandler::create(Box::new(move |_, _| {
+            if let (true, Some(h)) = (on.get(), me.get()) {
+                let mut s = popups.borrow_mut();
+                s.closed.push(h);
+                s.feed.push(crate::engine::PopupEvent::Closed(h));
+            }
+            Ok(())
+        }));
+        let mut token: i64 = 0;
+        unsafe { web_view.add_WindowCloseRequested(&handler, &raw mut token) }
+            .map_err(|e| EngineError::Other(format!("add_WindowCloseRequested: {e}")))?;
+    }
+    // `alert`/`confirm`/`prompt`.
+    {
+        let on = popups_on.clone();
+        let me = me.clone();
+        let popups = popups.clone();
+        let handler = ScriptDialogOpeningEventHandler::create(Box::new(move |_, args| {
+            let Some(args) = args else { return Ok(()) };
+            if let (true, Some(h)) = (on.get(), me.get()) {
+                let feed = popups.borrow().feed.clone();
+                super::webview2_extras::hold_dialog(&feed, h, &args)?;
+            }
+            Ok(())
+        }));
+        let mut token: i64 = 0;
+        unsafe { web_view.add_ScriptDialogOpening(&handler, &raw mut token) }
+            .map_err(|e| EngineError::Other(format!("add_ScriptDialogOpening: {e}")))?;
+    }
+    // Subframes, for `eval_js_in_frame`.
+    if let Ok(wv4) = web_view.cast::<ICoreWebView2_4>() {
+        let sink = frames.clone();
+        let handler = FrameCreatedEventHandler::create(Box::new(move |_, args| {
+            if let Some(args) = args {
+                let frame = unsafe { args.Frame() }?;
+                super::webview2_extras::track_frame(&sink, &frame)?;
+            }
+            Ok(())
+        }));
+        let mut token: i64 = 0;
+        unsafe { wv4.add_FrameCreated(&handler, &raw mut token) }
+            .map_err(|e| EngineError::Other(format!("add_FrameCreated: {e}")))?;
+    }
+
+    // An intercept page's TLS ends at the daemon's proxy, which verifies
+    // upstream itself. Should Chromium still report a certificate error
+    // for the proxy's leaves, allow it: only this session's pages get here.
+    if origin.proxied {
+        allow_proxy_certificates(&web_view)?;
+    }
+
+    Ok(W2Page {
+        comp_controller,
+        controller,
+        web_view,
+        parent_hwnd: parent,
+        _dcomp_device: dcomp_device,
+        _dcomp_target: dcomp_target,
+        _dcomp_visual: dcomp_visual,
+        inspector,
+        inspector_installed,
+        cookie_baseline: RefCell::new(None),
+        cookie_next_seq: RefCell::new(0),
+        last_mouse: Cell::new(vs_humanize::Point { x: 0.0, y: 0.0 }),
+        new_window,
+        downloads,
+        responses,
+        popups_on,
+        me,
+        frames,
+    })
+}
+
+/// A window `opener` asked for (`NewWindowRequested`), as a page of its
+/// own: a composition controller in the opener's environment and profile,
+/// handed to WebView2 as the new window (so `window.opener` works) and
+/// reported on the feed. The controller is created asynchronously, under
+/// a deferral of the request.
+fn spawn_popup(
+    origin: &ViewOrigin,
+    args: &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2NewWindowRequestedEventArgs,
+    opener: Option<PageHandle>,
+    url: String,
+    popups: &Popups,
+) {
+    let Ok(deferral) = (unsafe { args.GetDeferral() }) else {
+        return;
+    };
+    let finish = {
+        let deferral = deferral.clone();
+        move || {
+            let _ = unsafe { deferral.Complete() };
+        }
+    };
+    let (Ok(parent), Ok(env3)) = (
+        new_host_hwnd(),
+        origin.environment.cast::<ICoreWebView2Environment3>(),
+    ) else {
+        finish();
+        return;
+    };
+    let Ok(iso) = origin
+        .profile_key
+        .as_deref()
+        .map(|key| isolated_controller_options(&origin.environment, key))
+        .transpose()
+    else {
+        finish();
+        return;
+    };
+    let (origin, args, popups) = (origin.clone(), args.clone(), popups.clone());
+    let done = CreateCoreWebView2CompositionControllerCompletedHandler::create(Box::new(
+        move |error_code, controller| {
+            let adopted = (|| -> EngineResult<()> {
+                error_code.map_err(|e| EngineError::Other(format!("popup controller: {e}")))?;
+                let comp = controller
+                    .ok_or_else(|| EngineError::Other("popup controller: none".into()))?;
+                let page = host_view(&origin, parent, comp, &popups)?;
+                page.popups_on.set(true);
+                unsafe { args.SetNewWindow(&page.web_view) }
+                    .map_err(|e| EngineError::Other(format!("SetNewWindow: {e}")))?;
+                let mut s = popups.borrow_mut();
+                let handle = s.alloc();
+                page.me.set(Some(handle));
+                s.born.push(super::webview2_extras::Born { handle, page });
+                s.feed
+                    .push(crate::engine::PopupEvent::Opened(crate::engine::Popup {
+                        opener,
+                        page: handle,
+                        url: url.clone(),
+                    }));
+                Ok(())
+            })();
+            if let Err(e) = adopted {
+                eprintln!("vs: popup failed: {e}");
+            }
+            finish();
+            Ok(())
+        },
+    ));
+    let started = unsafe {
+        match iso {
+            None => env3.CreateCoreWebView2CompositionController(parent, &done),
+            Some((env10, options)) => {
+                env10.CreateCoreWebView2CompositionControllerWithOptions(parent, &options, &done)
+            }
+        }
+    };
+    if started.is_err() {
+        let _ = unsafe { deferral.Complete() };
+    }
+}
+
 impl Engine for Webview2Backend {
     // The COM bring-up (environment → composition controller →
     // DirectComposition device/target/visual → settings → navigate)
@@ -744,132 +1098,13 @@ impl Engine for Webview2Backend {
                 .map_err(|_| EngineError::Other("Controller channel closed".into()))?
                 .map_err(|e| EngineError::Other(format!("Controller: {e}")))?
         };
-        let controller: ICoreWebView2Controller = comp_controller
-            .cast::<ICoreWebView2Controller>()
-            .map_err(|e| EngineError::Other(format!("cast Controller: {e}")))?;
-
-        // 2b. DirectComposition wiring. CompositionController needs a
-        //     root visual to render into — we create one bound to the
-        //     hidden parent HWND, hand it to the controller, and commit
-        //     once. The device + target + visual are stored on the page
-        //     so their refcounts outlive the open() call.
-        let dcomp_device: IDCompositionDevice = unsafe {
-            DCompositionCreateDevice2::<_, IDCompositionDevice>(None)
-                .map_err(|e| EngineError::Other(format!("DCompositionCreateDevice2: {e}")))?
+        let origin = ViewOrigin {
+            environment: environment.clone(),
+            profile_key: store.key().map(str::to_string),
+            proxied: matches!(store, DataStore::Proxied { .. }),
         };
-        let dcomp_target: IDCompositionTarget = unsafe {
-            dcomp_device
-                .CreateTargetForHwnd(parent, true)
-                .map_err(|e| EngineError::Other(format!("CreateTargetForHwnd: {e}")))?
-        };
-        let dcomp_visual: IDCompositionVisual = unsafe {
-            dcomp_device
-                .CreateVisual()
-                .map_err(|e| EngineError::Other(format!("CreateVisual: {e}")))?
-        };
-        unsafe {
-            dcomp_target
-                .SetRoot(&dcomp_visual)
-                .map_err(|e| EngineError::Other(format!("SetRoot: {e}")))?;
-            comp_controller
-                .SetRootVisualTarget(&dcomp_visual)
-                .map_err(|e| EngineError::Other(format!("SetRootVisualTarget: {e}")))?;
-            dcomp_device
-                .Commit()
-                .map_err(|e| EngineError::Other(format!("DComposition Commit: {e}")))?;
-        }
-
-        unsafe {
-            controller.SetBounds(RECT {
-                left: 0,
-                top: 0,
-                right: 1280,
-                bottom: 800,
-            })
-        }
-        .map_err(|e| EngineError::Other(format!("SetBounds: {e}")))?;
-
-        // Mark the (offscreen, composition-hosted) controller visible.
-        // `IsVisible` defaults to FALSE, which suspends rendering — a
-        // single `CapturePreview` catches the initial post-load frame,
-        // but after a `viewport`/`SetBounds` the WebView must re-render
-        // at the new size, which an invisible controller never does, so
-        // the next `CapturePreview` completion handler never fires and
-        // the call hangs (seen as the sequential-capture wedge on
-        // Windows). Visible + offscreen composition = continuous frames
-        // CapturePreview can always read, with nothing shown on screen.
-        unsafe { controller.SetIsVisible(true) }
-            .map_err(|e| EngineError::Other(format!("SetIsVisible: {e}")))?;
-        // Give the page focus. Without this `document.hasFocus()` is
-        // false and the page behaves as a backgrounded tab: `autofocus`
-        // does not fire, `:focus-visible` never matches, IME
-        // composition does not start. The macOS backend needed the
-        // equivalent (a key window plus first responder). Not fatal if
-        // it fails — the browser still works, it just thinks it is in
-        // the background.
-        if let Err(e) = unsafe { controller.MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC) }
-        {
-            eprintln!("vs: MoveFocus failed ({e:?}); document.hasFocus() will be false");
-        }
-
-        let web_view: ICoreWebView2 = unsafe { controller.CoreWebView2() }
-            .map_err(|e| EngineError::Other(format!("CoreWebView2: {e}")))?;
-
-        // Deliberately no User-Agent override.
-        //
-        // WebView2 is Chromium, and its own default UA already names
-        // the right engine and OS. We used to stamp a Safari-on-macOS
-        // string over it — the same constant the WebKit backends use —
-        // which claimed a browser and a platform that contradicted
-        // everything else the page could observe: navigator.platform,
-        // the presence of window.chrome and the Chromium-only APIs,
-        // the JS engine's own behaviour. A UA that disagrees with the
-        // engine underneath it is the single loudest inconsistency a
-        // fingerprinter can find, and it was self-inflicted.
-
-        // 3. Install inspector bridge BEFORE Navigate so the
-        //    document-start hook fires on the loaded page.
-        let inspector = InspectorSlots::new(crate::inspector::DEFAULT_BUFFER_CAPACITY);
-        let inspector_installed = install_inspector(&web_view, &inspector);
-        // Download capture, same shim as Mac / Linux.
-        // `AddScriptToExecuteOnDocumentCreated` applies to every frame,
-        // which is what the in-iframe viewer case needs.
-        let _ = add_init_script(&web_view, super::common::DOWNLOAD_SHIM_JS);
-        let downloads = SharedDownloads::default();
-        install_download_capture(&web_view, &downloads)?;
-        let responses = install_response_capture(&web_view)?;
-
-        // A headless page has no second window. WebView2 would open a
-        // separate popup the agent cannot address; mark the request
-        // handled and park its URL instead, and the input primitive that
-        // caused it navigates this page there (`follow_new_window`).
-        // WebView2 does not expose the request body, so a POSTed
-        // blank-target form arrives as a GET (docs/known-issues.md).
-        let new_window: std::rc::Rc<std::cell::RefCell<Option<String>>> =
-            std::rc::Rc::new(std::cell::RefCell::new(None));
-        let parked = new_window.clone();
-        let popup_handler =
-            NewWindowRequestedEventHandler::create(Box::new(move |_sender, args| {
-                if let Some(args) = args {
-                    let mut uri = PWSTR(std::ptr::null_mut());
-                    if unsafe { args.Uri(&raw mut uri) }.is_ok() {
-                        *parked.borrow_mut() = Some(take_pwstr(uri));
-                    }
-                    unsafe { args.SetHandled(true) }?;
-                }
-                Ok(())
-            }));
-        let mut popup_token: i64 = 0;
-        unsafe { web_view.add_NewWindowRequested(&popup_handler, &raw mut popup_token) }
-            .map_err(|e| EngineError::Other(format!("add_NewWindowRequested: {e}")))?;
-
-        // An intercept page's TLS ends at the daemon's proxy, which
-        // verifies upstream itself. Should Chromium still report a
-        // certificate error for the proxy's leaves (the SPKI flag above
-        // not taking), allow it: only this session's pages get here.
-        if matches!(store, DataStore::Proxied { .. }) {
-            allow_proxy_certificates(&web_view)?;
-        }
+        let page = host_view(&origin, parent, comp_controller, &self.popups)?;
+        let web_view = page.web_view.clone();
 
         // 4. Navigate + wait for NavigationCompleted.
         let (tx, rx) = mpsc::channel();
@@ -889,26 +1124,8 @@ impl Engine for Webview2Backend {
             .map_err(|e| EngineError::Other(format!("remove_NavigationCompleted: {e}")))?;
 
         let handle = self.alloc_handle();
-        self.pages.insert(
-            handle,
-            W2Page {
-                comp_controller,
-                controller,
-                web_view,
-                parent_hwnd: parent,
-                _dcomp_device: dcomp_device,
-                _dcomp_target: dcomp_target,
-                _dcomp_visual: dcomp_visual,
-                inspector,
-                inspector_installed,
-                cookie_baseline: std::cell::RefCell::new(None),
-                cookie_next_seq: std::cell::RefCell::new(0),
-                last_mouse: std::cell::Cell::new(vs_humanize::Point { x: 0.0, y: 0.0 }),
-                new_window,
-                downloads,
-                responses,
-            },
-        );
+        page.me.set(Some(handle));
+        self.pages.insert(handle, page);
         Ok(handle)
     }
 
@@ -1242,6 +1459,34 @@ impl Engine for Webview2Backend {
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
         super::common::run_eval(move |js, _budget| execute_script(&web_view, js), expr)
+    }
+
+    fn eval_js_in_frame(
+        &mut self,
+        page: PageHandle,
+        frame: &str,
+        expr: &str,
+    ) -> EngineResult<crate::inspector::EvalResult> {
+        let frames = self.page_mut(page)?.frames.clone();
+        let target = super::webview2_extras::find_frame(&frames, frame).ok_or_else(|| {
+            EngineError::NotFound {
+                kind: "frame",
+                id: frame.to_string(),
+            }
+        })?;
+        super::common::run_eval(
+            move |js, _budget| super::webview2_extras::execute_in_frame(&target, js),
+            expr,
+        )
+    }
+
+    fn set_popups(&mut self, page: PageHandle, on: bool) -> EngineResult<()> {
+        self.page_mut(page)?.popups_on.set(on);
+        Ok(())
+    }
+
+    fn popup_feed(&mut self) -> Option<std::sync::Arc<crate::engine::PopupFeed>> {
+        Some(self.popups.borrow().feed.clone())
     }
 
     fn storage(

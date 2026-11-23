@@ -99,8 +99,8 @@ fn cell_inspect_eval() {
 
 // 39a. vs_inspect eval --frame reaches a cross-origin iframe, which
 // the page's own script cannot read. macOS evaluates in the frame's
-// WKFrameInfo, WebKitGTK through a per-frame agent (wpe_frames).
-// WebView2: in progress.
+// WKFrameInfo, WebKitGTK through a per-frame agent (wpe_frames),
+// WebView2 through the frame's own ExecuteScript.
 #[test]
 fn cell_inspect_eval_in_cross_origin_frame() {
     for _ in each_available_backend() {
@@ -114,14 +114,6 @@ fn cell_inspect_eval_in_cross_origin_frame() {
         );
         assert_eq!(blocked.trim(), "null", "the frame must be cross-origin");
         let r = ctx.vs(&["inspect", &page, "eval", "document.title", "--frame=#0"]);
-        if cfg!(target_os = "windows") {
-            assert!(
-                r.stdout.contains("ENGINE_UNSUPPORTED"),
-                "WebView2 must refuse plainly until it has frame eval, got {}",
-                r.stdout
-            );
-            continue;
-        }
         assert_ok("eval --frame=#0", &r);
         assert!(r.stdout.contains("result=Inner"), "got {}", r.stdout);
         // By URL, and the frame's own DOM is live.

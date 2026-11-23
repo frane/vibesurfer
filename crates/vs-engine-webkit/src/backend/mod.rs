@@ -30,3 +30,6 @@ mod wpe_frames;
 
 #[cfg(target_os = "windows")]
 pub mod webview2;
+
+#[cfg(target_os = "windows")]
+mod webview2_extras;

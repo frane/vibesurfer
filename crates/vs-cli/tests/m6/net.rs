@@ -656,10 +656,6 @@ fn cell_intercept_abort_is_not_retried() {
 #[test]
 fn cell_popups_open_their_own_page() {
     for _ in each_available_backend() {
-        // WebView2 popups: in progress.
-        if cfg!(target_os = "windows") {
-            continue;
-        }
         let ctx = TestContext::start();
         let r = ctx.vs(&["session-open", "--intercept", "--popups"]);
         assert_ok("session-open --popups", &r);
@@ -754,10 +750,6 @@ fn cell_popups_open_their_own_page() {
 #[test]
 fn cell_dialogs_wait_for_an_answer() {
     for _ in each_available_backend() {
-        // WebView2 dialogs: in progress.
-        if cfg!(target_os = "windows") {
-            continue;
-        }
         let ctx = TestContext::start();
         let r = ctx.vs(&["session-open", "--intercept", "--popups"]);
         assert_ok("session-open --popups", &r);
