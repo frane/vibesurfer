@@ -335,6 +335,12 @@ impl Engine for WpeBackend {
         wait_for_load(&web_view, "navigate")
     }
 
+    fn load_html(&mut self, page: PageHandle, url: &str, html: &str) -> EngineResult<()> {
+        let web_view = self.page_mut(page)?.web_view.clone();
+        web_view.load_html(html, Some(url));
+        wait_for_load(&web_view, "load_html")
+    }
+
     fn add_init_script(&mut self, page: PageHandle, source: &str) -> EngineResult<()> {
         let manager = self
             .page_mut(page)?

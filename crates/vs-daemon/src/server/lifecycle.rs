@@ -145,7 +145,23 @@ pub(super) fn handle_goto(daemon: &Daemon, req: &Request) -> String {
     let Some(url) = req.args.get(1).cloned() else {
         return format_error(ErrorCode::BadRequest, vec!["vs_goto: missing url".into()]);
     };
-    match daemon.navigate(&session_id, &page_id, &url) {
+    // `--html=<base64>`: load that document under `url` instead of fetching it.
+    let html = match req.flags.get("html").and_then(|v| v.as_deref()) {
+        Some(b64) => {
+            use base64::Engine as _;
+            match base64::engine::general_purpose::STANDARD.decode(b64.as_bytes()) {
+                Ok(b) => Some(String::from_utf8_lossy(&b).into_owned()),
+                Err(e) => {
+                    return format_error(
+                        ErrorCode::BadRequest,
+                        vec![format!("vs_goto: --html is not base64: {e}")],
+                    )
+                }
+            }
+        }
+        None => None,
+    };
+    match daemon.navigate(&session_id, &page_id, &url, html.as_deref()) {
         Ok(OpenResponse {
             page_id,
             token,

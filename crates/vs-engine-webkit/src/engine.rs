@@ -474,6 +474,17 @@ pub trait Engine {
     /// `open` for successive navigations.
     fn navigate(&mut self, page: PageHandle, url: &str) -> EngineResult<()>;
 
+    /// Load `html` as the page's document under `url`: the document
+    /// has that URL and origin, but nothing is fetched and no response
+    /// headers apply. A test runner uses it to serve a routed main
+    /// document for a host the proxy cannot see (loopback on macOS).
+    fn load_html(&mut self, _page: PageHandle, _url: &str, _html: &str) -> EngineResult<()> {
+        Err(EngineError::Unsupported {
+            engine: self.capabilities().name,
+            primitive: "vs_goto --html",
+        })
+    }
+
     /// Install a virtual WebAuthn authenticator on `page`: a pure-JS
     /// software authenticator that overrides `navigator.credentials`
     /// so passkey registration and login work headlessly, with no

@@ -219,7 +219,13 @@ impl Daemon {
     /// the page's web view instead of creating a new page, then
     /// re-baselines: the document is replaced, so all refs are fresh
     /// and the next view is a full tree.
-    pub fn navigate(&self, session_id: &str, page_id: &str, url: &str) -> Result<OpenResponse> {
+    pub fn navigate(
+        &self,
+        session_id: &str,
+        page_id: &str,
+        url: &str,
+        html: Option<&str>,
+    ) -> Result<OpenResponse> {
         let url_owned = url.to_string();
         let ctx = AuditCtx::new("vs_goto", session_id)
             .with_page(page_id)
@@ -229,7 +235,10 @@ impl Daemon {
             );
         self.audit_call(ctx, |ctx| {
             let engine_handle = self.engine_handle_for(session_id, page_id)?;
-            self.inner.engine.navigate(engine_handle, url)?;
+            match html {
+                Some(h) => self.inner.engine.load_html(engine_handle, url, h)?,
+                None => self.inner.engine.navigate(engine_handle, url)?,
+            }
 
             let tree = self.inner.engine.snapshot(engine_handle)?;
             let token = tokens::compute(&tree, &url_owned, page_id);

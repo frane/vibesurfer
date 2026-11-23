@@ -214,6 +214,12 @@ impl EngineRuntime {
         self.dispatch(move |e| e.navigate(page, &url))
     }
 
+    pub fn load_html(&self, page: PageHandle, url: &str, html: &str) -> EngineResult<()> {
+        let url = url.to_string();
+        let html = html.to_string();
+        self.dispatch(move |e| e.load_html(page, &url, &html))
+    }
+
     pub fn close(&self, page: PageHandle) -> EngineResult<()> {
         self.dispatch(move |e| e.close(page))
     }

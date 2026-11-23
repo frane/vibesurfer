@@ -276,6 +276,7 @@ pub fn build_cli(name: &str, args: &Value) -> Result<(Cli, CallOpts)> {
         "vs_goto" => Command::Goto {
             page: req_str(args, "page")?,
             url: req_str(args, "url")?,
+            html: None,
         },
         "vs_close" => Command::Close {
             page: req_str(args, "page")?,

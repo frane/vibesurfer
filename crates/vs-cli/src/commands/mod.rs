@@ -98,7 +98,15 @@ pub enum Command {
     /// browser-process spin-up and is much faster for successive
     /// navigations. Refs are fresh afterward (re-baselined).
     #[command(visible_alias = "g")]
-    Goto { page: String, url: String },
+    Goto {
+        page: String,
+        url: String,
+        /// Load this HTML file as the document under URL instead of
+        /// fetching it (WebKit engines). Nothing is fetched, so no
+        /// response headers apply.
+        #[arg(long, value_name = "FILE")]
+        html: Option<String>,
+    },
 
     /// Run a script at document start in every later document of the
     /// page, before its own scripts (like Playwright's addInitScript).
@@ -772,12 +780,23 @@ impl Command {
                     .arg(url.clone())
                     .flag_value("session", s)
             }
-            Self::Goto { page, url } => {
+            Self::Goto { page, url, html } => {
                 let s = require_session(session_id)?;
-                Request::new("vs_goto")
+                let req = Request::new("vs_goto")
                     .arg(page.clone())
                     .arg(url.clone())
-                    .flag_value("session", s)
+                    .flag_value("session", s);
+                match html {
+                    Some(path) => {
+                        use base64::Engine as _;
+                        let bytes = std::fs::read(path).with_context(|| format!("read {path}"))?;
+                        req.flag_value(
+                            "html",
+                            base64::engine::general_purpose::STANDARD.encode(bytes),
+                        )
+                    }
+                    None => req,
+                }
             }
 
             Self::InitScript { page, source } => {

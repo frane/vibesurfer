@@ -39,7 +39,7 @@ Wire form is `vs_<name>` (over the socket); CLI subcommand is `<name>` with hyph
 | 1 | `vs session-open [--policy=NAME] [--isolated] [--intercept] [--popups]` | Create a session. Writes `~/.vibesurfer/active-session`. `--isolated`: own in-memory cookie/storage jar, shared by the session's pages only, gone on close or daemon restart. Default sessions share the persistent jar (logins persist). `--intercept`: route the pages through a daemon HTTP proxy for `vs net` (implies an own jar). `--popups` (macOS): `target=_blank`/`window.open()` open a new page in the session instead of in place; `vs status` lists it. |
 | 2 | `vs session-close [--all\|--idle-for=2h]` | Close the active session, or sweep the workspace: `--all`, or only what has been untouched that long. |
 | 3 | `vs open <URL>` | Open a page in the session. |
-| - | `vs goto <PAGE> <URL>` (`g`) | Navigate an existing page in place. Reuses the web view, so it skips browser spin-up and is much faster than open for successive navigations. Refs are fresh afterward. |
+| - | `vs goto <PAGE> <URL>` (`g`) | Navigate an existing page in place. Reuses the web view, so it skips browser spin-up and is much faster than open for successive navigations. Refs are fresh afterward. `--html FILE` loads that document under URL without fetching it. |
 | - | `vs flow run <FILE>` | Run a declarative flow: a JSON array of steps, each an array of `vs` args. Runs in one session; `$page` expands to the last opened/navigated page, `$token` to its current token (fetched as needed). Stops at the first failing step. |
 | 4 | `vs close <PAGE>` | Close a page. |
 

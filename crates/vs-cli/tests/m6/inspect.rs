@@ -463,3 +463,41 @@ fn cell_inspect_response() {
         assert_eq!(body_rest(&r).trim(), "none", "data: has no response");
     }
 }
+
+// `vs goto --html` loads a document under a URL without fetching it.
+// The URL here 404s on the fixture server, so the page's text can only
+// come from the file. WebView2 has no load-with-base-URL and says so.
+#[test]
+fn cell_goto_html_loads_under_the_url() {
+    for backend in each_available_backend() {
+        eprintln!(
+            "== cell_goto_html_loads_under_the_url: backend={} ==",
+            backend.name()
+        );
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/static.html");
+        let file = std::env::temp_dir().join(format!("vs-goto-html-{}.html", std::process::id()));
+        std::fs::write(&file, "<title>routed</title><p id=p>from the file</p>").unwrap();
+        let url = ctx.url("/missing");
+        let r = ctx.vs(&["goto", &page, &url, "--html", file.to_str().unwrap()]);
+        let _ = std::fs::remove_file(&file);
+        if cfg!(target_os = "windows") {
+            assert!(
+                r.stdout.contains("ENGINE_UNSUPPORTED"),
+                "windows: {}",
+                r.stdout
+            );
+            continue;
+        }
+        assert_ok("goto --html", &r);
+        assert_eq!(eval_js(&ctx, &page, "location.href").trim(), url);
+        assert_eq!(
+            eval_js(&ctx, &page, "document.getElementById('p').textContent").trim(),
+            "from the file"
+        );
+        assert_eq!(
+            eval_js(&ctx, &page, "location.origin").trim(),
+            ctx.url("").trim_end_matches('/')
+        );
+    }
+}

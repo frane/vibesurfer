@@ -750,6 +750,18 @@ impl Engine for WkBackend {
         wait_for_navigation(&slot, super::common::nav_budget(), "navigate")
     }
 
+    fn load_html(&mut self, page: PageHandle, url: &str, html: &str) -> EngineResult<()> {
+        let (web_view, slot) = {
+            let p = self.page_mut(page)?;
+            (p.web_view.clone(), p.nav_delegate.slot())
+        };
+        slot.borrow_mut().reset();
+        let base = NSURL::URLWithString(&NSString::from_str(url))
+            .ok_or_else(|| EngineError::Other(format!("invalid url: {url}")))?;
+        let _ = unsafe { web_view.loadHTMLString_baseURL(&NSString::from_str(html), Some(&base)) };
+        wait_for_navigation(&slot, super::common::nav_budget(), "load_html")
+    }
+
     fn enable_webauthn(&mut self, page: PageHandle) -> EngineResult<()> {
         let mtm = self.mtm;
         let p = self.page_mut(page)?;

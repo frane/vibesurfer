@@ -1052,6 +1052,7 @@ fn prompt_form_fill_survives_a_page_change_while_the_human_types() {
         &s.session_id,
         &p.page_id,
         "https://example.com/login?step=2",
+        None,
     )
     .unwrap();
     let after = d.view(&s.session_id, &p.page_id, true).unwrap();
