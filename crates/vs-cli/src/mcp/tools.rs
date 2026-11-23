@@ -143,7 +143,7 @@ fn base_tools() -> Vec<Value> {
             ("token", str_prop("State token from the most recent read.", true)),
             ("mode", str_prop("Input mode: human | careful | robotic. Default: human.", false)),
         ])),
-tool("vs_type", "Type text into the FOCUSED element with trusted keystrokes (real keydown/beforeinput/input, isTrusted=true). Use for rich-text editors (DraftJS/ProseMirror/contenteditable) and framework inputs where vs_act fill is ignored. Place the caret first with vs_click_at. Use --secret for credentials. macOS only for now.", obj(&[
+tool("vs_type", "Type text into the FOCUSED element with trusted keystrokes (real keydown/beforeinput/input, isTrusted=true). Use for rich-text editors (DraftJS/ProseMirror/contenteditable) and framework inputs where vs_act fill is ignored. Place the caret first with vs_click_at. Use --secret for credentials.", obj(&[
             ("page", str_prop("Page id.", true)),
             ("text", str_prop("Text to type into the focused element.", true)),
             ("secret", bool_prop("Redact the text in the audit log (length only). Default false.", false)),

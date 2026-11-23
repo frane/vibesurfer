@@ -366,7 +366,7 @@ pub enum Command {
     /// Rich-text editors (DraftJS/ProseMirror/contenteditable) and
     /// framework-controlled inputs need this — `act fill` bypasses
     /// their change pipeline. Place the caret first (e.g. `vs
-    /// click-at`). macOS only for now; ENGINE_UNSUPPORTED elsewhere.
+    /// click-at`).
     #[command(visible_alias = "ty")]
     Type {
         page: String,

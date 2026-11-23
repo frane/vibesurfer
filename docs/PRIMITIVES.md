@@ -54,15 +54,14 @@ link or form and each `window.open()`, with `window.opener` where the
 page asked for it, instead of loading it in the clicked page. A page
 that calls `window.close()` leaves the session. In an `--intercept`
 session `vs_net_poll` also reports `page <opener> <page> <url>`, before
-the popup's first request, and `close <page>`. macOS only; the other
-engines keep loading new windows in place.
+the popup's first request, and `close <page>`.
 
 The same sessions hold JavaScript dialogs: `alert()`, `confirm()` and
 `prompt()` show up on `vs_net_poll` as `dialog <page> <id> <kind>
 <message-b64> <default-b64>` and wait for `vs_net_dialog <id>
 accept|dismiss [--text=T]`. An accepted prompt without text gets its
 default. A dialog nobody answers within 10 s is dismissed; without an
-event stream it is dismissed at once. macOS only.
+event stream it is dismissed at once.
 
 - Token in: —
 - Token out: yes
