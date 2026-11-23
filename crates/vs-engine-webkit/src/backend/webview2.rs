@@ -485,10 +485,35 @@ fn cdp_key(ch: char) -> CdpKey {
     }
 }
 
+thread_local! {
+    /// Set while a popup's view is set up inside WebView2's
+    /// controller-created callback (`spawn_popup`), where waiting for an
+    /// async completion pumps messages inside the callback and never
+    /// returns. Scripts are then registered without waiting: the call
+    /// takes effect at once, so the popup's first document gets them.
+    static NO_WAIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f` with `add_init_script` not waiting for completions.
+fn without_waiting<T>(f: impl FnOnce() -> T) -> T {
+    NO_WAIT.with(|w| w.set(true));
+    let out = f();
+    NO_WAIT.with(|w| w.set(false));
+    out
+}
+
 /// Add `js` to the document-start initializer for `web_view`.
 /// Returns the script id, which the caller stores in case we want to
-/// remove it later.
+/// remove it later (empty when not waited for; see `NO_WAIT`).
 fn add_init_script(web_view: &ICoreWebView2, js: &str) -> EngineResult<String> {
+    if NO_WAIT.with(std::cell::Cell::get) {
+        let done =
+            AddScriptToExecuteOnDocumentCreatedCompletedHandler::create(Box::new(|_, _| Ok(())));
+        let w = pwstr_from_str(js);
+        unsafe { web_view.AddScriptToExecuteOnDocumentCreated(windows::core::PCWSTR(w.0), &done) }
+            .map_err(|e| EngineError::Other(format!("AddScriptToExecuteOnDocumentCreated: {e}")))?;
+        return Ok(String::new());
+    }
     let (tx, rx) = mpsc::channel();
     let js_owned = js.to_string();
     let web_view_owned: ICoreWebView2 = web_view.clone();
@@ -941,7 +966,7 @@ fn spawn_popup(
                 error_code.map_err(|e| EngineError::Other(format!("popup controller: {e}")))?;
                 let comp = controller
                     .ok_or_else(|| EngineError::Other("popup controller: none".into()))?;
-                let page = host_view(&origin, parent, comp, &popups)?;
+                let page = without_waiting(|| host_view(&origin, parent, comp, &popups))?;
                 page.popups_on.set(true);
                 unsafe { args.SetNewWindow(&page.web_view) }
                     .map_err(|e| EngineError::Other(format!("SetNewWindow: {e}")))?;
