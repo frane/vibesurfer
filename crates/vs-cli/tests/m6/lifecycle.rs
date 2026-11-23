@@ -473,9 +473,11 @@ fn cell_session_survives_command_substitution() {
 fn cell_idle_pages_are_reaped_and_recreated() {
     for _ in each_available_backend() {
         // Seconds, not the shipped half-hour: same code path, budget a
-        // cell can wait for.
+        // cell can wait for. Long enough that rebuilding the page (3 s
+        // on a slow macOS runner, counted from the call's start) does
+        // not run past it before the next status.
         let ctx =
-            TestContext::start_with_env(&[("VS_PAGE_IDLE_SECS", "2"), ("VS_REAP_SWEEP_SECS", "1")]);
+            TestContext::start_with_env(&[("VS_PAGE_IDLE_SECS", "5"), ("VS_REAP_SWEEP_SECS", "1")]);
         let (session, page, _t) = open_fixture(&ctx, "/static.html");
 
         let r = ctx.vs(&["status"]);
@@ -487,7 +489,7 @@ fn cell_idle_pages_are_reaped_and_recreated() {
         );
 
         // Wait out the idle window without touching the page.
-        settle(4500);
+        settle(7500);
         let r = ctx.vs(&["status"]);
         let body = body_rest(&r);
         assert!(
