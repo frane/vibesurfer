@@ -931,15 +931,8 @@ fn window_title(page: PageHandle) -> String {
     format!("vs-page-{}", page.0)
 }
 
-/// Name a new page's host window (see `window_title`) and move the X
-/// pointer off it: the pointer is shared by every page window, and a
-/// page that opens under wherever the last click left it would start
-/// out hovered.
 fn titled(window: gtk::Window, page: PageHandle) -> gtk::Window {
     window.set_title(Some(&window_title(page)));
-    if let Ok(d) = super::wpe_input::dispatcher() {
-        d.park_pointer();
-    }
     window
 }
 
@@ -993,9 +986,8 @@ fn cursor_press_release(
     mode: vs_humanize::InputMode,
 ) -> EngineResult<()> {
     // Robotic input holds the button briefly, as on macOS; the other
-    // modes keep a human press. A plain sleep, not a main-loop pump: a
-    // pump could run another page's queued input between our press and
-    // release, raising its window under the pointer.
+    // modes keep a human press. The waits pump the main loop (a plain
+    // sleep stalled GTK, which then saw the events only afterwards).
     let (down_ms, up_ms) = match mode {
         vs_humanize::InputMode::Robotic => (2, 6),
         _ => (15, 30),
@@ -1004,12 +996,12 @@ fn cursor_press_release(
         super::wpe_input::Button::Left,
     ))?;
     dispatcher.flush()?;
-    std::thread::sleep(Duration::from_millis(down_ms));
+    let _ = run_loop_until(|| false, Duration::from_millis(down_ms));
     dispatcher.dispatch(super::wpe_input::InputEvent::Release(
         super::wpe_input::Button::Left,
     ))?;
     dispatcher.flush()?;
-    std::thread::sleep(Duration::from_millis(up_ms));
+    let _ = run_loop_until(|| false, Duration::from_millis(up_ms));
     Ok(())
 }
 

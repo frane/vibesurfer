@@ -11,8 +11,6 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ### Changed
 - Engine waits end when they are due. On macOS the run loop was pumped in fixed 50 ms slices that only ended early when some source fired, so a 2 ms settle could take 50 ms; every click paid about 60 ms for it. Slices now stop at the deadline: a robotic `click-at` takes about 10 ms instead of 65, and a navigation about 25 ms instead of 75. On Linux the loop slept 10 ms whenever nothing was ready, which delayed every eval result and event; it now blocks on the main context until a source fires or the slice ends. Robotic clicks on Linux settle 2 ms and 6 ms (they slept 15 and 30 in every mode).
-- Linux: robotic clicks sleep between press and release rather than pumping the main loop, so no other page's queued input runs in between. A new page parks the X pointer off every page window, so it does not open hovered from where the last click left the shared pointer.
-
 ## [0.2.17] - 2026-11-23
 
 ### Fixed
