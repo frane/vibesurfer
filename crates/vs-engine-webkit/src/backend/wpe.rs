@@ -75,7 +75,17 @@ struct WpePage {
     /// HTTP response of the latest main-frame navigation. Kept by the
     /// `load-changed` handler from `install_response_capture`.
     main_response: Rc<RefCell<Option<crate::inspector::MainResponse>>>,
+    /// The page's session asked for real popups (`Engine::set_popups`):
+    /// a new window becomes a page, `window.close()` releases it, and
+    /// dialogs wait for an answer. Read by the view's signal handlers.
+    popups_on: Rc<Cell<bool>>,
+    /// The page's own handle, for those handlers (set once allocated).
+    me: Rc<Cell<Option<PageHandle>>>,
+    /// Subframe agents, for evaluating in one frame (`wpe_frames`).
+    frames: Option<super::wpe_frames::FrameAgents>,
 }
+
+type Popups = super::wpe_popups::Popups<WpePage>;
 
 // =============================================================================
 // Backend
@@ -85,7 +95,9 @@ struct WpePage {
 /// subsequent calls must come from the same thread.
 pub struct WpeBackend {
     pages: HashMap<PageHandle, WpePage>,
-    next_handle: u64,
+    /// Popups and closed pages from the views' signal handlers, the
+    /// popup feed, and the page-handle counter.
+    popups: Popups,
     captures_dir: Option<PathBuf>,
     /// Ephemeral network sessions for isolated sessions, by key. One
     /// per key so every page of the session shares cookies and storage.
@@ -107,7 +119,7 @@ impl WpeBackend {
     pub fn new() -> Self {
         Self {
             pages: HashMap::new(),
-            next_handle: 1,
+            popups: Popups::default(),
             captures_dir: None,
             isolated_sessions: HashMap::new(),
         }
@@ -122,12 +134,27 @@ impl WpeBackend {
     }
 
     fn alloc_handle(&mut self) -> PageHandle {
-        let h = PageHandle(self.next_handle);
-        self.next_handle += 1;
-        h
+        self.popups.borrow_mut().alloc()
+    }
+
+    /// Take in the windows pages opened and release the pages that
+    /// closed themselves since the last call. Runs before any page
+    /// lookup, so a popup's handle works as soon as it is reported.
+    fn sync_popups(&mut self) {
+        let (born, closed) = {
+            let mut s = self.popups.borrow_mut();
+            (std::mem::take(&mut s.born), std::mem::take(&mut s.closed))
+        };
+        for b in born {
+            self.pages.insert(b.handle, b.page);
+        }
+        for h in closed {
+            let _ = self.close(h);
+        }
     }
 
     fn page_mut(&mut self, h: PageHandle) -> EngineResult<&mut WpePage> {
+        self.sync_popups();
         self.pages.get_mut(&h).ok_or(EngineError::NotFound {
             kind: "page",
             id: h.0.to_string(),
@@ -231,52 +258,7 @@ impl Engine for WpeBackend {
         // disappear into the void. Wrapping each WebView in a
         // decorated-off `gtk::Window` and presenting it gives us that
         // surface; under `xvfb` (CI) the window has no visual effect.
-        let window = gtk::Window::new();
-        window.set_decorated(false);
-        window.set_default_size(1280, 800);
-        window.set_child(Some(&web_view));
-        window.present();
-
-        // Pin the User-Agent to a current Safari string so anti-bot
-        // fingerprinters don't flag the WebKitGTK default. See the
-        // commit log for `crate::engine::DEFAULT_USER_AGENT` rationale.
-        if let Some(settings) = WebViewExt::settings(&web_view) {
-            settings.set_user_agent(Some(crate::engine::DEFAULT_USER_AGENT));
-            // Expose `navigator.mediaDevices`. WebKitGTK gates the
-            // MediaDevices surface off by default, so the object is
-            // simply absent and anything feature-detecting camera or
-            // mic support sees a browser that cannot exist. The macOS
-            // backend needed the same switch (there via a WKPreferences
-            // KVC key); here it is public API.
-            settings.set_enable_media_stream(true);
-        }
-
-        // Inspector capture wiring — install the user script + register
-        // both message channels BEFORE load_uri so the bridge is live
-        // by document-start.
-        let inspector =
-            super::inspector_bridge::InspectorSlots::new(crate::inspector::DEFAULT_BUFFER_CAPACITY);
-        let inspector_installed = install_inspector(&web_view, &inspector);
-        install_download_shim(&web_view);
-        // A headless page has no second window. Without a `create`
-        // handler WebKitGTK drops a `target="_blank"` link or form, or
-        // `window.open()`, and the click does nothing. Park the request;
-        // the input primitive that caused it loads it in this page
-        // (`follow_new_window`). `act click` on this engine is a JS
-        // click, not a user gesture, so blank-target navigation also
-        // has to be allowed without one.
-        if let Some(settings) = WebViewExt::settings(&web_view) {
-            settings.set_javascript_can_open_windows_automatically(true);
-        }
-        let new_window: Rc<RefCell<Option<webkit6::URIRequest>>> = Rc::new(RefCell::new(None));
-        let parked = new_window.clone();
-        web_view.connect_create(move |_view, action| {
-            *parked.borrow_mut() = action.request();
-            None
-        });
-        let downloads = SharedDownloads::default();
-        let download_hook = install_download_capture(&web_view, &downloads);
-        let main_response = install_response_capture(&web_view);
+        let page = host_page(&web_view, &self.popups);
         web_view.load_uri(url);
 
         // Wait for LoadEvent::Finished or LoadEvent::Failed via signal.
@@ -320,22 +302,9 @@ impl Engine for WpeBackend {
         }
 
         let handle = self.alloc_handle();
-        self.pages.insert(
-            handle,
-            WpePage {
-                web_view,
-                window: titled(window, handle),
-                inspector,
-                inspector_installed,
-                cookie_baseline: std::cell::RefCell::new(None),
-                cookie_next_seq: std::cell::RefCell::new(0),
-                last_mouse: Cell::new(vs_humanize::Point { x: 0.0, y: 0.0 }),
-                new_window,
-                downloads,
-                download_hook,
-                main_response,
-            },
-        );
+        page.me.set(Some(handle));
+        page.window.set_title(Some(&window_title(handle)));
+        self.pages.insert(handle, page);
         Ok(handle)
     }
 
@@ -875,6 +844,74 @@ impl Engine for WpeBackend {
         self.follow_new_window(page, matches!(op, CursorOp::ClickAt { .. }))
     }
 
+    fn set_popups(&mut self, page: PageHandle, on: bool) -> EngineResult<()> {
+        self.page_mut(page)?.popups_on.set(on);
+        Ok(())
+    }
+
+    fn eval_js_in_frame(
+        &mut self,
+        page: PageHandle,
+        frame: &str,
+        expr: &str,
+    ) -> EngineResult<crate::inspector::EvalResult> {
+        let agents = self
+            .page_mut(page)?
+            .frames
+            .clone()
+            .ok_or(EngineError::Unsupported {
+                engine: "wpe",
+                primitive: "vs_inspect eval --frame",
+            })?;
+        let not_found = || EngineError::NotFound {
+            kind: "frame",
+            id: frame.to_string(),
+        };
+        // A frame still loading has no agent yet; give it a moment.
+        let probe = agents.clone();
+        let wanted = frame.to_string();
+        if !run_loop_until(
+            move || super::wpe_frames::has_agent(&probe, &wanted),
+            Duration::from_millis(500),
+        ) {
+            return Err(not_found());
+        }
+        super::common::run_eval(
+            |js, budget| {
+                let id = super::wpe_frames::dispatch(&agents, frame, js).ok_or_else(not_found)?;
+                let out: Rc<RefCell<Option<Result<String, String>>>> = Rc::new(RefCell::new(None));
+                let (sink, src) = (out.clone(), agents.clone());
+                let done = run_loop_until(
+                    move || {
+                        if let Some(r) = super::wpe_frames::take_result(&src, id) {
+                            *sink.borrow_mut() = Some(r);
+                        }
+                        sink.borrow().is_some()
+                    },
+                    budget,
+                );
+                if !done {
+                    return Err(EngineError::Timeout {
+                        budget,
+                        primitive: "eval",
+                        detail: "",
+                    });
+                }
+                let result = out.borrow_mut().take();
+                match result {
+                    Some(Ok(v)) => Ok(v),
+                    Some(Err(e)) => Err(EngineError::Other(e)),
+                    None => Err(not_found()),
+                }
+            },
+            expr,
+        )
+    }
+
+    fn popup_feed(&mut self) -> Option<std::sync::Arc<crate::engine::PopupFeed>> {
+        Some(self.popups.borrow().feed.clone())
+    }
+
     fn capabilities(&self) -> EngineCapabilities {
         let any_inspector = self.pages.values().any(|p| p.inspector_installed);
         EngineCapabilities {
@@ -931,9 +968,135 @@ fn window_title(page: PageHandle) -> String {
     format!("vs-page-{}", page.0)
 }
 
-fn titled(window: gtk::Window, page: PageHandle) -> gtk::Window {
-    window.set_title(Some(&window_title(page)));
-    window
+/// Everything a web view needs to be a page: a host window on the X
+/// display, the user agent, the inspector bridge, download and response
+/// capture, and the new-window, close and dialog handlers. Used for
+/// pages `open` creates and for windows a page opens (`create`), so a
+/// popup is the same kind of page. The caller sets `me` and the window
+/// title once the page has a handle.
+fn host_page(web_view: &WebView, popups: &Popups) -> WpePage {
+    // Hidden host window: XTest input needs a real surface on the
+    // display server to land on (see `open`).
+    let window = gtk::Window::new();
+    window.set_decorated(false);
+    window.set_default_size(1280, 800);
+    window.set_child(Some(web_view));
+    window.present();
+
+    // Pin the User-Agent to a current Safari string so anti-bot
+    // fingerprinters don't flag the WebKitGTK default. See the commit
+    // log for `crate::engine::DEFAULT_USER_AGENT` rationale.
+    if let Some(settings) = WebViewExt::settings(web_view) {
+        settings.set_user_agent(Some(crate::engine::DEFAULT_USER_AGENT));
+        // Expose `navigator.mediaDevices`. WebKitGTK gates the
+        // MediaDevices surface off by default, so the object is simply
+        // absent and anything feature-detecting camera or mic support
+        // sees a browser that cannot exist.
+        settings.set_enable_media_stream(true);
+        // `act click` on this engine is a JS click, not a user gesture,
+        // so blank-target navigation has to be allowed without one.
+        settings.set_javascript_can_open_windows_automatically(true);
+    }
+
+    // Inspector capture wiring — install the user script and register
+    // both message channels before any load, so the bridge is live by
+    // document-start.
+    let inspector =
+        super::inspector_bridge::InspectorSlots::new(crate::inspector::DEFAULT_BUFFER_CAPACITY);
+    let inspector_installed = install_inspector(web_view, &inspector);
+    install_download_shim(web_view);
+    let frames = super::wpe_frames::install(web_view);
+
+    let popups_on = Rc::new(Cell::new(false));
+    let me: Rc<Cell<Option<PageHandle>>> = Rc::new(Cell::new(None));
+
+    // A new window (`target="_blank"`, `window.open()`). With popups on
+    // it becomes a page of its own, built on a related view (same
+    // network session and web process, so `window.opener` works) and
+    // reported on the feed. Otherwise there is no second window: park
+    // the request, and the input primitive that caused it loads it in
+    // this page (`follow_new_window`).
+    let new_window: Rc<RefCell<Option<webkit6::URIRequest>>> = Rc::new(RefCell::new(None));
+    {
+        let parked = new_window.clone();
+        let on = popups_on.clone();
+        let me = me.clone();
+        let popups = popups.clone();
+        web_view.connect_create(move |view, action| {
+            if !on.get() {
+                *parked.borrow_mut() = action.request();
+                return None;
+            }
+            let url = action
+                .request()
+                .and_then(|r| r.uri())
+                .map(|u| u.to_string())
+                .unwrap_or_default();
+            let child = WebView::builder().related_view(view).build();
+            let page = host_page(&child, &popups);
+            page.popups_on.set(true);
+            let mut s = popups.borrow_mut();
+            let handle = s.alloc();
+            page.me.set(Some(handle));
+            page.window.set_title(Some(&window_title(handle)));
+            s.born.push(super::wpe_popups::Born { handle, page });
+            s.feed
+                .push(crate::engine::PopupEvent::Opened(crate::engine::Popup {
+                    opener: me.get(),
+                    page: handle,
+                    url,
+                }));
+            Some(child.upcast())
+        });
+    }
+    // `window.close()`: with popups on, report it; the backend releases
+    // the page on its next lookup.
+    {
+        let on = popups_on.clone();
+        let me = me.clone();
+        let popups = popups.clone();
+        web_view.connect_close(move |_| {
+            if let (true, Some(h)) = (on.get(), me.get()) {
+                let mut s = popups.borrow_mut();
+                s.closed.push(h);
+                s.feed.push(crate::engine::PopupEvent::Closed(h));
+            }
+        });
+    }
+    // `alert`/`confirm`/`prompt`: with popups on, report and hold for
+    // an answer; otherwise dismiss at once, as on macOS.
+    {
+        let on = popups_on.clone();
+        let me = me.clone();
+        let popups = popups.clone();
+        web_view.connect_script_dialog(move |_, dialog| match (on.get(), me.get()) {
+            (true, Some(h)) => {
+                let feed = popups.borrow().feed.clone();
+                super::wpe_popups::hold_dialog(&feed, h, dialog)
+            }
+            _ => super::wpe_popups::dismiss_dialog(dialog),
+        });
+    }
+
+    let downloads = SharedDownloads::default();
+    let download_hook = install_download_capture(web_view, &downloads);
+    let main_response = install_response_capture(web_view);
+    WpePage {
+        web_view: web_view.clone(),
+        window,
+        inspector,
+        inspector_installed,
+        cookie_baseline: std::cell::RefCell::new(None),
+        cookie_next_seq: std::cell::RefCell::new(0),
+        last_mouse: Cell::new(vs_humanize::Point { x: 0.0, y: 0.0 }),
+        new_window,
+        downloads,
+        download_hook,
+        main_response,
+        popups_on,
+        me,
+        frames,
+    }
 }
 
 fn cursor_move_along_path(
@@ -1462,6 +1625,8 @@ impl WpeBackend {
     /// only follows what it caused.
     fn forget_new_window(&mut self, page: PageHandle) -> EngineResult<()> {
         let _ = self.page_mut(page)?.new_window.borrow_mut().take();
+        let mut s = self.popups.borrow_mut();
+        s.raised_at_input = s.feed.raised();
         Ok(())
     }
 
@@ -1470,6 +1635,7 @@ impl WpeBackend {
     /// arrive after the click returns, so after a click (`settle`) pump
     /// for up to `NEW_WINDOW_SETTLE` first. No parked request: no-op.
     fn follow_new_window(&mut self, page: PageHandle, settle: bool) -> EngineResult<()> {
+        let popups = self.popups.clone();
         let p = self.page_mut(page)?;
         if settle && p.new_window.borrow().is_none() {
             let hint = eval_js_string(
@@ -1478,6 +1644,19 @@ impl WpeBackend {
                 Duration::from_secs(2),
             );
             if super::common::new_window_hinted(&hint) {
+                if p.popups_on.get() {
+                    // A real window: wait for WebKit to ask for it, so
+                    // the popup exists when the click returns.
+                    let (feed, before) = {
+                        let s = popups.borrow();
+                        (s.feed.clone(), s.raised_at_input)
+                    };
+                    let _ = run_loop_until(
+                        move || feed.raised() > before,
+                        super::common::NEW_WINDOW_SETTLE,
+                    );
+                    return Ok(());
+                }
                 let parked = p.new_window.clone();
                 let _ = run_loop_until(
                     move || parked.borrow().is_some(),

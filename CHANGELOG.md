@@ -6,6 +6,10 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Linux: `--popups` sessions get real popups and JavaScript dialogs, as on macOS. A `target="_blank"` link or form, or `window.open()`, opens a page of its own on a related web view (same network session and web process, so `window.opener` works), reported as `page <opener> <page> <url>` on `vs net poll` before its first request; `window.close()` reports `close <page>` and releases it; `alert`/`confirm`/`prompt` are reported as `dialog` lines and held for `vs net dialog`, or dismissed after 10 s. Pages without the flag still load new windows in place and dismiss dialogs. `cell_popups_open_their_own_page` and `cell_dialogs_wait_for_an_answer` now run on Linux.
+- Linux: `vs inspect <PAGE> eval <EXPR> --frame=<URL|#N>` evaluates in a subframe, cross-origin ones included. WebKitGTK evaluates in the main frame only, so every subframe runs an agent: a document-start user script in an isolated world of its own (the page's CSP does not apply there) that keeps one message to the engine pending; the reply is the code to run. `cell_inspect_eval_in_cross_origin_frame` now runs on Linux.
+
 ### Fixed
 - `vs auth webauthn` (macOS): the virtual authenticator's `create()` and `get()` were set on the `navigator.credentials` object only. WebKit can collect that wrapper and hand out a fresh one without them, so now and then the page reached the native authenticator and failed with `NotAllowedError`; on macOS 27 it did most of the time. They are now defined on `CredentialsContainer.prototype` as well. This was the intermittent `cell_auth_webauthn_virtual_authenticator` failure.
 

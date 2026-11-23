@@ -22,5 +22,11 @@ pub mod wpe;
 #[cfg(target_os = "linux")]
 mod wpe_input;
 
+#[cfg(target_os = "linux")]
+mod wpe_popups;
+
+#[cfg(target_os = "linux")]
+mod wpe_frames;
+
 #[cfg(target_os = "windows")]
 pub mod webview2;
