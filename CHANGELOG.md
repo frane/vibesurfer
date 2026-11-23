@@ -6,6 +6,8 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.2.17] - 2026-11-23
+
 ### Fixed
 - Linux: with several pages open, `click-at`, `drag`, `move-to`, `hover-at` and `type` reached whichever page's window was on top, not the page they named. Every host window sits at the screen origin and XTest input goes by position, so the newest window took it. Each host window is now titled `vs-page-<n>`, and the input path raises the named page's window before dispatching. Cell `cell_click_at_reaches_its_page_under_another`.
 
