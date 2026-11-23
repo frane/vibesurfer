@@ -70,9 +70,9 @@ jobs:
         # container overhead.
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Run M6 cell suite (sequential, real WebKitGTK under Xvfb)
-        # Room for a 4x3 grid of 1600x1000 tiles: each page window gets
+        # Room for a 5x5 grid of 1600x1000 tiles: each page window gets
         # its own, so pages never share pointer position or hover.
-        run: xvfb-run --auto-servernum --server-args="-screen 0 6416x3016x24" cargo test --test m6 -- --test-threads=1
+        run: xvfb-run --auto-servernum --server-args="-screen 0 8016x5016x24" cargo test --test m6 -- --test-threads=1
 
   windows:
     name: Windows (real WebView2)

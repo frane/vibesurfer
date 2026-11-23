@@ -916,6 +916,7 @@ impl Engine for WpeBackend {
             }
         };
         p.last_mouse.set(landed);
+        deliver_input(dispatcher, &p.window);
         self.follow_new_window(page, matches!(op, CursorOp::ClickAt { .. }))
     }
 
@@ -1036,6 +1037,24 @@ fn window_title(page: PageHandle) -> String {
     // The daemon's pid, so two daemons on one display never share a
     // name (and `wpe_input` can tell a dead daemon's leftovers).
     format!("vs-page-{}-{}", std::process::id(), page.0)
+}
+
+/// Hand the input just sent to WebKit before returning. XTest events go
+/// from the server to GTK's own connection, and GTK handles them on a
+/// later main-loop pass; a read of the page sent right after (an eval)
+/// could reach the web process first and see the page from before the
+/// click. A display sync makes sure GTK has received every event the
+/// server generated so far; dispatching what is pending then passes the
+/// events to WebKit, whose messages to the web process keep that order.
+fn deliver_input(dispatcher: &dyn super::wpe_input::InputDispatcher, window: &gtk::Window) {
+    let _ = dispatcher.flush();
+    gtk::prelude::WidgetExt::display(window).sync();
+    let ctx = glib::MainContext::default();
+    for _ in 0..64 {
+        if !ctx.iteration(false) {
+            break;
+        }
+    }
 }
 
 /// Move the display's core pointer to the screen's far corner, past
