@@ -739,8 +739,59 @@ fn cell_refs_stay_out_of_the_markup() {
     }
 }
 
+// Each page has its own pointer, as each Playwright page does: a page
+// opens unhovered, and another page's input does not take its hover
+// away. On Linux the X pointer and window stacking are shared, so page
+// windows must not overlap (each gets a screen tile).
+#[test]
+fn cell_pages_keep_their_own_hover() {
+    const MENU: &str = "(function(){document.body.innerHTML='<style>#m{display:none}#w:hover #m{display:block}</style><div id=w style=\"position:fixed;left:20px;top:20px;width:200px;height:80px\"><span>Account</span><a id=m href=#out>Sign out</a></div><button id=b style=\"position:fixed;left:20px;top:200px;width:120px;height:40px\">other</button>';return 'ok';})()";
+    let shown = "String(getComputedStyle(document.getElementById('m')).display)";
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (s, first, _t) = open_fixture(&ctx, "/form.html");
+        eval_js(&ctx, &first, MENU);
+        let r = ctx.vs(&["open", &ctx.url("/form.html"), "--session", &s]);
+        assert_ok("open second", &r);
+        let second = body_first(&r);
+        eval_js(&ctx, &second, MENU);
+        // A fresh page is not hovered.
+        assert_eq!(
+            eval_js(&ctx, &second, shown).trim(),
+            "none",
+            "fresh page hovered"
+        );
+        let r = ctx.vs(&["hover-at", &first, "60", "40", "-M", "robotic"]);
+        assert_ok("hover first", &r);
+        assert_eq!(
+            eval_js(&ctx, &first, shown).trim(),
+            "block",
+            "first hovered"
+        );
+        // The other page's input must not take the first page's hover.
+        let r = ctx.vs(&["view", &second, "--full"]);
+        let token = token_of(&r);
+        let r = ctx.vs(&[
+            "click-at",
+            &second,
+            "60",
+            "220",
+            "-M",
+            "robotic",
+            &format!("--token={token}"),
+        ]);
+        assert_ok("click second", &r);
+        settle(200);
+        assert_eq!(
+            eval_js(&ctx, &first, shown).trim(),
+            "block",
+            "first page lost its hover to the second page's click"
+        );
+    }
+}
+
 // With several pages open, a click goes to the page it names. On
-// Linux every host window sits at the screen origin and XTest input
+// Linux every host window sat at the screen origin and XTest input
 // goes by position, so the newest window used to take the click.
 #[test]
 fn cell_click_at_reaches_its_page_under_another() {

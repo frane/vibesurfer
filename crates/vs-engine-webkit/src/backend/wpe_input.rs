@@ -35,6 +35,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use x11rb::connection::Connection as _;
+use x11rb::protocol::xinput::{self, ConnectionExt as _};
 use x11rb::protocol::xproto::{
     AtomEnum, ConfigureWindowAux, ConnectionExt as _, InputFocus, StackMode, Window,
 };
@@ -134,6 +135,38 @@ pub(crate) trait InputDispatcher: Send + Sync {
     /// windows share one screen position and input goes by position.
     /// Best-effort, like focus.
     fn raise_window(&self, _title: &str) {}
+
+    /// The screen's size in pixels, where the platform has one screen
+    /// that input addresses by position.
+    fn screen_size(&self) -> Option<(i32, i32)> {
+        None
+    }
+
+    /// Move the top-level window titled `title` to (`x`, `y`) on the
+    /// screen. Returns whether it was found.
+    fn place_window(&self, _title: &str, _x: i32, _y: i32) -> bool {
+        false
+    }
+
+    /// Where the top-level window titled `title` sits on the screen now
+    /// (its top-left corner), as the display server reports it.
+    fn window_origin(&self, _title: &str) -> Option<(i32, i32)> {
+        None
+    }
+
+    /// Route the input that follows through the pointer and keyboard
+    /// that belong to the page named `title` (created on first use), so
+    /// pages do not share one pointer position, hover or focus. Where
+    /// the platform has one pointer for everything, this does nothing.
+    fn use_page_pointer(&self, _title: &str) {}
+
+    /// Remove the pointer and keyboard of a page that closed.
+    fn drop_page_pointer(&self, _title: &str) {}
+
+    /// Route the input that follows through the display's core pointer
+    /// and keyboard again. Typing uses these: toolkits take keys from
+    /// the core keyboard only.
+    fn use_core_pointer(&self) {}
 }
 
 // =============================================================================
@@ -220,6 +253,24 @@ struct XtestDispatcher {
     /// The keycode borrowed from the server's keymap for typing, and
     /// the keysym currently bound to it. See [`XtestDispatcher::bind`].
     scratch: Mutex<Option<ScratchKey>>,
+    /// Page windows found by title (see `find_titled`).
+    windows: Mutex<std::collections::HashMap<String, Window>>,
+    /// `_NET_WM_NAME` and `UTF8_STRING`, interned once.
+    name_atoms: (u32, u32),
+    /// Whether the server speaks XInput 2.2 (multiple pointers).
+    xi2: bool,
+    /// Each page's own master pointer, by window title, and the ones
+    /// this daemon holds but no page uses (see `page_pointer`).
+    pointers: Mutex<PointerPool>,
+    /// A window of ours that owns the `VS_PTR_<k>` selections: the
+    /// claim on pointer k, released by the server when we exit.
+    claim_window: Window,
+}
+
+#[derive(Default)]
+struct PointerPool {
+    assigned: std::collections::HashMap<String, u16>,
+    free: Vec<u16>,
 }
 
 /// A keycode borrowed from the X server's keymap so arbitrary text
@@ -241,11 +292,98 @@ impl XtestDispatcher {
         // default screen — same convention every X11 client uses.
         let (conn, screen_num) = RustConnection::connect(None).ok()?;
         let root = conn.setup().roots.get(screen_num)?.root;
-        Some(Self {
+        let atom = |name: &[u8]| -> Option<u32> {
+            Some(conn.intern_atom(false, name).ok()?.reply().ok()?.atom)
+        };
+        let name_atoms = (atom(b"_NET_WM_NAME")?, atom(b"UTF8_STRING")?);
+        // XI2 requests need the version handshake first on a client.
+        let xi2 = conn
+            .xinput_xi_query_version(2, 2)
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .is_some_and(|r| (r.major_version, r.minor_version) >= (2, 2));
+        let claim_window = conn.generate_id().ok()?;
+        conn.create_window(
+            0,
+            claim_window,
+            root,
+            0,
+            0,
+            1,
+            1,
+            0,
+            x11rb::protocol::xproto::WindowClass::INPUT_ONLY,
+            0,
+            &x11rb::protocol::xproto::CreateWindowAux::new(),
+        )
+        .ok()?;
+        let me = Self {
             conn,
             root,
             scratch: Mutex::new(None),
-        })
+            windows: Mutex::default(),
+            name_atoms,
+            xi2,
+            pointers: Mutex::default(),
+            claim_window,
+        };
+        if xi2 {
+            me.park_unclaimed_pointers();
+        }
+        Some(me)
+    }
+
+    /// Move every `vs-ptr-<k>` pointer no live daemon claims to the
+    /// screen's far corner. A daemon that exited left its pointers
+    /// where its pages' input put them, and one resting inside a tile
+    /// would hover whichever page goes there next.
+    fn park_unclaimed_pointers(&self) {
+        let Some(devices) = self
+            .conn
+            .xinput_xi_query_device(xinput::Device::ALL_MASTER)
+            .ok()
+            .and_then(|c| c.reply().ok())
+        else {
+            return;
+        };
+        for d in devices
+            .infos
+            .iter()
+            .filter(|d| d.type_ == xinput::DeviceType::MASTER_POINTER)
+        {
+            let Some(k) = std::str::from_utf8(&d.name)
+                .ok()
+                .and_then(|n| n.strip_prefix("vs-ptr-"))
+                .and_then(|n| n.strip_suffix(" pointer"))
+            else {
+                continue;
+            };
+            let claimed = self
+                .conn
+                .intern_atom(false, format!("VS_PTR_{k}").as_bytes())
+                .ok()
+                .and_then(|c| c.reply().ok())
+                .and_then(|a| self.conn.get_selection_owner(a.atom).ok())
+                .and_then(|c| c.reply().ok())
+                .is_some_and(|r| r.owner != x11rb::NONE);
+            if !claimed {
+                self.park(d.deviceid);
+            }
+        }
+        self.use_core_pointer();
+    }
+
+    /// Move master pointer `id` to the screen's far corner, past every
+    /// page window and tile.
+    fn park(&self, id: u16) {
+        let Some((w, h)) = self.screen_size() else {
+            return;
+        };
+        if let Ok(cookie) = self.conn.xinput_xi_set_client_pointer(x11rb::NONE, id) {
+            cookie.ignore_error();
+        }
+        let _ = self.dispatch(InputEvent::Move(ScreenPoint { x: w - 1, y: h - 1 }));
+        let _ = self.conn.sync();
     }
 
     /// Find a keycode the current keymap leaves empty, so binding it
@@ -426,30 +564,221 @@ impl InputDispatcher for XtestDispatcher {
         }
         let _ = self.conn.sync();
     }
+
+    fn screen_size(&self) -> Option<(i32, i32)> {
+        let screen = self.conn.setup().roots.first()?;
+        Some((
+            i32::from(screen.width_in_pixels),
+            i32::from(screen.height_in_pixels),
+        ))
+    }
+
+    fn place_window(&self, title: &str, x: i32, y: i32) -> bool {
+        let Some(win) = self.find_titled(title) else {
+            return false;
+        };
+        let aux = ConfigureWindowAux::new().x(x).y(y);
+        if let Ok(cookie) = self.conn.configure_window(win, &aux) {
+            cookie.ignore_error();
+        }
+        self.conn.sync().is_ok()
+    }
+
+    fn window_origin(&self, title: &str) -> Option<(i32, i32)> {
+        let win = self.find_titled(title)?;
+        let r = self
+            .conn
+            .translate_coordinates(win, self.root, 0, 0)
+            .ok()?
+            .reply()
+            .ok()?;
+        Some((i32::from(r.dst_x), i32::from(r.dst_y)))
+    }
+
+    fn use_page_pointer(&self, title: &str) {
+        // XTest's core events move the pointer (and type on the
+        // keyboard) of the client's ClientPointer, so pointing this
+        // connection at the page's own master pair routes everything
+        // after it there: its own position, hover state and focus.
+        let Some(id) = self.page_pointer(title) else {
+            return;
+        };
+        if let Ok(cookie) = self.conn.xinput_xi_set_client_pointer(x11rb::NONE, id) {
+            cookie.ignore_error();
+        }
+        let _ = self.conn.sync();
+    }
+
+    fn use_core_pointer(&self) {
+        if !self.xi2 {
+            return;
+        }
+        // Device 2 is always the core ("Virtual core") pointer.
+        if let Ok(cookie) = self.conn.xinput_xi_set_client_pointer(x11rb::NONE, 2_u16) {
+            cookie.ignore_error();
+        }
+        let _ = self.conn.sync();
+    }
+
+    fn drop_page_pointer(&self, title: &str) {
+        // Kept, not removed: removing a master device while GTK runs
+        // crashes it. Parked out of the way; the next page this daemon
+        // opens takes it.
+        let freed = self.pointers.lock().ok().and_then(|mut pool| {
+            let id = pool.assigned.remove(title)?;
+            pool.free.push(id);
+            Some(id)
+        });
+        if let Some(id) = freed {
+            self.park(id);
+            self.use_core_pointer();
+        }
+    }
 }
 
 impl XtestDispatcher {
-    fn find_titled(&self, title: &str) -> Option<Window> {
-        let tree = self.conn.query_tree(self.root).ok()?.reply().ok()?;
-        let net_wm_name = self.atom(b"_NET_WM_NAME")?;
-        let utf8 = self.atom(b"UTF8_STRING")?;
-        tree.children.into_iter().rev().find(|&w| {
-            let name = |prop, ty| {
-                self.conn
-                    .get_property(false, w, prop, ty, 0, 256)
-                    .ok()
-                    .and_then(|c| c.reply().ok())
-                    .map(|r| r.value)
-            };
-            name(net_wm_name, utf8)
-                .filter(|v| !v.is_empty())
-                .or_else(|| name(AtomEnum::WM_NAME.into(), AtomEnum::STRING.into()))
-                .is_some_and(|v| v == title.as_bytes())
-        })
+    /// The page's own master pointer: the one it already has, one this
+    /// daemon holds free, or a claimed one. Pointer k is named
+    /// `vs-ptr-<k>` and claimed by owning the `VS_PTR_<k>` selection;
+    /// the server drops the claim when the daemon exits, so a later
+    /// daemon reuses the device instead of adding another (devices are
+    /// never removed; see `drop_page_pointer`).
+    fn page_pointer(&self, title: &str) -> Option<u16> {
+        if !self.xi2 {
+            return None;
+        }
+        let mut pool = self.pointers.lock().ok()?;
+        if let Some(&id) = pool.assigned.get(title) {
+            return Some(id);
+        }
+        let id = match pool.free.pop() {
+            Some(id) => id,
+            None => self.claim_pointer()?,
+        };
+        pool.assigned.insert(title.to_string(), id);
+        Some(id)
     }
 
-    fn atom(&self, name: &[u8]) -> Option<u32> {
-        Some(self.conn.intern_atom(false, name).ok()?.reply().ok()?.atom)
+    /// Claim the first pointer no live daemon holds, making it if it
+    /// does not exist yet.
+    fn claim_pointer(&self) -> Option<u16> {
+        for k in 0..256 {
+            let atom = self
+                .conn
+                .intern_atom(false, format!("VS_PTR_{k}").as_bytes())
+                .ok()?
+                .reply()
+                .ok()?
+                .atom;
+            let owner = self
+                .conn
+                .get_selection_owner(atom)
+                .ok()?
+                .reply()
+                .ok()?
+                .owner;
+            if owner != x11rb::NONE {
+                continue;
+            }
+            self.conn
+                .set_selection_owner(self.claim_window, atom, CURRENT_TIME)
+                .ok()?;
+            // Another daemon may have claimed it in between.
+            let owner = self
+                .conn
+                .get_selection_owner(atom)
+                .ok()?
+                .reply()
+                .ok()?
+                .owner;
+            if owner != self.claim_window {
+                continue;
+            }
+            let name = format!("vs-ptr-{k}");
+            return self.master_named(&name).or_else(|| self.add_master(&name));
+        }
+        None
+    }
+
+    /// The id of the master pointer `<name> pointer`, if it exists.
+    fn master_named(&self, name: &str) -> Option<u16> {
+        let want = format!("{name} pointer");
+        let devices = self
+            .conn
+            .xinput_xi_query_device(xinput::Device::ALL_MASTER)
+            .ok()?
+            .reply()
+            .ok()?;
+        devices
+            .infos
+            .iter()
+            .find(|d| d.type_ == xinput::DeviceType::MASTER_POINTER && d.name == want.as_bytes())
+            .map(|d| d.deviceid)
+    }
+
+    /// Add a master pointer and keyboard pair named `name`.
+    fn add_master(&self, title: &str) -> Option<u16> {
+        let name = title.as_bytes().to_vec();
+        // Length in 4-byte units: an 8-byte header, then the name
+        // padded to a multiple of four.
+        let len = u16::try_from((8 + name.len().div_ceil(4) * 4) / 4).ok()?;
+        let change = xinput::HierarchyChange {
+            len,
+            data: xinput::HierarchyChangeData::AddMaster(xinput::HierarchyChangeDataAddMaster {
+                send_core: true,
+                enable: true,
+                name,
+            }),
+        };
+        self.conn
+            .xinput_xi_change_hierarchy(&[change])
+            .ok()?
+            .check()
+            .ok()?;
+        // The server names the pair "<name> pointer" / "<name> keyboard".
+        self.master_named(title)
+    }
+}
+
+impl XtestDispatcher {
+    /// The top-level window titled `title`. Remembered once found: a
+    /// lookup walks every top-level window's name, a round trip each.
+    fn find_titled(&self, title: &str) -> Option<Window> {
+        let cached = self.windows.lock().ok()?.get(title).copied();
+        // Still that window: a closed page's id may since name another.
+        if let Some(w) = cached.filter(|&w| self.titled_as(w, title)) {
+            return Some(w);
+        }
+        let found = self.scan_titled(title)?;
+        if let Ok(mut m) = self.windows.lock() {
+            m.insert(title.to_string(), found);
+        }
+        Some(found)
+    }
+
+    fn scan_titled(&self, title: &str) -> Option<Window> {
+        let tree = self.conn.query_tree(self.root).ok()?.reply().ok()?;
+        tree.children
+            .into_iter()
+            .rev()
+            .find(|&w| self.titled_as(w, title))
+    }
+
+    /// Whether window `w` is named `title` (_NET_WM_NAME, which GTK sets
+    /// from the title, else WM_NAME).
+    fn titled_as(&self, w: Window, title: &str) -> bool {
+        let (net_wm_name, utf8) = self.name_atoms;
+        let name = |prop, ty| {
+            self.conn
+                .get_property(false, w, prop, ty, 0, 256)
+                .ok()
+                .and_then(|c| c.reply().ok())
+                .map(|r| r.value)
+        };
+        name(net_wm_name, utf8)
+            .filter(|v| !v.is_empty())
+            .or_else(|| name(AtomEnum::WM_NAME.into(), AtomEnum::STRING.into()))
+            .is_some_and(|v| v == title.as_bytes())
     }
 }
 

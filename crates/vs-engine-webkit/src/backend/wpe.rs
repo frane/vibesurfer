@@ -83,9 +83,18 @@ struct WpePage {
     me: Rc<Cell<Option<PageHandle>>>,
     /// Subframe agents, for evaluating in one frame (`wpe_frames`).
     frames: Option<super::wpe_frames::FrameAgents>,
+    /// Screen position of the host window's top-left corner: its tile
+    /// (see `WpeBackend::place`), or the origin.
+    origin: Cell<(f64, f64)>,
 }
 
 type Popups = super::wpe_popups::Popups<WpePage>;
+
+/// Size of the screen tile each page window gets when the display is
+/// large enough for several (see `WpeBackend::place`). Larger than any
+/// usual viewport, so a page's window stays inside its tile.
+const TILE_W: i32 = 1600;
+const TILE_H: i32 = 1000;
 
 // =============================================================================
 // Backend
@@ -102,6 +111,8 @@ pub struct WpeBackend {
     /// Ephemeral network sessions for isolated sessions, by key. One
     /// per key so every page of the session shares cookies and storage.
     isolated_sessions: HashMap<String, webkit6::NetworkSession>,
+    /// Which page holds which screen tile (see `place`).
+    tiles: HashMap<i32, PageHandle>,
 }
 
 impl Default for WpeBackend {
@@ -122,6 +133,7 @@ impl WpeBackend {
             popups: Popups::default(),
             captures_dir: None,
             isolated_sessions: HashMap::new(),
+            tiles: HashMap::new(),
         }
     }
 
@@ -147,10 +159,55 @@ impl WpeBackend {
         };
         for b in born {
             self.pages.insert(b.handle, b.page);
+            self.place(b.handle);
         }
         for h in closed {
             let _ = self.close(h);
         }
+    }
+
+    /// Give a new page's window a screen tile of its own, when the
+    /// display has room for several. XTest input goes by screen
+    /// position and X has one pointer and one stacking order, so with
+    /// windows stacked at one spot, pages took each other's clicks and
+    /// hover state; apart, the pointer over one page is over no other.
+    /// On a smaller display the windows stay at the origin and input
+    /// raises its window first. Then park the pointer off every window,
+    /// so the page does not open hovered.
+    fn place(&mut self, handle: PageHandle) {
+        let Ok(input) = super::wpe_input::dispatcher() else {
+            return;
+        };
+        let Some((width, height)) = input.screen_size() else {
+            return;
+        };
+        let (cols, rows) = (width / TILE_W, height / TILE_H);
+        let title = window_title(handle);
+        let free = (0..cols * rows).find(|i| !self.tiles.contains_key(i));
+        // Where to park the page's pointer: past its window inside its
+        // tile, or past every window at the screen's far corner.
+        let mut park = (width - 1, height - 1);
+        if let (true, Some(slot), Some(page)) = (cols * rows >= 2, free, self.pages.get(&handle)) {
+            let (left, top) = ((slot % cols) * TILE_W, (slot / cols) * TILE_H);
+            // GTK sends the title on its own connection; make sure the
+            // server has it before looking the window up by it.
+            gtk::prelude::WidgetExt::display(&page.window).sync();
+            if input.place_window(&title, left, top) {
+                page.origin.set((f64::from(left), f64::from(top)));
+                self.tiles.insert(slot, handle);
+                park = (left + TILE_W - 1, top + TILE_H - 1);
+            }
+        }
+        // The page's own pointer (where the display has several) starts
+        // off its window, so the page does not open hovered.
+        input.use_page_pointer(&title);
+        let _ = input.dispatch(super::wpe_input::InputEvent::Move(
+            super::wpe_input::ScreenPoint {
+                x: park.0,
+                y: park.1,
+            },
+        ));
+        park_core_pointer(input, (width, height));
     }
 
     fn page_mut(&mut self, h: PageHandle) -> EngineResult<&mut WpePage> {
@@ -305,6 +362,7 @@ impl Engine for WpeBackend {
         page.me.set(Some(handle));
         page.window.set_title(Some(&window_title(handle)));
         self.pages.insert(handle, page);
+        self.place(handle);
         Ok(handle)
     }
 
@@ -348,6 +406,10 @@ impl Engine for WpeBackend {
     }
 
     fn close(&mut self, page: PageHandle) -> EngineResult<()> {
+        self.tiles.retain(|_, h| *h != page);
+        if let Ok(input) = super::wpe_input::dispatcher() {
+            input.drop_page_pointer(&window_title(page));
+        }
         if let Some(mut p) = self.pages.remove(&page) {
             if let Some((session, id)) = p.download_hook.take() {
                 session.disconnect(id);
@@ -681,8 +743,12 @@ impl Engine for WpeBackend {
         // the same as every other page op, even though the keys go to
         // whatever holds focus rather than to a page handle.
         self.forget_new_window(page)?;
-        let cursor = self.page_mut(page)?.last_mouse.get();
+        let (cursor, tile) = {
+            let p = self.page_mut(page)?;
+            (p.last_mouse.get(), p.origin.get())
+        };
         let dispatcher = super::wpe_input::dispatcher()?;
+        let origin = input_origin(dispatcher, page, tile);
         // Pump GLib rather than sleep: this runs on the main thread,
         // so a plain sleep would stop WebKit processing the very keys
         // we are sending.
@@ -697,10 +763,13 @@ impl Engine for WpeBackend {
         // right window is already under it.
         #[allow(clippy::cast_possible_truncation)]
         let at = super::wpe_input::ScreenPoint {
-            x: cursor.x as i32,
-            y: cursor.y as i32,
+            x: (origin.0 + cursor.x) as i32,
+            y: (origin.1 + cursor.y) as i32,
         };
         dispatcher.raise_window(&window_title(page));
+        // Keys go through the core keyboard (toolkits take them from it
+        // only), focused on this page's window by the core pointer.
+        dispatcher.use_core_pointer();
         let _ = dispatcher.dispatch(super::wpe_input::InputEvent::Move(at));
         let _ = dispatcher.flush();
         dispatcher.focus_pointer_window();
@@ -751,6 +820,11 @@ impl Engine for WpeBackend {
         // Let the last keyUp turn into beforeinput/input before the
         // caller reads the page back.
         let _ = run_loop_until(|| false, Duration::from_millis(150));
+        // The core pointer must not stay over this page (or end up over
+        // the next one placed here) once typing is done.
+        if let Some(size) = dispatcher.screen_size() {
+            park_core_pointer(dispatcher, size);
+        }
         self.follow_new_window(page, false)
     }
 
@@ -773,10 +847,11 @@ impl Engine for WpeBackend {
         // The web view fills the window, or is pinned to its top-left
         // once sized (set_viewport): page coordinates are window
         // coordinates either way.
-        let (origin_x, origin_y) = (0.0_f64, 0.0_f64);
+        let (origin_x, origin_y) = input_origin(dispatcher, page, p.origin.get());
         // Every page's window is at the origin; put this one on top so
         // the input reaches it and not another page's.
         dispatcher.raise_window(&window_title(page));
+        dispatcher.use_page_pointer(&window_title(page));
         let start = p.last_mouse.get();
         let seed = humanize_seed(op);
         let landed = match op {
@@ -954,18 +1029,51 @@ fn humanize_seed(op: CursorOp) -> u64 {
         ^ bits(d)
 }
 
-/// Walk a Bezier path from `start` to `end`, dispatching one `Move`
-/// per step at the path's prescribed timing. Returns the final point.
-/// The `button_down` flag is unused on Linux today (XTest doesn't
-/// distinguish drag-move from plain-move — both are `MotionNotify`
-/// events; the held button state is tracked at the X server). Kept
-/// in the signature so drag callers stay symmetric with the macOS
-/// `move_along_path`.
-/// The X window title of a page's host window. Every host window sits
-/// at the screen origin and XTest input goes to whichever is on top, so
-/// the input path finds a page's window by this name and raises it.
+/// The X window title of a page's host window. XTest input goes by
+/// screen position, so the input path finds a page's window by this
+/// name to place it in its tile, raise it, and give it its own pointer.
 fn window_title(page: PageHandle) -> String {
-    format!("vs-page-{}", page.0)
+    // The daemon's pid, so two daemons on one display never share a
+    // name (and `wpe_input` can tell a dead daemon's leftovers).
+    format!("vs-page-{}-{}", std::process::id(), page.0)
+}
+
+/// Move the display's core pointer to the screen's far corner, past
+/// every page window and tile, and leave input routed through it.
+fn park_core_pointer(dispatcher: &dyn super::wpe_input::InputDispatcher, size: (i32, i32)) {
+    dispatcher.use_core_pointer();
+    let _ = dispatcher.dispatch(super::wpe_input::InputEvent::Move(
+        super::wpe_input::ScreenPoint {
+            x: size.0 - 1,
+            y: size.1 - 1,
+        },
+    ));
+    let _ = dispatcher.flush();
+}
+
+/// The screen origin to add to page coordinates for input. GTK moves a
+/// window back to where it thinks it is when it resizes (`vs viewport`),
+/// so put a drifted window back into its tile first; otherwise trust
+/// where X says the window is.
+fn input_origin(
+    dispatcher: &dyn super::wpe_input::InputDispatcher,
+    page: PageHandle,
+    home: (f64, f64),
+) -> (f64, f64) {
+    let title = window_title(page);
+    let Some((x, y)) = dispatcher.window_origin(&title) else {
+        return home;
+    };
+    let now = (f64::from(x), f64::from(y));
+    #[allow(clippy::cast_possible_truncation)]
+    let moved_back = home != (0.0, 0.0)
+        && now != home
+        && dispatcher.place_window(&title, home.0 as i32, home.1 as i32);
+    if moved_back {
+        home
+    } else {
+        now
+    }
 }
 
 /// Everything a web view needs to be a page: a host window on the X
@@ -1096,9 +1204,17 @@ fn host_page(web_view: &WebView, popups: &Popups) -> WpePage {
         popups_on,
         me,
         frames,
+        origin: Cell::new((0.0, 0.0)),
     }
 }
 
+/// Walk a Bezier path from `start` to `end`, dispatching one `Move`
+/// per step at the path's prescribed timing. Returns the final point.
+/// The `button_down` flag is unused on Linux today (XTest doesn't
+/// distinguish drag-move from plain-move — both are `MotionNotify`
+/// events; the held button state is tracked at the X server). Kept
+/// in the signature so drag callers stay symmetric with the macOS
+/// `move_along_path`.
 fn cursor_move_along_path(
     dispatcher: &dyn super::wpe_input::InputDispatcher,
     start: vs_humanize::Point,
