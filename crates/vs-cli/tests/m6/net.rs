@@ -182,6 +182,19 @@ fn find<'a>(evs: &'a [Ev], kind: &str, url_end: &str) -> Option<&'a Ev> {
         .find(|e| e.kind == kind && e.url().ends_with(url_end))
 }
 
+/// How many requests whose URL ends with `url_end` have finished. The
+/// browser's own traffic (WebView2 reaches SmartScreen through the
+/// proxy too) finishes on its own schedule and must not count.
+fn fins(evs: &[Ev], url_end: &str) -> usize {
+    evs.iter()
+        .filter(|f| f.kind == "fin")
+        .filter(|f| {
+            evs.iter()
+                .any(|r| r.kind == "req" && r.id == f.id && r.url().ends_with(url_end))
+        })
+        .count()
+}
+
 fn status_of(evs: &[Ev], id: u64) -> Option<String> {
     evs.iter()
         .find(|e| e.kind == "res" && e.id == id)
@@ -256,7 +269,7 @@ fn cell_intercept_fulfills_a_navigation() {
                     ]
                 })
             },
-            |e| find(e, "fin", "").is_some() && nav.is_finished(),
+            |e| fins(e, "/does-not-exist.html") >= 1 && nav.is_finished(),
         );
         nav.join().unwrap();
         assert_ok("route off", &sv(&ctx, &s, &["net", "route", "off"]));
@@ -339,7 +352,7 @@ fn cell_intercept_continue_with_header() {
                     args
                 })
             },
-            |e| find(e, "fin", "").is_some(),
+            |e| fins(e, "/echo-headers") >= 1,
         );
         let seen = eventually(
             &ctx,
@@ -400,7 +413,7 @@ fn cell_intercept_fetch_then_fulfill() {
                     B64.encode(patched),
                 ])
             },
-            |e| find(e, "fin", "").is_some(),
+            |e| fins(e, "/api/ok") >= 1,
         );
         let got = eventually(&ctx, &s, &page, "String(window.__ok)", "patched");
         assert!(got.contains(r#"{"ok":"patched"}"#), "page got: {got}");
@@ -539,7 +552,7 @@ fn cell_intercept_fulfills_https_without_upstream() {
                     ]
                 })
             },
-            |e| find(e, "fin", "").is_some(),
+            |e| fins(e, "/cars") >= 1,
         );
         assert!(find(&evs, "req", "https://example.invalid/cars").is_some());
         let got = eventually(&ctx, &s, &page, "String(window.__cars)", "Tesla");
@@ -620,7 +633,7 @@ fn cell_intercept_abort_is_not_retried() {
                     n += 1;
                     (n == 2).then(|| vec!["abort".into(), "--error".into(), "failed".into()])
                 },
-                |e| e.iter().filter(|x| x.kind == "fin").count() >= 2,
+                |e| fins(e, "/zzz") >= 2,
             );
             let got = eventually(&ctx, &s, &page, "String(window.__eq)", ",");
             assert_ok("route off", &sv(&ctx, &s, &["net", "route", "off"]));
@@ -707,7 +720,18 @@ fn cell_popups_open_their_own_page() {
             r.stdout
         );
 
-        eval(&ctx, &s, &popup, "(window.close(), 1)");
+        // The page may close before the eval's reply is read, and the
+        // daemon then answers NOT_FOUND for it; either is a close.
+        let r = sv(
+            &ctx,
+            &s,
+            &["inspect", &popup, "eval", "(window.close(), 1)", "--full"],
+        );
+        assert!(
+            r.stdout.contains("result=1") || r.stdout.starts_with("! NOT_FOUND"),
+            "window.close(): {}",
+            r.stdout
+        );
         let start = Instant::now();
         let mut closed = false;
         while start.elapsed() < Duration::from_secs(10) && !closed {
