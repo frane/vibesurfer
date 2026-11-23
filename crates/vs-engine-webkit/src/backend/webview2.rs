@@ -804,6 +804,14 @@ fn host_view(
     // page with popups on, dismissed at once otherwise (as on macOS).
     if let Ok(settings) = unsafe { web_view.Settings() } {
         let _ = unsafe { settings.SetAreDefaultScriptDialogsEnabled(false) };
+        // No SmartScreen lookups: they are Edge's own requests, which
+        // otherwise show up among the page's (intercept sessions) and
+        // cost time on every navigation.
+        if let Ok(s8) =
+            settings.cast::<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings8>()
+        {
+            let _ = unsafe { s8.SetIsReputationCheckingRequired(false) };
+        }
     }
 
     let popups_on = Rc::new(Cell::new(false));

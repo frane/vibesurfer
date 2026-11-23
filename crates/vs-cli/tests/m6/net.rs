@@ -694,10 +694,13 @@ fn cell_popups_open_their_own_page() {
             evs.extend(poll(&ctx, &s, 500));
         }
         let at = |kind: &str| evs.iter().position(|e| e.kind == kind);
-        let (pg, req) = (
-            at("page").expect("page event"),
-            at("req").expect("popup request"),
-        );
+        // The popup's own request: WebView2 also sends Edge's background
+        // traffic through the proxy.
+        let pg = at("page").expect("page event");
+        let req = evs
+            .iter()
+            .position(|e| e.kind == "req" && e.url().ends_with("/multi-page-2.html"))
+            .expect("popup request");
         assert!(pg < req, "page before its request: {evs:#?}");
         // page <opener> <popup> <url>
         let line = &evs[pg].line;
