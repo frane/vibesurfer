@@ -36,7 +36,7 @@ Wire form is `vs_<name>` (over the socket); CLI subcommand is `<name>` with hyph
 
 | # | CLI | What |
 |---|-----|------|
-| 1 | `vs session-open [--policy=NAME] [--isolated] [--intercept] [--popups]` | Create a session. Writes `~/.vibesurfer/active-session`. `--isolated`: own in-memory cookie/storage jar, shared by the session's pages only, gone on close or daemon restart. Default sessions share the persistent jar (logins persist). `--intercept`: route the pages through a daemon HTTP proxy for `vs net` (implies an own jar). `--popups` (macOS): `target=_blank`/`window.open()` open a new page in the session instead of in place; `vs status` lists it. |
+| 1 | `vs session-open [--policy=NAME] [--isolated] [--intercept] [--popups]` | Create a session. Writes `~/.vibesurfer/active-session`. `--isolated`: own in-memory cookie/storage jar, shared by the session's pages only, gone on close or daemon restart. Default sessions share the persistent jar (logins persist). `--intercept`: route the pages through a daemon HTTP proxy for `vs net` (implies an own jar). `--popups`: `target=_blank`/`window.open()` open a new page in the session instead of in place; `vs status` lists it. |
 | 2 | `vs session-close [--all\|--idle-for=2h]` | Close the active session, or sweep the workspace: `--all`, or only what has been untouched that long. |
 | 3 | `vs open <URL>` | Open a page in the session. |
 | - | `vs goto <PAGE> <URL>` (`g`) | Navigate an existing page in place. Reuses the web view, so it skips browser spin-up and is much faster than open for successive navigations. Refs are fresh afterward. `--html FILE` loads that document under URL without fetching it. |
@@ -51,7 +51,7 @@ Wire form is `vs_<name>` (over the socket); CLI subcommand is `<name>` with hyph
 | 6 | `vs read <PAGE> <REF>` | Full text of one ref. |
 | 13 | `vs status` | Sessions, pages, and `live=` — how many still hold a web view. `live` is the number that costs memory and processes. |
 | 14 | `vs log [--page=<P>] [--group=<G>] [--since=<EPOCH>] [--limit=N]` | Audit log slice. |
-| - | `vs inspect <PAGE> eval <EXPR> --frame=<URL\|#N>` | Evaluate inside one subframe, cross-origin too (macOS). `#0` is the newest frame. |
+| - | `vs inspect <PAGE> eval <EXPR> --frame=<URL\|#N>` | Evaluate inside one subframe, cross-origin too. `#0` is the newest frame. |
 | - | `vs inspect <PAGE> response` (`i <PAGE> res`) | Main document's HTTP response from the last navigation: `url=`, `status=`, `status_text=`, then `h <name>: <value>` per header. `none` for `data:`, `about:blank`, `file:`, or a failed load. |
 
 ### Mutate (7, 9–12, 17)
