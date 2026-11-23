@@ -190,6 +190,11 @@ impl WpeBackend {
     /// On a smaller display the windows stay at the origin and input
     /// raises its window first. Then park the pointer off every window,
     /// so the page does not open hovered.
+    ///
+    /// Tile 0, at the screen's origin, is where new windows show while
+    /// their first load runs (the engine serves other pages meanwhile),
+    /// so no page keeps it: a page there took clicks meant for it on
+    /// the window that opened on top.
     fn place(&mut self, handle: PageHandle) {
         let Ok(input) = super::wpe_input::dispatcher() else {
             return;
@@ -199,7 +204,7 @@ impl WpeBackend {
         };
         let (cols, rows) = (width / TILE_W, height / TILE_H);
         let title = window_title(handle);
-        let free = (0..cols * rows).find(|i| !self.tiles.contains_key(i));
+        let free = (1..cols * rows).find(|i| !self.tiles.contains_key(i));
         // Where to park the page's pointer: past its window inside its
         // tile, or past every window at the screen's far corner.
         let mut park = (width - 1, height - 1);
@@ -1157,7 +1162,8 @@ fn input_origin(
 /// title once the page has a handle.
 fn host_page(web_view: &WebView, popups: &Popups) -> WpePage {
     // Hidden host window: XTest input needs a real surface on the
-    // display server to land on (see `open`).
+    // display server to land on (see `open`). It shows at the screen's
+    // origin until `place` moves it; no placed page keeps that tile.
     let window = gtk::Window::new();
     window.set_decorated(false);
     window.set_default_size(1280, 800);

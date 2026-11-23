@@ -18,7 +18,7 @@ All notable changes to vibesurfer are recorded here. The format follows
 - Windows: popups no longer hang while their scripts are registered, and pages make no SmartScreen lookups (Edge's own requests showed up among the page's in intercept sessions).
 
 ### Changed
-- Linux: the daemon serves other pages while a new page's first load runs. A new web view's web process takes about 70 ms to start, during which the engine thread used to wait and every other page's call queued behind it. The testsurfer lab runs in 12 s instead of 15.
+- Linux: the daemon serves other pages while a new page's first load runs. A new web view's web process takes about 70 ms to start, during which the engine thread used to wait and every other page's call queued behind it. The testsurfer lab runs in 12 s instead of 15. New windows show at the screen's origin until they move to their tile, so no page keeps that tile: a page there could take a click meant for it on the window opening on top. A 5x5 tile screen now holds 24 pages.
 - Engine waits end when they are due. On macOS the run loop was pumped in fixed 50 ms slices that only ended early when some source fired, so a 2 ms settle could take 50 ms; every click paid about 60 ms for it. Slices now stop at the deadline: a robotic `click-at` takes about 10 ms instead of 65, and a navigation about 25 ms instead of 75. On Linux the loop slept 10 ms whenever nothing was ready, which delayed every eval result and event; it now blocks on the main context until a source fires or the slice ends. Robotic clicks on Linux settle 2 ms and 6 ms (they slept 15 and 30 in every mode).
 ## [0.2.17] - 2026-11-23
 
