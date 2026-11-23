@@ -6,6 +6,8 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.2.16] - 2026-11-23
+
 ### Added
 - `vs inspect <PAGE> response` (`i <PAGE> res`, wire `vs_inspect response`) reports the HTTP response of the page's last main-frame navigation: `url=` (after redirects), `status=`, `status_text=`, then one `h <name>: <value>` line per header with lower-cased names. The body is `none` for `data:`, `about:blank`, `file:` or a failed load. Page script cannot read the status, so each engine records it: `decidePolicyForNavigationResponse` on macOS, `load-changed` at commit on Linux, `NavigationCompleted` plus `WebResourceResponseReceived` on Windows. macOS folds repeated headers into one comma-joined value and has no server reason phrase, so the standard one is used there and on Linux. Fixture routes `/missing` and `/redirect-static`; cell `cell_inspect_response`.
 - `vs session-open --isolated` (wire flag `isolated`, MCP `vs_session_open` `isolated: true`) opens a session with its own in-memory cookie and storage jar: cookies, localStorage and IndexedDB are shared by that session's pages and seen by no other session, isolated or not. The jar is discarded when the session closes. The flag is stored on the session row, so after a daemon restart rebuilt pages are still isolated, but their storage starts empty. `vs status` marks such sessions `isolated`. `vs auth save/load` read and write the page's own jar. macOS uses one `WKWebsiteDataStore.nonPersistentDataStore()` per session, Linux one ephemeral `NetworkSession`, Windows an InPrivate profile named after the session. Default sessions are unchanged. Cells in `m6/isolation.rs`.
