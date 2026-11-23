@@ -35,7 +35,9 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use x11rb::connection::Connection as _;
-use x11rb::protocol::xproto::{ConnectionExt as _, InputFocus, Window};
+use x11rb::protocol::xproto::{
+    AtomEnum, ConfigureWindowAux, ConnectionExt as _, InputFocus, StackMode, Window,
+};
 use x11rb::protocol::xtest::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
@@ -127,6 +129,11 @@ pub(crate) trait InputDispatcher: Send + Sync {
     /// before a run of typing; best-effort, and a failure here is not
     /// worth failing the call over.
     fn focus_pointer_window(&self) {}
+
+    /// Put the top-level window titled `title` above the others, where
+    /// windows share one screen position and input goes by position.
+    /// Best-effort, like focus.
+    fn raise_window(&self, _title: &str) {}
 }
 
 // =============================================================================
@@ -404,6 +411,45 @@ impl InputDispatcher for XtestDispatcher {
             cookie.ignore_error();
         }
         let _ = self.conn.flush();
+    }
+
+    fn raise_window(&self, title: &str) {
+        // Without a window manager every host window is a direct child
+        // of the root, stacked in the order it was mapped. Find ours by
+        // its _NET_WM_NAME (GTK sets it from the title) and restack it.
+        let Some(win) = self.find_titled(title) else {
+            return;
+        };
+        let aux = ConfigureWindowAux::new().stack_mode(StackMode::ABOVE);
+        if let Ok(cookie) = self.conn.configure_window(win, &aux) {
+            cookie.ignore_error();
+        }
+        let _ = self.conn.sync();
+    }
+}
+
+impl XtestDispatcher {
+    fn find_titled(&self, title: &str) -> Option<Window> {
+        let tree = self.conn.query_tree(self.root).ok()?.reply().ok()?;
+        let net_wm_name = self.atom(b"_NET_WM_NAME")?;
+        let utf8 = self.atom(b"UTF8_STRING")?;
+        tree.children.into_iter().rev().find(|&w| {
+            let name = |prop, ty| {
+                self.conn
+                    .get_property(false, w, prop, ty, 0, 256)
+                    .ok()
+                    .and_then(|c| c.reply().ok())
+                    .map(|r| r.value)
+            };
+            name(net_wm_name, utf8)
+                .filter(|v| !v.is_empty())
+                .or_else(|| name(AtomEnum::WM_NAME.into(), AtomEnum::STRING.into()))
+                .is_some_and(|v| v == title.as_bytes())
+        })
+    }
+
+    fn atom(&self, name: &[u8]) -> Option<u32> {
+        Some(self.conn.intern_atom(false, name).ok()?.reply().ok()?.atom)
     }
 }
 

@@ -1,7 +1,9 @@
 //! Act cells: vs_act click / fill / scroll / key / submit / hover / focus.
 
 use crate::helpers::{eval_js, open_fixture, ref_for, settle};
-use crate::support::{assert_ok, body_rest, each_available_backend, token_of, TestContext};
+use crate::support::{
+    assert_ok, body_first, body_rest, each_available_backend, token_of, TestContext,
+};
 
 // 7. vs_act click — click submit, navigate to dashboard.
 #[test]
@@ -734,6 +736,47 @@ fn cell_refs_stay_out_of_the_markup() {
             ),
             "user@example.com"
         );
+    }
+}
+
+// With several pages open, a click goes to the page it names. On
+// Linux every host window sits at the screen origin and XTest input
+// goes by position, so the newest window used to take the click.
+#[test]
+fn cell_click_at_reaches_its_page_under_another() {
+    const BUTTON: &str = "(function(){document.body.innerHTML='<button id=b style=\"position:fixed;left:40px;top:40px;width:120px;height:40px\">hit me</button>';window.__hit=0;document.getElementById('b').addEventListener('click',function(e){window.__hit+=(e.isTrusted?1:100);});return 'ok';})()";
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (s, first, _t) = open_fixture(&ctx, "/form.html");
+        eval_js(&ctx, &first, BUTTON);
+        let r = ctx.vs(&["open", &ctx.url("/form.html"), "--session", &s]);
+        assert_ok("open second", &r);
+        let second = body_first(&r);
+        eval_js(&ctx, &second, BUTTON);
+        settle(300);
+        for page in [&first, &second, &first] {
+            let r = ctx.vs(&["view", page, "--full"]);
+            let token = token_of(&r);
+            let before = eval_js(&ctx, page, "String(window.__hit)");
+            let r = ctx.vs(&[
+                "click-at",
+                page,
+                "100",
+                "60",
+                "-M",
+                "robotic",
+                &format!("--token={token}"),
+            ]);
+            assert_ok("click-at", &r);
+            let after = eval_js(&ctx, page, "String(window.__hit)");
+            assert_eq!(
+                after.parse::<u32>().unwrap(),
+                before.parse::<u32>().unwrap() + 1,
+                "click lands on {page}"
+            );
+        }
+        assert_eq!(eval_js(&ctx, &first, "String(window.__hit)"), "2");
+        assert_eq!(eval_js(&ctx, &second, "String(window.__hit)"), "1");
     }
 }
 

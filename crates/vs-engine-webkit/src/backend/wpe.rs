@@ -310,7 +310,7 @@ impl Engine for WpeBackend {
             handle,
             WpePage {
                 web_view,
-                window,
+                window: titled(window, handle),
                 inspector,
                 inspector_installed,
                 cookie_baseline: std::cell::RefCell::new(None),
@@ -717,6 +717,7 @@ impl Engine for WpeBackend {
             x: cursor.x as i32,
             y: cursor.y as i32,
         };
+        dispatcher.raise_window(&window_title(page));
         let _ = dispatcher.dispatch(super::wpe_input::InputEvent::Move(at));
         let _ = dispatcher.flush();
         dispatcher.focus_pointer_window();
@@ -790,6 +791,9 @@ impl Engine for WpeBackend {
         // once sized (set_viewport): page coordinates are window
         // coordinates either way.
         let (origin_x, origin_y) = (0.0_f64, 0.0_f64);
+        // Every page's window is at the origin; put this one on top so
+        // the input reaches it and not another page's.
+        dispatcher.raise_window(&window_title(page));
         let start = p.last_mouse.get();
         let seed = humanize_seed(op);
         let landed = match op {
@@ -906,6 +910,18 @@ fn humanize_seed(op: CursorOp) -> u64 {
 /// events; the held button state is tracked at the X server). Kept
 /// in the signature so drag callers stay symmetric with the macOS
 /// `move_along_path`.
+/// The X window title of a page's host window. Every host window sits
+/// at the screen origin and XTest input goes to whichever is on top, so
+/// the input path finds a page's window by this name and raises it.
+fn window_title(page: PageHandle) -> String {
+    format!("vs-page-{}", page.0)
+}
+
+fn titled(window: gtk::Window, page: PageHandle) -> gtk::Window {
+    window.set_title(Some(&window_title(page)));
+    window
+}
+
 fn cursor_move_along_path(
     dispatcher: &dyn super::wpe_input::InputDispatcher,
     start: vs_humanize::Point,
