@@ -796,6 +796,8 @@ fn host_view(
     let inspector = InspectorSlots::new(crate::inspector::DEFAULT_BUFFER_CAPACITY);
     let inspector_installed = install_inspector(&web_view, &inspector);
     let _ = add_init_script(&web_view, super::common::DOWNLOAD_SHIM_JS);
+    // No native drags (see NO_NATIVE_DRAG_JS).
+    let _ = add_init_script(&web_view, super::common::NO_NATIVE_DRAG_JS);
     let downloads = SharedDownloads::default();
     install_download_capture(&web_view, &downloads)?;
     let responses = install_response_capture(&web_view)?;

@@ -134,6 +134,27 @@ fn build_node(v: &serde_json::Value) -> Option<Node> {
     })
 }
 
+/// Document-start shim that cancels every trusted `dragstart`, on every
+/// backend.
+///
+/// Synthesized mouse input over anything draggable (a link, an image,
+/// `draggable="true"`, selected text) can make the engine start a real
+/// system drag. On macOS that shows a drag window and waits for a
+/// hardware mouse-up that never comes, wedging the daemon; on Linux
+/// GTK's drag began after `vs drag` had released, then took the next
+/// release on the display, another page's click. A cancelled
+/// `dragstart` is the one point every engine honours before starting
+/// that drag. Nobody uses these views by hand, so every trusted drag
+/// came from vs. Pages still see the `dragstart`, and `vs drag`
+/// delivers the HTML5 chain afterwards as untrusted events, which this
+/// leaves alone. See also `headless_webview.rs`, the macOS backstop if
+/// a drag starts anyway.
+pub(crate) const NO_NATIVE_DRAG_JS: &str = r"
+window.addEventListener('dragstart', function (e) {
+  if (e.isTrusted) e.preventDefault();
+}, true);
+";
+
 /// JS that snapshots cookies + localStorage + sessionStorage as a JSON
 /// blob. Used by `save_auth` on every backend.
 #[allow(dead_code)] // used by wpe + webview2; WkBackend moved to host-side cookie store

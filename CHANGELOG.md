@@ -14,6 +14,8 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ### Fixed
 - `vs auth webauthn` (macOS): the virtual authenticator's `create()` and `get()` were set on the `navigator.credentials` object only. WebKit can collect that wrapper and hand out a fresh one without them, so now and then the page reached the native authenticator and failed with `NotAllowedError`; on macOS 27 it did most of the time. They are now defined on `CredentialsContainer.prototype` as well. This was the intermittent `cell_auth_webauthn_virtual_authenticator` failure.
+- `vs drag` over a draggable element (Linux, Windows): trusted `dragstart` events are now cancelled on every engine, as they already were on macOS. On Linux GTK started its own drag after `vs drag` had released the button, and that drag took the next button release on the display, so a later click on any page lost its mouse-up (a checkbox clicked twice stayed checked).
+- Windows: popups no longer hang while their scripts are registered, and pages make no SmartScreen lookups (Edge's own requests showed up among the page's in intercept sessions).
 
 ### Changed
 - Engine waits end when they are due. On macOS the run loop was pumped in fixed 50 ms slices that only ended early when some source fired, so a 2 ms settle could take 50 ms; every click paid about 60 ms for it. Slices now stop at the deadline: a robotic `click-at` takes about 10 ms instead of 65, and a navigation about 25 ms instead of 75. On Linux the loop slept 10 ms whenever nothing was ready, which delayed every eval result and event; it now blocks on the main context until a source fires or the slice ends. Robotic clicks on Linux settle 2 ms and 6 ms (they slept 15 and 30 in every mode).

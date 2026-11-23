@@ -1361,6 +1361,14 @@ fn install_download_shim(web_view: &WebView) {
         &[],
         &[],
     ));
+    // No native drags (see NO_NATIVE_DRAG_JS).
+    manager.add_script(&UserScript::new(
+        super::common::NO_NATIVE_DRAG_JS,
+        UserContentInjectedFrames::AllFrames,
+        UserScriptInjectionTime::Start,
+        &[],
+        &[],
+    ));
 }
 
 fn install_inspector(web_view: &WebView, slots: &super::inspector_bridge::InspectorSlots) -> bool {

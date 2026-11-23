@@ -565,14 +565,23 @@ fn cell_act_click_robotic_still_trusted() {
 // drag session. On macOS 27 it did: WebKit handed the drag to the
 // window server, the daemon's main thread wedged waiting for a
 // hardware mouse-up, and a drag window showed on the user's screen
-// (#vibesurfer 01M75J1S / 01M75X). The drag must return, the page
-// must see the drop, and the page must take input afterwards.
-#[cfg(target_os = "macos")]
+// (#vibesurfer 01M75J1S / 01M75X). On Linux GTK's drag began after
+// the drag's release and took the next release on the display, so
+// another page's click was lost. The drag must return, the page must
+// see the drop, and this page and others must take input afterwards.
 #[test]
 fn cell_drag_native_draggable_does_not_wedge() {
     for _ in each_available_backend() {
         let ctx = TestContext::start();
-        let (_s, page, token) = open_fixture(&ctx, "/native-drag.html");
+        let (s, page, token) = open_fixture(&ctx, "/native-drag.html");
+        let r = ctx.vs(&["open", &ctx.url("/form.html"), "--session", &s]);
+        assert_ok("open second", &r);
+        let other = body_first(&r);
+        eval_js(
+            &ctx,
+            &other,
+            "(function(){document.body.innerHTML='<input type=checkbox id=c style=\"position:fixed;left:40px;top:40px;width:20px;height:20px\">';return 'ok';})()",
+        );
         // Run the drag off-thread: a regression hangs the CLI call
         // forever, and the test should fail, not hang the suite.
         let home = ctx.home_path().to_path_buf();
@@ -610,6 +619,28 @@ fn cell_drag_native_draggable_does_not_wedge() {
         assert!(
             log.contains("click-trusted"),
             "page must take trusted input after the drag, got {log:?}"
+        );
+        // Another page: a checkbox clicked twice is unchecked again.
+        let r = ctx.vs(&["view", &other, "--full"]);
+        let mut token = token_of(&r);
+        for _ in 0..2 {
+            let r = ctx.vs(&[
+                "click-at",
+                &other,
+                "50",
+                "50",
+                "-M",
+                "robotic",
+                &format!("--token={token}"),
+            ]);
+            assert_ok("click-at other page", &r);
+            token = token_of(&r);
+        }
+        settle(200);
+        assert_eq!(
+            eval_js(&ctx, &other, "String(document.getElementById('c').checked)").trim(),
+            "false",
+            "both clicks on the other page must land"
         );
     }
 }
