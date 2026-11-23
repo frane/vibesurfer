@@ -761,6 +761,7 @@ impl Engine for WpeBackend {
             (p.last_mouse.get(), p.origin.get())
         };
         let dispatcher = super::wpe_input::dispatcher()?;
+        let origin = input_origin(dispatcher, page, origin);
         // Pump GLib rather than sleep: this runs on the main thread,
         // so a plain sleep would stop WebKit processing the very keys
         // we are sending.
@@ -851,7 +852,7 @@ impl Engine for WpeBackend {
         // The web view fills the window, or is pinned to its top-left
         // once sized (set_viewport): page coordinates are window
         // coordinates either way.
-        let (origin_x, origin_y) = p.origin.get();
+        let (origin_x, origin_y) = input_origin(dispatcher, page, p.origin.get());
         // Every page's window is at the origin; put this one on top so
         // the input reaches it and not another page's.
         dispatcher.raise_window(&window_title(page));
@@ -980,6 +981,31 @@ fn window_title(page: PageHandle) -> String {
 
 /// Name a new page's host window, so the input path can find it (see
 /// `window_title` and `WpeBackend::place`).
+/// The screen origin to add to page coordinates for input. GTK moves a
+/// window back to where it thinks it is when it resizes (`vs viewport`),
+/// so put it back into its tile first when it has drifted; otherwise
+/// trust where X says it is.
+fn input_origin(
+    dispatcher: &dyn super::wpe_input::InputDispatcher,
+    page: PageHandle,
+    tile: (f64, f64),
+) -> (f64, f64) {
+    let title = window_title(page);
+    let Some((x, y)) = dispatcher.window_origin(&title) else {
+        return tile;
+    };
+    let now = (f64::from(x), f64::from(y));
+    #[allow(clippy::cast_possible_truncation)]
+    let moved_back = tile != (0.0, 0.0)
+        && now != tile
+        && dispatcher.place_window(&title, tile.0 as i32, tile.1 as i32);
+    if moved_back {
+        tile
+    } else {
+        now
+    }
+}
+
 fn titled(window: gtk::Window, page: PageHandle) -> gtk::Window {
     window.set_title(Some(&window_title(page)));
     window

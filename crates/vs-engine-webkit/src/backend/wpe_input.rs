@@ -150,6 +150,12 @@ pub(crate) trait InputDispatcher: Send + Sync {
     fn place_window(&self, _title: &str, _x: i32, _y: i32) -> bool {
         false
     }
+
+    /// Where the top-level window titled `title` sits on the screen now
+    /// (its top-left corner), as the display server reports it.
+    fn window_origin(&self, _title: &str) -> Option<(i32, i32)> {
+        None
+    }
 }
 
 // =============================================================================
@@ -475,6 +481,17 @@ impl InputDispatcher for XtestDispatcher {
             cookie.ignore_error();
         }
         self.conn.sync().is_ok()
+    }
+
+    fn window_origin(&self, title: &str) -> Option<(i32, i32)> {
+        let win = self.find_titled(title)?;
+        let r = self
+            .conn
+            .translate_coordinates(win, self.root, 0, 0)
+            .ok()?
+            .reply()
+            .ok()?;
+        Some((i32::from(r.dst_x), i32::from(r.dst_y)))
     }
 }
 
