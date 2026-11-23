@@ -75,15 +75,7 @@ struct WpePage {
     /// HTTP response of the latest main-frame navigation. Kept by the
     /// `load-changed` handler from `install_response_capture`.
     main_response: Rc<RefCell<Option<crate::inspector::MainResponse>>>,
-    /// Screen position of the host window's top-left corner: its tile
-    /// (see `WpeBackend::place`), or the origin.
-    origin: Cell<(f64, f64)>,
 }
-
-/// Size of the screen tile each page window gets when the display is
-/// large enough for several (see `WpeBackend::place`).
-const TILE_W: i32 = 1600;
-const TILE_H: i32 = 1000;
 
 // =============================================================================
 // Backend
@@ -98,8 +90,6 @@ pub struct WpeBackend {
     /// Ephemeral network sessions for isolated sessions, by key. One
     /// per key so every page of the session shares cookies and storage.
     isolated_sessions: HashMap<String, webkit6::NetworkSession>,
-    /// Which page holds which screen tile.
-    tiles: HashMap<i32, PageHandle>,
 }
 
 impl Default for WpeBackend {
@@ -120,37 +110,7 @@ impl WpeBackend {
             next_handle: 1,
             captures_dir: None,
             isolated_sessions: HashMap::new(),
-            tiles: HashMap::new(),
         }
-    }
-
-    /// Give a new page's window a screen tile of its own, when the
-    /// display has room for several. XTest input goes by screen
-    /// position, so windows stacked at one spot took each other's
-    /// clicks and hover state whenever several pages were in use at
-    /// once; apart, the pointer over one page is never over another.
-    /// On a smaller display the windows stay at the origin and input
-    /// raises its window first. Then the pointer is parked off every
-    /// window, so the page does not open hovered.
-    fn place(&mut self, handle: PageHandle) {
-        let Ok(d) = super::wpe_input::dispatcher() else {
-            return;
-        };
-        if let Some((w, h)) = d.screen_size() {
-            let (cols, rows) = (w / TILE_W, h / TILE_H);
-            let free = (0..cols * rows).find(|i| !self.tiles.contains_key(i));
-            if let (true, Some(slot), Some(p)) = (cols * rows >= 2, free, self.pages.get(&handle)) {
-                let (x, y) = ((slot % cols) * TILE_W, (slot / cols) * TILE_H);
-                // GTK sends the title on its own connection; wait for
-                // the server to have it before looking the window up.
-                gtk::prelude::WidgetExt::display(&p.window).sync();
-                if d.place_window(&window_title(handle), x, y) {
-                    p.origin.set((f64::from(x), f64::from(y)));
-                    self.tiles.insert(slot, handle);
-                }
-            }
-        }
-        d.park_pointer();
     }
 
     /// Pin the directory where `capture` writes PNGs. Defaults to a
@@ -222,7 +182,6 @@ use super::native_download::{
 // =============================================================================
 
 impl Engine for WpeBackend {
-    #[allow(clippy::too_many_lines)]
     fn open(&mut self, url: &str, store: &DataStore) -> EngineResult<PageHandle> {
         // An isolated session's pages share one ephemeral (in-memory)
         // network session; everyone else gets the default persistent
@@ -375,10 +334,8 @@ impl Engine for WpeBackend {
                 downloads,
                 download_hook,
                 main_response,
-                origin: Cell::new((0.0, 0.0)),
             },
         );
-        self.place(handle);
         Ok(handle)
     }
 
@@ -422,7 +379,6 @@ impl Engine for WpeBackend {
     }
 
     fn close(&mut self, page: PageHandle) -> EngineResult<()> {
-        self.tiles.retain(|_, h| *h != page);
         if let Some(mut p) = self.pages.remove(&page) {
             if let Some((session, id)) = p.download_hook.take() {
                 session.disconnect(id);
@@ -756,12 +712,8 @@ impl Engine for WpeBackend {
         // the same as every other page op, even though the keys go to
         // whatever holds focus rather than to a page handle.
         self.forget_new_window(page)?;
-        let (cursor, origin) = {
-            let p = self.page_mut(page)?;
-            (p.last_mouse.get(), p.origin.get())
-        };
+        let cursor = self.page_mut(page)?.last_mouse.get();
         let dispatcher = super::wpe_input::dispatcher()?;
-        let origin = input_origin(dispatcher, page, origin);
         // Pump GLib rather than sleep: this runs on the main thread,
         // so a plain sleep would stop WebKit processing the very keys
         // we are sending.
@@ -776,8 +728,8 @@ impl Engine for WpeBackend {
         // right window is already under it.
         #[allow(clippy::cast_possible_truncation)]
         let at = super::wpe_input::ScreenPoint {
-            x: (origin.0 + cursor.x) as i32,
-            y: (origin.1 + cursor.y) as i32,
+            x: cursor.x as i32,
+            y: cursor.y as i32,
         };
         dispatcher.raise_window(&window_title(page));
         let _ = dispatcher.dispatch(super::wpe_input::InputEvent::Move(at));
@@ -852,7 +804,7 @@ impl Engine for WpeBackend {
         // The web view fills the window, or is pinned to its top-left
         // once sized (set_viewport): page coordinates are window
         // coordinates either way.
-        let (origin_x, origin_y) = input_origin(dispatcher, page, p.origin.get());
+        let (origin_x, origin_y) = (0.0_f64, 0.0_f64);
         // Every page's window is at the origin; put this one on top so
         // the input reaches it and not another page's.
         dispatcher.raise_window(&window_title(page));
@@ -972,42 +924,22 @@ fn humanize_seed(op: CursorOp) -> u64 {
 /// events; the held button state is tracked at the X server). Kept
 /// in the signature so drag callers stay symmetric with the macOS
 /// `move_along_path`.
-/// The X window title of a page's host window. XTest input goes by
-/// screen position, so the input path finds a page's window by this
-/// name to place it (`WpeBackend::place`) and raise it.
+/// The X window title of a page's host window. Every host window sits
+/// at the screen origin and XTest input goes to whichever is on top, so
+/// the input path finds a page's window by this name and raises it.
 fn window_title(page: PageHandle) -> String {
     format!("vs-page-{}", page.0)
 }
 
-/// Name a new page's host window, so the input path can find it (see
-/// `window_title` and `WpeBackend::place`).
-/// The screen origin to add to page coordinates for input. GTK moves a
-/// window back to where it thinks it is when it resizes (`vs viewport`),
-/// so put it back into its tile first when it has drifted; otherwise
-/// trust where X says it is.
-fn input_origin(
-    dispatcher: &dyn super::wpe_input::InputDispatcher,
-    page: PageHandle,
-    tile: (f64, f64),
-) -> (f64, f64) {
-    let title = window_title(page);
-    let Some((x, y)) = dispatcher.window_origin(&title) else {
-        return tile;
-    };
-    let now = (f64::from(x), f64::from(y));
-    #[allow(clippy::cast_possible_truncation)]
-    let moved_back = tile != (0.0, 0.0)
-        && now != tile
-        && dispatcher.place_window(&title, tile.0 as i32, tile.1 as i32);
-    if moved_back {
-        tile
-    } else {
-        now
-    }
-}
-
+/// Name a new page's host window (see `window_title`) and move the X
+/// pointer off it: the pointer is shared by every page window, and a
+/// page that opens under wherever the last click left it would start
+/// out hovered.
 fn titled(window: gtk::Window, page: PageHandle) -> gtk::Window {
     window.set_title(Some(&window_title(page)));
+    if let Ok(d) = super::wpe_input::dispatcher() {
+        d.park_pointer();
+    }
     window
 }
 

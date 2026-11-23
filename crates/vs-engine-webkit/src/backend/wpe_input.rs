@@ -138,24 +138,6 @@ pub(crate) trait InputDispatcher: Send + Sync {
     /// Move the pointer off every page window, so a page that opens
     /// under it does not start out hovered. Best-effort.
     fn park_pointer(&self) {}
-
-    /// The screen's size in pixels, where the platform has one screen
-    /// that input addresses by position.
-    fn screen_size(&self) -> Option<(i32, i32)> {
-        None
-    }
-
-    /// Move the top-level window titled `title` to (`x`, `y`) on the
-    /// screen. Returns whether it was found.
-    fn place_window(&self, _title: &str, _x: i32, _y: i32) -> bool {
-        false
-    }
-
-    /// Where the top-level window titled `title` sits on the screen now
-    /// (its top-left corner), as the display server reports it.
-    fn window_origin(&self, _title: &str) -> Option<(i32, i32)> {
-        None
-    }
 }
 
 // =============================================================================
@@ -462,36 +444,6 @@ impl InputDispatcher for XtestDispatcher {
         };
         let _ = self.dispatch(InputEvent::Move(at));
         let _ = self.flush();
-    }
-
-    fn screen_size(&self) -> Option<(i32, i32)> {
-        let screen = self.conn.setup().roots.first()?;
-        Some((
-            i32::from(screen.width_in_pixels),
-            i32::from(screen.height_in_pixels),
-        ))
-    }
-
-    fn place_window(&self, title: &str, x: i32, y: i32) -> bool {
-        let Some(win) = self.find_titled(title) else {
-            return false;
-        };
-        let aux = ConfigureWindowAux::new().x(x).y(y);
-        if let Ok(cookie) = self.conn.configure_window(win, &aux) {
-            cookie.ignore_error();
-        }
-        self.conn.sync().is_ok()
-    }
-
-    fn window_origin(&self, title: &str) -> Option<(i32, i32)> {
-        let win = self.find_titled(title)?;
-        let r = self
-            .conn
-            .translate_coordinates(win, self.root, 0, 0)
-            .ok()?
-            .reply()
-            .ok()?;
-        Some((i32::from(r.dst_x), i32::from(r.dst_y)))
     }
 }
 
