@@ -38,7 +38,7 @@ use vs_protocol::{Ref, Tree};
 use crate::engine::{
     ActTarget, Action, AuthBlob, CaptureScope, CursorOp, DataStore, Download, DownloadEntry,
     DownloadSource, Engine, EngineCapabilities, EngineError, EngineResult, InputMode, LayoutBox,
-    PageHandle, Viewport, WaitCondition,
+    OpenStart, PageHandle, Viewport, WaitCondition,
 };
 
 // =============================================================================
@@ -113,6 +113,20 @@ pub struct WpeBackend {
     isolated_sessions: HashMap<String, webkit6::NetworkSession>,
     /// Which page holds which screen tile (see `place`).
     tiles: HashMap<i32, PageHandle>,
+    /// Pages whose first load is still running, by ticket (see
+    /// `open_start`), and the next ticket.
+    opening: HashMap<u64, Opening>,
+    next_ticket: u64,
+}
+
+/// A page `open_start` began whose first load has not ended yet.
+struct Opening {
+    page: WpePage,
+    /// Set by the load-finished or load-failed handler.
+    slot: Rc<RefCell<Option<Result<(), String>>>>,
+    signals: Vec<glib::SignalHandlerId>,
+    deadline: std::time::Instant,
+    budget: Duration,
 }
 
 impl Default for WpeBackend {
@@ -134,6 +148,8 @@ impl WpeBackend {
             captures_dir: None,
             isolated_sessions: HashMap::new(),
             tiles: HashMap::new(),
+            opening: HashMap::new(),
+            next_ticket: 0,
         }
     }
 
@@ -267,6 +283,23 @@ use super::native_download::{
 
 impl Engine for WpeBackend {
     fn open(&mut self, url: &str, store: &DataStore) -> EngineResult<PageHandle> {
+        let ticket = match self.open_start(url, store)? {
+            OpenStart::Done(page) => return Ok(page),
+            OpenStart::Pending(ticket) => ticket,
+        };
+        if let Some(slot) = self.opening.get(&ticket).map(|o| o.slot.clone()) {
+            let budget = super::common::nav_budget();
+            let _ = run_loop_until(move || slot.borrow().is_some(), budget);
+        }
+        loop {
+            if let Some(result) = self.open_poll(ticket) {
+                return result;
+            }
+            let _ = run_loop_until(|| false, Duration::from_millis(5));
+        }
+    }
+
+    fn open_start(&mut self, url: &str, store: &DataStore) -> EngineResult<OpenStart> {
         // An isolated session's pages share one ephemeral (in-memory)
         // network session; everyone else gets the default persistent
         // one. The download hook below connects to whichever session
@@ -333,37 +366,58 @@ impl Engine for WpeBackend {
             true
         });
 
-        let slot_check = slot.clone();
+        // The load runs in the page's web process (a new one takes tens
+        // of milliseconds to start); `open_poll` finishes the open, and
+        // the engine thread serves other pages meanwhile.
         let budget = super::common::nav_budget();
-        let ok = run_loop_until(move || slot_check.borrow().is_some(), budget);
-
-        // Disconnect signal handlers — the WebView outlives this scope.
-        web_view.disconnect(signal_id);
-        web_view.disconnect(fail_id);
-
-        if !ok {
-            return Err(EngineError::Timeout {
+        let ticket = self.next_ticket;
+        self.next_ticket += 1;
+        self.opening.insert(
+            ticket,
+            Opening {
+                page,
+                slot,
+                signals: vec![signal_id, fail_id],
+                deadline: std::time::Instant::now() + budget,
                 budget,
-                primitive: "open",
-                detail: "",
-            });
-        }
-        match slot.borrow_mut().take() {
-            Some(Ok(())) => {}
-            Some(Err(msg)) => return Err(EngineError::Other(format!("navigation failed: {msg}"))),
-            None => {
-                return Err(EngineError::Other(
-                    "navigation completed without a result".into(),
-                ))
-            }
-        }
+            },
+        );
+        Ok(OpenStart::Pending(ticket))
+    }
 
+    fn open_poll(&mut self, ticket: u64) -> Option<EngineResult<PageHandle>> {
+        let Some(o) = self.opening.get(&ticket) else {
+            return Some(Err(EngineError::Other("no open is pending".into())));
+        };
+        if o.slot.borrow().is_none() && std::time::Instant::now() < o.deadline {
+            return None;
+        }
+        let o = self.opening.remove(&ticket)?;
+        // Disconnect the handlers: the WebView outlives the open.
+        for id in o.signals {
+            o.page.web_view.disconnect(id);
+        }
+        let outcome = o.slot.borrow_mut().take();
+        match outcome {
+            None => {
+                return Some(Err(EngineError::Timeout {
+                    budget: o.budget,
+                    primitive: "open",
+                    detail: "",
+                }))
+            }
+            Some(Err(msg)) => {
+                return Some(Err(EngineError::Other(format!("navigation failed: {msg}"))))
+            }
+            Some(Ok(())) => {}
+        }
+        let page = o.page;
         let handle = self.alloc_handle();
         page.me.set(Some(handle));
         page.window.set_title(Some(&window_title(handle)));
         self.pages.insert(handle, page);
         self.place(handle);
-        Ok(handle)
+        Some(Ok(handle))
     }
 
     fn navigate(&mut self, page: PageHandle, url: &str) -> EngineResult<()> {

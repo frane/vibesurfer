@@ -451,6 +451,15 @@ impl DataStore {
     }
 }
 
+/// How [`Engine::open_start`] went: the page is open, or its first load
+/// is still running and [`Engine::open_poll`] with this ticket finishes
+/// it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenStart {
+    Done(PageHandle),
+    Pending(u64),
+}
+
 /// The browser engine, as the daemon sees it.
 ///
 /// All methods are synchronous from the daemon's perspective. The
@@ -460,6 +469,21 @@ impl DataStore {
 pub trait Engine {
     /// Open a fresh page navigated to `url`, in data store `store`.
     fn open(&mut self, url: &str, store: &DataStore) -> EngineResult<PageHandle>;
+
+    /// Start opening a page and return without waiting for its first
+    /// load, so the engine thread serves other pages meanwhile (a new
+    /// page's web process takes tens of milliseconds to start, all of
+    /// it idle on this thread). The default opens synchronously.
+    fn open_start(&mut self, url: &str, store: &DataStore) -> EngineResult<OpenStart> {
+        self.open(url, store).map(OpenStart::Done)
+    }
+
+    /// Finish an open that [`Engine::open_start`] left pending: `None`
+    /// while its load is still running, then the page or the error.
+    /// Polled from the engine thread between jobs.
+    fn open_poll(&mut self, _ticket: u64) -> Option<EngineResult<PageHandle>> {
+        Some(Err(EngineError::Other("no open is pending".into())))
+    }
 
     /// Discard the isolated data store keyed `key`, once its pages are
     /// closed. Unknown keys are a no-op.

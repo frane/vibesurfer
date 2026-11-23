@@ -50,8 +50,8 @@ pub use backend::auth::normalize as normalize_auth_blob;
 pub use engine::{
     ActTarget, Action, AuthBlob, CaptureScope, DataStore, Dialog, DialogAnswer, Download,
     DownloadEntry, DownloadSource, Engine, EngineCapabilities, EngineError, EngineResult,
-    LayoutBox, PageHandle, Popup, PopupEvent, PopupFeed, RecFrame, Viewport, WaitCondition,
-    DIALOG_TIMEOUT,
+    LayoutBox, OpenStart, PageHandle, Popup, PopupEvent, PopupFeed, RecFrame, Viewport,
+    WaitCondition, DIALOG_TIMEOUT,
 };
 pub use inspector::{
     ConsoleEntry, ConsoleLevel, Header, NetworkEntry, NetworkStatus, RequestDetail, RingBuffer,

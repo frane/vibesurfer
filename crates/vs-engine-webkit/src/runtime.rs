@@ -23,12 +23,33 @@ use vs_protocol::{Ref, Tree};
 
 use crate::engine::{
     ActTarget, Action, AuthBlob, CaptureScope, DataStore, Download, DownloadEntry, DownloadSource,
-    Engine, EngineCapabilities, EngineError, EngineResult, LayoutBox, PageHandle, Viewport,
-    WaitCondition,
+    Engine, EngineCapabilities, EngineError, EngineResult, LayoutBox, OpenStart, PageHandle,
+    Viewport, WaitCondition,
 };
 
-/// One unit of work for the engine thread.
-type Job = Box<dyn FnOnce(&mut dyn Engine) + Send>;
+/// An engine call that returned before its result was ready. Polled on
+/// the engine thread between jobs; returns true once it has replied.
+type Waiter = Box<dyn FnMut(&mut dyn Engine) -> bool>;
+
+/// One unit of work for the engine thread. It may leave a [`Waiter`]
+/// behind instead of replying at once.
+type Job = Box<dyn FnOnce(&mut dyn Engine, &mut Vec<Waiter>) + Send>;
+
+/// Run an engine op, turning a panic into an error. On macOS the op runs
+/// on the Cocoa main thread inside an Obj-C run-loop frame, where an
+/// unwinding panic is undefined behavior that can take the whole daemon
+/// down ("could not connect to the server" on the next request); a
+/// message-bearing error is far better than the bare `ENGINE_CRASH` a
+/// dropped reply channel would produce.
+fn guarded<R>(f: impl FnOnce() -> EngineResult<R>) -> EngineResult<R> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+        .unwrap_or_else(|payload| Err(EngineError::Other(panic_message(&payload))))
+}
+
+/// Poll every waiter once, dropping the ones that replied.
+fn poll_waiters(engine: &mut dyn Engine, waiters: &mut Vec<Waiter>) {
+    waiters.retain_mut(|w| !w(engine));
+}
 
 /// Extract a human-readable message from a `catch_unwind` payload.
 fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
@@ -98,8 +119,26 @@ impl EngineRuntime {
                     }
                 };
 
-                while let Ok(job) = rx.recv() {
-                    job(engine.as_mut());
+                let mut waiters: Vec<Waiter> = Vec::new();
+                loop {
+                    // With calls pending, look in on them between jobs
+                    // rather than block on the next job.
+                    let job = if waiters.is_empty() {
+                        match rx.recv() {
+                            Ok(job) => Some(job),
+                            Err(_) => break,
+                        }
+                    } else {
+                        match rx.recv_timeout(Duration::from_millis(1)) {
+                            Ok(job) => Some(job),
+                            Err(mpsc::RecvTimeoutError::Timeout) => None,
+                            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        }
+                    };
+                    if let Some(job) = job {
+                        job(engine.as_mut(), &mut waiters);
+                    }
+                    poll_waiters(engine.as_mut(), &mut waiters);
                 }
                 // Channel closed: drop the engine on this thread and exit.
                 drop(engine);
@@ -142,7 +181,11 @@ impl EngineRuntime {
             handle: None,
             waker: None,
         };
-        let dispatcher = MainThreadDispatcher { engine, rx };
+        let dispatcher = MainThreadDispatcher {
+            engine,
+            rx,
+            waiters: Vec::new(),
+        };
         (runtime, dispatcher)
     }
 
@@ -170,38 +213,56 @@ impl EngineRuntime {
         F: FnOnce(&mut dyn Engine) -> EngineResult<R> + Send + 'static,
         R: Send + 'static,
     {
-        let sender = self.sender.as_ref().ok_or(EngineError::Closed)?;
         let (reply_tx, reply_rx) = mpsc::sync_channel::<EngineResult<R>>(1);
-        let job: Job = Box::new(move |engine| {
-            // Isolate a panicking engine op: on macOS the job runs on
-            // the Cocoa main thread inside an Obj-C run-loop frame, so an
-            // unwinding panic is undefined behavior that can take the
-            // whole daemon down ("could not connect to the server" on the
-            // next request). Catch it here and hand back a clean, message-
-            // bearing error instead — far better than the bare
-            // `ENGINE_CRASH` (empty-args) the dropped reply channel would
-            // otherwise produce.
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(engine)))
-                .unwrap_or_else(|payload| Err(EngineError::Other(panic_message(&payload))));
-            let _ = reply_tx.send(result);
-        });
+        self.send(Box::new(move |engine, _| {
+            let _ = reply_tx.send(guarded(|| f(engine)));
+        }))?;
+        reply_rx.recv().map_err(|_| EngineError::Crashed)?
+    }
+
+    /// Queue `job` and wake the host loop.
+    fn send(&self, job: Job) -> EngineResult<()> {
+        let sender = self.sender.as_ref().ok_or(EngineError::Closed)?;
         sender.send(job).map_err(|_| EngineError::Closed)?;
         // Wake the host loop *after* the job is queued, so it cannot
         // wake, find nothing, and go back to sleep past this job.
         if let Some(waker) = &self.waker {
             waker();
         }
-        reply_rx.recv().map_err(|_| EngineError::Crashed)?
+        Ok(())
     }
 
     // -----------------------------------------------------------------
     // Synchronous facade for every Engine method.
     // -----------------------------------------------------------------
 
+    /// Open a page. The engine thread serves other calls while the
+    /// page's first load runs (see [`Engine::open_start`]); this caller
+    /// gets its reply when the load is done.
     pub fn open(&self, url: &str, store: &DataStore) -> EngineResult<PageHandle> {
         let url = url.to_string();
         let store = store.clone();
-        self.dispatch(move |e| e.open(&url, &store))
+        let (reply_tx, reply_rx) = mpsc::sync_channel::<EngineResult<PageHandle>>(1);
+        self.send(Box::new(move |engine, waiters| {
+            match guarded(|| engine.open_start(&url, &store)) {
+                Ok(OpenStart::Done(page)) => {
+                    let _ = reply_tx.send(Ok(page));
+                }
+                Err(e) => {
+                    let _ = reply_tx.send(Err(e));
+                }
+                Ok(OpenStart::Pending(ticket)) => waiters.push(Box::new(move |engine| {
+                    let result = match guarded(|| Ok(engine.open_poll(ticket))) {
+                        Ok(None) => return false,
+                        Ok(Some(result)) => result,
+                        Err(e) => Err(e),
+                    };
+                    let _ = reply_tx.send(result);
+                    true
+                })),
+            }
+        }))?;
+        reply_rx.recv().map_err(|_| EngineError::Crashed)?
     }
 
     pub fn drop_store(&self, key: &str) -> EngineResult<()> {
@@ -479,17 +540,21 @@ impl Drop for EngineRuntime {
 pub struct MainThreadDispatcher {
     engine: Box<dyn Engine>,
     rx: mpsc::Receiver<Job>,
+    waiters: Vec<Waiter>,
 }
 
 impl MainThreadDispatcher {
-    /// Drain one job if available. Returns `Ok(true)` if a job was
-    /// executed, `Ok(false)` if the queue is currently empty,
-    /// `Err(())` if the channel is closed (the runtime was dropped —
-    /// the dispatcher should exit its loop).
+    /// Look in on pending calls, then drain one job if available.
+    /// Returns `Ok(true)` if a job was executed, `Ok(false)` if the
+    /// queue is currently empty, `Err(())` if the channel is closed
+    /// (the runtime was dropped — the dispatcher should exit its loop).
+    /// A pending call finishes on a later tick, once the host loop has
+    /// run the engine's events.
     pub fn tick(&mut self) -> Result<bool, ()> {
+        poll_waiters(self.engine.as_mut(), &mut self.waiters);
         match self.rx.try_recv() {
             Ok(job) => {
-                job(self.engine.as_mut());
+                job(self.engine.as_mut(), &mut self.waiters);
                 Ok(true)
             }
             Err(mpsc::TryRecvError::Empty) => Ok(false),
@@ -500,9 +565,10 @@ impl MainThreadDispatcher {
     /// Block until a job arrives or the channel is closed; execute one
     /// job. Returns `Ok(true)` after running, `Err(())` on closed.
     pub fn tick_blocking(&mut self) -> Result<bool, ()> {
+        poll_waiters(self.engine.as_mut(), &mut self.waiters);
         match self.rx.recv() {
             Ok(job) => {
-                job(self.engine.as_mut());
+                job(self.engine.as_mut(), &mut self.waiters);
                 Ok(true)
             }
             Err(_) => Err(()),
@@ -531,6 +597,8 @@ mod tests {
     struct TestEngine {
         next_handle: u64,
         last_url: String,
+        /// When set, opens stay pending until the flag turns true.
+        slow_open: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     }
 
     impl Engine for TestEngine {
@@ -538,6 +606,17 @@ mod tests {
             self.next_handle += 1;
             self.last_url = url.to_string();
             Ok(PageHandle(self.next_handle))
+        }
+        fn open_start(&mut self, url: &str, store: &DataStore) -> EngineResult<OpenStart> {
+            if self.slow_open.is_some() {
+                return Ok(OpenStart::Pending(1));
+            }
+            self.open(url, store).map(OpenStart::Done)
+        }
+        fn open_poll(&mut self, _ticket: u64) -> Option<EngineResult<PageHandle>> {
+            let done = self.slow_open.as_ref()?;
+            done.load(std::sync::atomic::Ordering::SeqCst)
+                .then_some(Ok(PageHandle(7)))
         }
         fn navigate(&mut self, _page: PageHandle, url: &str) -> EngineResult<()> {
             self.last_url = url.to_string();
@@ -624,6 +703,40 @@ mod tests {
         let mut rt = spawn_test_runtime();
         rt.shutdown();
         rt.shutdown();
+    }
+
+    /// An open whose load is still running does not hold up other
+    /// calls, and its caller gets the page once the load ends.
+    #[test]
+    fn a_pending_open_does_not_hold_up_other_calls() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let loaded = Arc::new(AtomicBool::new(false));
+        let engine = TestEngine {
+            slow_open: Some(loaded.clone()),
+            ..TestEngine::default()
+        };
+        let (rt, mut driver) = EngineRuntime::dispatcher(Box::new(engine));
+        let rt = Arc::new(rt);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut drive_until = |done: &dyn Fn() -> bool| {
+            while !done() && std::time::Instant::now() < deadline {
+                let _ = driver.tick();
+                std::thread::yield_now();
+            }
+        };
+
+        let r = rt.clone();
+        let opener = std::thread::spawn(move || r.open("about:blank", &DataStore::Shared));
+        let r = rt.clone();
+        let other = std::thread::spawn(move || r.capabilities());
+        drive_until(&|| other.is_finished());
+        assert!(other.join().unwrap().is_ok(), "served while the open waits");
+        assert!(!opener.is_finished(), "the open waits for its load");
+
+        loaded.store(true, Ordering::SeqCst);
+        drive_until(&|| opener.is_finished());
+        assert_eq!(opener.join().unwrap().unwrap(), PageHandle(7));
     }
 
     #[test]
