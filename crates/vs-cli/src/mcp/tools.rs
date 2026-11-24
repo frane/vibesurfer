@@ -165,6 +165,13 @@ tool("vs_type", "Type text into the FOCUSED element with trusted keystrokes (rea
             ("op", str_prop("list | set | clear.", true)),
             ("json", str_prop("JSON array of cookies, for set.", false)),
         ])),
+        tool("vs_drop", "Drop files and strings onto (x, y) as a native drag from another app: trusted dragenter, dragover, drop. Returns accepted or refused.", obj(&[
+            ("page", str_prop("Page id.", true)),
+            ("x", num_prop("X in CSS pixels.", true)),
+            ("y", num_prop("Y in CSS pixels.", true)),
+            ("files", json!({ "type": "array", "items": { "type": "string" }, "description": "File paths." })),
+            ("data", json!({ "type": "object", "additionalProperties": { "type": "string" }, "description": "MIME type to string, e.g. {\"text/plain\": \"hi\"}." })),
+        ])),
         tool("vs_wheel", "Move to (x, y) and turn the wheel by (dx, dy) CSS px: a trusted wheel event (positive dy scrolls down).", obj(&[
             ("page", str_prop("Page id.", true)),
             ("x", num_prop("Pointer X in CSS pixels.", true)),
@@ -447,6 +454,29 @@ pub fn build_cli(name: &str, args: &Value) -> Result<(Cli, CallOpts)> {
             page: req_str(args, "page")?,
             op: req_str(args, "op")?,
             data: opt_str(args, "json"),
+        },
+        "vs_drop" => Command::Drop {
+            page: req_str(args, "page")?,
+            x: req_f64(args, "x")?,
+            y: req_f64(args, "y")?,
+            files: args
+                .get("files")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            data: args
+                .get("data")
+                .and_then(Value::as_object)
+                .map(|o| {
+                    o.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|v| format!("{k}={v}")))
+                        .collect()
+                })
+                .unwrap_or_default(),
         },
         "vs_wheel" => Command::Wheel {
             page: req_str(args, "page")?,

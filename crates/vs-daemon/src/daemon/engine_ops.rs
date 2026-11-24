@@ -191,6 +191,32 @@ impl Daemon {
         })
     }
 
+    /// Drop files and strings onto a page as a native drag from another
+    /// application (`vs_drop`). Returns whether the page accepted it.
+    pub fn drop_data(
+        &self,
+        session_id: &str,
+        page_id: &str,
+        x: f64,
+        y: f64,
+        data: vs_engine_webkit::DropData,
+    ) -> Result<bool> {
+        let label = format!(
+            "{x},{y} files={} items={}",
+            data.files.len(),
+            data.items.len()
+        );
+        let ctx = AuditCtx::new("vs_drop", session_id)
+            .with_page(page_id)
+            .with_args(label.clone(), tokens::args_hash("vs_drop", &[label]));
+        self.audit_call(ctx, |ctx| {
+            let engine_handle = self.engine_handle_for(session_id, page_id)?;
+            let accepted = self.inner.engine.drop_data(engine_handle, x, y, data)?;
+            ctx.result_summary = Some(if accepted { "accepted" } else { "refused" }.into());
+            Ok(accepted)
+        })
+    }
+
     /// Kill a page's web content process (`vs_debug_crash`).
     pub fn debug_crash(&self, session_id: &str, page_id: &str) -> Result<()> {
         let engine_handle = self.engine_handle_for(session_id, page_id)?;

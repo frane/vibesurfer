@@ -21,15 +21,18 @@ rav1e = { version = "0.8", default-features = false }
 openh264 = "0.9"
 muxide = "0.2"
 image = { version = "0.25", default-features = false, features = ["png"] }
-# libvpx (VP8) for WebM recordings, Playwright's video format. Bindings
-# are generated at build time (needs clang); release builds link libvpx
-# statically (VPX_STATIC=1), so the binary needs no libvpx installed.
-env-libvpx-sys = { version = "5.1.3", features = ["generate"], optional = true }
 thiserror = "2"
 
 [features]
 default = ["webm"]
-webm = ["dep:env-libvpx-sys"]
+# libvpx (VP8) for WebM recordings, Playwright's video format. build.rs
+# generates the bindings (needs clang); release builds link libvpx
+# statically (VPX_STATIC=1), so the binary needs no libvpx installed.
+webm = []
+
+[build-dependencies]
+bindgen = "0.73"
+pkg-config = "0.3"
 
 [dev-dependencies]
 tempfile = "3"

@@ -1470,6 +1470,31 @@ impl Engine for Webview2Backend {
         Ok(())
     }
 
+    fn drop_data(
+        &mut self,
+        page: PageHandle,
+        x: f64,
+        y: f64,
+        data: &crate::engine::DropData,
+    ) -> EngineResult<bool> {
+        let (web_view, comp) = {
+            let p = self.page_mut(page)?;
+            (p.web_view.clone(), p.comp_controller.clone())
+        };
+        let extra = super::drop_shim::install_js(data);
+        if let Some(js) = &extra {
+            execute_script(&web_view, js)?;
+        }
+        let accepted =
+            super::wv2_drop::drop_data(&comp, point_at(vs_humanize::Point { x, y }), data);
+        if extra.is_some() {
+            let _ = execute_script(&web_view, super::drop_shim::RESTORE_JS);
+        }
+        let accepted = accepted?;
+        self.follow_new_window(page, false)?;
+        Ok(accepted)
+    }
+
     fn set_zoom(&mut self, page: PageHandle, zoom: f64) -> EngineResult<()> {
         let p = self.page_mut(page)?;
         unsafe { p.controller.SetZoomFactor(zoom) }

@@ -98,6 +98,15 @@ pub enum CookieOp {
     Clear,
 }
 
+/// What [`Engine::drop_data`] drops onto a page: files from disk and
+/// string items keyed by MIME type, as a drag from another application
+/// would carry them.
+#[derive(Debug, Clone, Default)]
+pub struct DropData {
+    pub files: Vec<std::path::PathBuf>,
+    pub items: Vec<(String, String)>,
+}
+
 /// Which mouse button a [`CursorOp::Click`] presses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseButton {
@@ -785,6 +794,23 @@ pub trait Engine {
         Err(EngineError::Unsupported {
             engine: "unknown",
             primitive: "zoom",
+        })
+    }
+
+    /// Drop `data` onto `page` at view point (`x`, `y`) as a native drag
+    /// from another application: the page sees trusted `dragenter`,
+    /// `dragover` and, when its `dragover` accepts, `drop` (otherwise
+    /// `dragleave`). Returns whether the drop was accepted.
+    fn drop_data(
+        &mut self,
+        _page: PageHandle,
+        _x: f64,
+        _y: f64,
+        _data: &DropData,
+    ) -> EngineResult<bool> {
+        Err(EngineError::Unsupported {
+            engine: "unknown",
+            primitive: "drop",
         })
     }
 

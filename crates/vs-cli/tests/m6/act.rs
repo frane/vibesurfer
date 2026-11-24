@@ -1117,3 +1117,75 @@ fn cell_viewport_zoom_lays_out_wider() {
         assert!(ev.contains("click:a:0:1:true"), "{ev}");
     }
 }
+
+// vs drop: files and strings from "another application" arrive as a
+// trusted drag; a target whose dragover declines sees no drop.
+#[test]
+fn cell_drop_is_native() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _token) = open_fixture(&ctx, "/drop.html");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("note.txt");
+        std::fs::write(&file, "from disk").unwrap();
+        let file = file.to_string_lossy().into_owned();
+        let r = ctx.vs(&[
+            "drop",
+            &page,
+            "160",
+            "120",
+            "--file",
+            &file,
+            "--data",
+            "text/plain=hello",
+            "--data",
+            "application/x-vs=custom",
+        ]);
+        assert_ok("drop", &r);
+        assert_eq!(body_first(&r), "accepted", "{}", r.stdout);
+        let mut got = String::new();
+        for _ in 0..20 {
+            got = eval_js(&ctx, &page, "String(window.__drop)");
+            if got != "null" {
+                break;
+            }
+            settle(100);
+        }
+        let ev = eval_js(&ctx, &page, "window.__ev.join(' ')");
+        assert!(
+            ev.contains("dragenter:true") && ev.contains("drop:true"),
+            "events: {ev}"
+        );
+        assert!(got.contains("\"text\":\"hello\""), "text: {got}");
+        assert!(got.contains("\"custom\":\"custom\""), "custom type: {got}");
+        assert!(got.contains("note.txt=from disk"), "file: {got}");
+
+        // Text alone travels on the pasteboard.
+        let _ = eval_js(
+            &ctx,
+            &page,
+            "(window.__ev = [], window.__drop = null, 'ok')",
+        );
+        let r = ctx.vs(&["drop", &page, "160", "120", "--data", "text/plain=plain"]);
+        assert_ok("text drop", &r);
+        let mut got = String::new();
+        for _ in 0..20 {
+            got = eval_js(&ctx, &page, "String(window.__drop)");
+            if got != "null" {
+                break;
+            }
+            settle(100);
+        }
+        assert!(got.contains("\"text\":\"plain\""), "text drop: {got}");
+
+        let _ = eval_js(&ctx, &page, "(window.__ev = [], 'ok')");
+        let r = ctx.vs(&["drop", &page, "160", "310", "--data", "text/plain=x"]);
+        assert_ok("refused drop", &r);
+        assert_eq!(body_first(&r), "refused", "{}", r.stdout);
+        let ev = eval_js(&ctx, &page, "window.__ev.join(' ')");
+        assert!(
+            !ev.contains("off-drop"),
+            "a refused drop must not fire drop: {ev}"
+        );
+    }
+}

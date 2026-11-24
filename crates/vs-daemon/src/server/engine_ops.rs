@@ -495,6 +495,84 @@ pub(super) fn handle_cookies(daemon: &Daemon, req: &Request) -> String {
     }
 }
 
+/// `vs_drop <page> <x> <y> <b64 JSON {"files":[path],"data":{mime:value}}>`.
+pub(super) fn handle_drop(daemon: &Daemon, req: &Request) -> String {
+    use base64::Engine as _;
+    let session_id = match require_session(req) {
+        Ok(s) => s,
+        Err(msg) => return format_error(ErrorCode::BadRequest, vec![msg]),
+    };
+    let usage = || {
+        format_error(
+            ErrorCode::BadRequest,
+            vec!["vs_drop: usage <page> <x> <y> <b64 JSON {files, data}>".into()],
+        )
+    };
+    let (Some(page_id), Some(x), Some(y), Some(b64)) = (
+        req.args.first(),
+        req.args.get(1),
+        req.args.get(2),
+        req.args.get(3),
+    ) else {
+        return usage();
+    };
+    let (Ok(x), Ok(y)) = (x.parse::<f64>(), y.parse::<f64>()) else {
+        return usage();
+    };
+    let payload = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|e| format!("vs_drop: bad base64: {e}"))
+        .and_then(|b| {
+            serde_json::from_slice::<serde_json::Value>(&b)
+                .map_err(|e| format!("vs_drop: bad JSON: {e}"))
+        });
+    let payload = match payload {
+        Ok(p) => p,
+        Err(msg) => return format_error(ErrorCode::BadRequest, vec![msg]),
+    };
+    let strings = |v: &serde_json::Value| -> Vec<String> {
+        v.as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|s| s.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let files: Vec<std::path::PathBuf> = strings(&payload["files"])
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    let items: Vec<(String, String)> = payload["data"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|pair| {
+                    let p = strings(pair);
+                    (p.len() == 2).then(|| (p[0].clone(), p[1].clone()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    for f in &files {
+        if !f.is_file() {
+            return format_error(
+                ErrorCode::BadRequest,
+                vec![format!("vs_drop: no such file {}", f.display())],
+            );
+        }
+    }
+    let data = vs_engine_webkit::DropData { files, items };
+    match daemon.drop_data(&session_id, page_id, x, y, data) {
+        Ok(accepted) => format!(
+            "{}{}\n",
+            ResponseHead::ok(StateToken::ZERO).encode(),
+            if accepted { "accepted" } else { "refused" }
+        ),
+        Err(e) => format_daemon_error(&e),
+    }
+}
+
 pub(super) fn handle_layout(daemon: &Daemon, req: &Request) -> String {
     let session_id = match require_session(req) {
         Ok(s) => s,

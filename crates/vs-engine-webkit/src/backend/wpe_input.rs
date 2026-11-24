@@ -164,6 +164,12 @@ pub(crate) trait InputDispatcher: Send + Sync {
         None
     }
 
+    /// The X window id of the top-level window titled `title`, where
+    /// the display is X11 (the target of an XDND drop).
+    fn x11_window(&self, _title: &str) -> Option<u32> {
+        None
+    }
+
     /// Route the input that follows through the pointer and keyboard
     /// that belong to the page named `title` (created on first use), so
     /// pages do not share one pointer position, hover or focus. Where
@@ -662,6 +668,10 @@ impl InputDispatcher for XtestDispatcher {
             cookie.ignore_error();
         }
         self.conn.sync().is_ok()
+    }
+
+    fn x11_window(&self, title: &str) -> Option<u32> {
+        self.find_titled(title)
     }
 
     fn window_origin(&self, title: &str) -> Option<(i32, i32)> {

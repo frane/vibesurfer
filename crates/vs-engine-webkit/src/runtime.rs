@@ -507,6 +507,16 @@ impl EngineRuntime {
         self.dispatch(move |e| e.performance(page))
     }
 
+    pub fn drop_data(
+        &self,
+        page: PageHandle,
+        x: f64,
+        y: f64,
+        data: crate::engine::DropData,
+    ) -> EngineResult<bool> {
+        self.dispatch(move |e| e.drop_data(page, x, y, &data))
+    }
+
     pub fn crash(&self, page: PageHandle) -> EngineResult<()> {
         self.dispatch(move |e| e.crash(page))
     }

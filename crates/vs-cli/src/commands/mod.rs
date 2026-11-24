@@ -394,6 +394,20 @@ pub enum Command {
         /// JSON array for `set`.
         data: Option<String>,
     },
+    /// Drop files and strings onto `(x, y)` as a native drag from
+    /// another application: trusted dragenter, dragover and drop. Prints
+    /// `accepted`, or `refused` when the page's dragover declined it.
+    Drop {
+        page: String,
+        x: f64,
+        y: f64,
+        /// A file to drop (repeatable).
+        #[arg(long = "file")]
+        files: Vec<String>,
+        /// A string item as MIME=VALUE, e.g. text/plain=hello (repeatable).
+        #[arg(long = "data")]
+        data: Vec<String>,
+    },
     /// Move to `(x, y)` and turn the wheel by `(dx, dy)` CSS px, a
     /// trusted native wheel event (positive dy scrolls down).
     #[command(visible_alias = "wh")]
@@ -1202,6 +1216,37 @@ impl Command {
                     r = r.arg(base64::engine::general_purpose::STANDARD.encode(j.as_bytes()));
                 }
                 r.flag_value("session", s)
+            }
+            Self::Drop {
+                page,
+                x,
+                y,
+                files,
+                data,
+            } => {
+                use base64::Engine as _;
+                let s = require_session(session_id)?;
+                let mut items = Vec::new();
+                for d in data {
+                    let (mime, value) = d
+                        .split_once('=')
+                        .with_context(|| format!("--data {d:?}: want MIME=VALUE"))?;
+                    items.push((mime.to_string(), value.to_string()));
+                }
+                let files: Vec<String> = files
+                    .iter()
+                    .map(|f| {
+                        std::path::absolute(f)
+                            .map_or_else(|_| f.clone(), |p| p.to_string_lossy().into_owned())
+                    })
+                    .collect();
+                let payload = serde_json::json!({ "files": files, "data": items });
+                Request::new("vs_drop")
+                    .arg(page.clone())
+                    .arg(x.to_string())
+                    .arg(y.to_string())
+                    .arg(base64::engine::general_purpose::STANDARD.encode(payload.to_string()))
+                    .flag_value("session", s)
             }
             Self::Wheel {
                 page,

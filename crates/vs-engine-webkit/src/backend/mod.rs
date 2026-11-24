@@ -10,6 +10,7 @@
 
 pub(crate) mod auth;
 mod common;
+mod drop_shim;
 pub(crate) mod inspector_bridge;
 mod native_download;
 
@@ -26,6 +27,9 @@ mod wpe_input;
 mod wpe_wheel;
 
 #[cfg(target_os = "linux")]
+mod wpe_xdnd;
+
+#[cfg(target_os = "linux")]
 mod wpe_popups;
 
 #[cfg(target_os = "linux")]
@@ -36,3 +40,6 @@ pub mod webview2;
 
 #[cfg(target_os = "windows")]
 mod webview2_extras;
+
+#[cfg(target_os = "windows")]
+mod wv2_drop;

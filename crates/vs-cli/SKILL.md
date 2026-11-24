@@ -88,6 +88,8 @@ Coordinate-addressed input with native trusted dispatch on every backend. macOS 
 
 `vs cookies <PAGE> list|clear|set '<JSON>'` (`ck`) reads and writes the page's jar host-side, HttpOnly included. `vs viewport <PAGE> keep --zoom 0.4` lays the page out wider and fits it to the view (mobile layout).
 
+`vs drop <PAGE> <X> <Y> [--file PATH]... [--data MIME=VALUE]...` drops files and strings at a point as a drag from another app: trusted `dragenter`/`dragover`/`drop`, real `File` objects. Prints `accepted`, or `refused` when the page's dragover declined. MCP `vs_drop` (`{page, x, y, files?, data?}`).
+
 ### Human-in-loop (24–25, v0.1.9+; MCP-aware in v0.1.12+)
 
 For credentials, TANs, and any other value the agent must not see. The CLI reads from the local terminal the user is sitting at; the agent never receives the bytes.

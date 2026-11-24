@@ -640,6 +640,49 @@ impl Engine for WpeBackend {
         Ok(())
     }
 
+    fn drop_data(
+        &mut self,
+        page: PageHandle,
+        x: f64,
+        y: f64,
+        data: &crate::engine::DropData,
+    ) -> EngineResult<bool> {
+        self.forget_new_window(page)?;
+        let dispatcher = super::wpe_input::dispatcher()?;
+        let (web_view, home) = {
+            let p = self.page_mut(page)?;
+            (p.web_view.clone(), p.origin.get())
+        };
+        let title = window_title(page);
+        // XDND needs an X11 window; a pure Wayland session has no
+        // protocol for an outside drag, so the drop arrives by script.
+        let Some(target) = dispatcher.x11_window(&title) else {
+            return Err(EngineError::Unsupported {
+                engine: "webkitgtk-wayland",
+                primitive: "drop",
+            });
+        };
+        let (ox, oy) = input_origin(dispatcher, page, home);
+        dispatcher.raise_window(&title);
+        let extra = super::drop_shim::install_js(data);
+        if let Some(js) = &extra {
+            eval_js_string(&web_view, js, Duration::from_secs(2))?;
+        }
+        let accepted = super::wpe_xdnd::drop_data(target, ox + x, oy + y, data, |d| {
+            let _ = run_loop_until(|| false, d);
+        });
+        if extra.is_some() {
+            let _ = eval_js_string(
+                &web_view,
+                super::drop_shim::RESTORE_JS,
+                Duration::from_secs(2),
+            );
+        }
+        let accepted = accepted?;
+        self.follow_new_window(page, false)?;
+        Ok(accepted)
+    }
+
     fn set_zoom(&mut self, page: PageHandle, zoom: f64) -> EngineResult<()> {
         let p = self.page_mut(page)?;
         p.web_view.set_zoom_level(zoom);

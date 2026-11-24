@@ -18,6 +18,7 @@
 mod capture;
 mod cookie_store;
 mod dialogs;
+mod drop;
 mod eval;
 mod frames;
 mod headless_webview;
@@ -1146,6 +1147,38 @@ impl Engine for WkBackend {
         unsafe { kill(pid, 9) };
         let _ = run_loop_until(|| false, Duration::from_millis(200));
         Ok(())
+    }
+
+    fn drop_data(
+        &mut self,
+        page: PageHandle,
+        x: f64,
+        y: f64,
+        data: &crate::engine::DropData,
+    ) -> EngineResult<bool> {
+        self.forget_new_window(page)?;
+        let web_view = self.page_mut(page)?.web_view.clone();
+        let height = web_view.frame().size.height;
+        let extra = super::drop_shim::install_js(data);
+        if let Some(js) = &extra {
+            eval_js_string(&web_view, js, Duration::from_secs(2))?;
+        }
+        let accepted = drop::drop_data(&web_view, height, x, y, data);
+        if extra.is_some() {
+            let _ = eval_js_string(
+                &web_view,
+                super::drop_shim::RESTORE_JS,
+                Duration::from_secs(2),
+            );
+        }
+        let _ = eval_js_string(
+            &web_view,
+            "String(window.__vsFlushRAF ? window.__vsFlushRAF() : 0)",
+            Duration::from_secs(2),
+        );
+        let accepted = accepted?;
+        self.follow_new_window(page, false)?;
+        Ok(accepted)
     }
 
     fn set_zoom(&mut self, page: PageHandle, zoom: f64) -> EngineResult<()> {

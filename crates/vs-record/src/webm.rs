@@ -18,7 +18,18 @@
 use std::ffi::c_int;
 use std::path::{Path, PathBuf};
 
-use vpx_sys as vpx;
+/// libvpx, as build.rs generated it.
+#[allow(
+    non_upper_case_globals,
+    non_camel_case_types,
+    non_snake_case,
+    dead_code,
+    clippy::all,
+    clippy::pedantic
+)]
+mod vpx {
+    include!(concat!(env!("OUT_DIR"), "/vpx.rs"));
+}
 
 use crate::{RecordError, Result};
 

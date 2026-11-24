@@ -49,9 +49,9 @@ pub mod test_support;
 pub use backend::auth::normalize as normalize_auth_blob;
 pub use engine::{
     ActTarget, Action, AuthBlob, CaptureScope, ClickOpts, CookieData, CookieOp, DataStore, Dialog,
-    DialogAnswer, Download, DownloadEntry, DownloadSource, Engine, EngineCapabilities, EngineError,
-    EngineResult, LayoutBox, Modifiers, MouseButton, OpenStart, PageHandle, Popup, PopupEvent,
-    PopupFeed, RecFrame, Viewport, WaitCondition, DIALOG_TIMEOUT,
+    DialogAnswer, Download, DownloadEntry, DownloadSource, DropData, Engine, EngineCapabilities,
+    EngineError, EngineResult, LayoutBox, Modifiers, MouseButton, OpenStart, PageHandle, Popup,
+    PopupEvent, PopupFeed, RecFrame, Viewport, WaitCondition, DIALOG_TIMEOUT,
 };
 pub use inspector::{
     ConsoleEntry, ConsoleLevel, Header, NetworkEntry, NetworkStatus, RequestDetail, RingBuffer,

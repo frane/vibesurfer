@@ -18,6 +18,8 @@ All notable changes to vibesurfer are recorded here. The format follows
 - Intercept sessions report the responses a service worker builds or takes from its cache (`sw <base64 JSON>` on `vs net poll`): the proxy puts a small prelude in front of worker scripts. Worker scripts get one that runs code on request and passes console messages on. Cell `cell_intercept_reports_service_worker_responses`.
 - A page whose web content process dies is reported as `crash <page>` on `vs net poll` (`--popups` sessions), on all three engines. Cell `cell_crash_is_reported`.
 - `vs record start --format webm`: VP8 in WebM, the format Playwright writes, encoded with libvpx. Release binaries link libvpx statically; building from source needs libvpx and clang (`brew install libvpx`, `apt install libvpx-dev libclang-dev`). MP4 stays the default. Cell `cell_record_formats`.
+- `vs drop <PAGE> <X> <Y> --file PATH --data MIME=VALUE` (MCP `vs_drop`): files and strings dropped from another application as native input, so the page sees trusted `dragenter`, `dragover` and `drop` and real files. macOS feeds WebKit's drag-destination methods a pasteboard; Windows uses the composition controller's `DragEnter`/`DragOver`/`Drop` with a shell data object; Linux on X11 runs the XDND protocol as the drag source. MIME types the OS pasteboard has no slot for travel with the drop by script. A pure Wayland session has no protocol for an outside drag and reports `UNSUPPORTED`. Cell `cell_drop_is_native`.
+- vs-record generates its libvpx bindings with current bindgen; the libvpx-sys crate's older bindgen produced an empty encoder config against newer libclang.
 - macOS shows no native context menu either, so a right-click can't stall the main thread in AppKit's menu loop.
 
 ### Fixed

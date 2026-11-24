@@ -1,0 +1,23 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>drop</title>
+<style>body{margin:0} #zone{position:absolute;left:40px;top:40px;width:240px;height:160px;background:#ddd} #off{position:absolute;left:40px;top:260px;width:240px;height:100px;background:#fdd}</style>
+<div id="zone">drop here</div>
+<div id="off">refuses drops</div>
+<script>
+window.__ev = [];
+window.__drop = null;
+const zone = document.getElementById('zone');
+for (const t of ['dragenter', 'dragover', 'dragleave', 'drop']) {
+  zone.addEventListener(t, (e) => { window.__ev.push(t + ':' + e.isTrusted); if (t !== 'dragleave') e.preventDefault(); });
+  document.getElementById('off').addEventListener(t, (e) => window.__ev.push('off-' + t + ':' + e.isTrusted));
+}
+zone.addEventListener('drop', async (e) => {
+  // DataTransfer empties when the event ends: read it synchronously.
+  const dt = e.dataTransfer;
+  const types = [...dt.types], text = dt.getData('text/plain'), custom = dt.getData('application/x-vs');
+  const list = [...dt.files];
+  const files = await Promise.all(list.map(async (f) => f.name + '=' + (await f.text())));
+  window.__drop = JSON.stringify({ types, text, custom, files });
+});
+</script>
