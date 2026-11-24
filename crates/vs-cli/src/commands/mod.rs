@@ -351,6 +351,15 @@ pub enum Command {
         token: String,
         #[arg(long, short = 'M', default_value = "human")]
         mode: String,
+        /// left | right | middle.
+        #[arg(long)]
+        button: Option<String>,
+        /// 2 for a double click, 3 for a triple click.
+        #[arg(long)]
+        count: Option<u8>,
+        /// Held keys: shift,ctrl,alt,meta.
+        #[arg(long)]
+        modifiers: Option<String>,
     },
     /// Hover at `(x, y)`.
     #[command(visible_alias = "ha")]
@@ -1120,13 +1129,25 @@ impl Command {
                 y,
                 token,
                 mode,
+                button,
+                count,
+                modifiers,
             } => {
                 let s = require_session(session_id)?;
-                Request::new("vs_click_at")
+                let mut r = Request::new("vs_click_at")
                     .arg(page.clone())
                     .arg(x.to_string())
-                    .arg(y.to_string())
-                    .flag_value("session", s)
+                    .arg(y.to_string());
+                if let Some(b) = button {
+                    r = r.flag_value("button", b.clone());
+                }
+                if let Some(c) = count {
+                    r = r.flag_value("count", c.to_string());
+                }
+                if let Some(m) = modifiers {
+                    r = r.flag_value("modifiers", m.clone());
+                }
+                r.flag_value("session", s)
                     .flag_value("token", token.clone())
                     .flag_value("mode", mode.clone())
             }

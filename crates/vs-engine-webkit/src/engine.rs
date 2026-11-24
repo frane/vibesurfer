@@ -73,6 +73,12 @@ pub enum CursorOp {
     /// Press at `(x1, y1)`, drag along a humanized path to `(x2, y2)`,
     /// release.
     Drag { x1: f64, y1: f64, x2: f64, y2: f64 },
+    /// Click at `(x, y)` with another button, a click count above one
+    /// or modifier keys held: native events throughout, so the page
+    /// sees trusted `mousedown`/`mouseup`/`click` (`auxclick`,
+    /// `contextmenu`, `dblclick`) with `detail`, `button` and the
+    /// modifier flags set.
+    Click { x: f64, y: f64, opts: ClickOpts },
     /// Move to `(x, y)`, then turn the wheel by `(dx, dy)` CSS px
     /// (positive `dy` scrolls down, positive `dx` right), as a native
     /// wheel event: the page sees a trusted `wheel` and scrolls the
@@ -90,6 +96,57 @@ pub enum CookieOp {
     Set(Vec<CookieData>),
     /// Delete every cookie.
     Clear,
+}
+
+/// Which mouse button a [`CursorOp::Click`] presses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseButton {
+    Left,
+    Right,
+    Middle,
+}
+
+/// Modifier keys held during a [`CursorOp::Click`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct Modifiers {
+    pub shift: bool,
+    pub ctrl: bool,
+    pub alt: bool,
+    pub meta: bool,
+}
+
+impl Modifiers {
+    /// `shift,ctrl,alt,meta` in any order and subset (`control`,
+    /// `option`, `cmd`/`command` accepted); `None` for an unknown name.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        let mut m = Self::default();
+        for part in s.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+            match part.to_ascii_lowercase().as_str() {
+                "shift" => m.shift = true,
+                "ctrl" | "control" => m.ctrl = true,
+                "alt" | "option" => m.alt = true,
+                "meta" | "cmd" | "command" => m.meta = true,
+                _ => return None,
+            }
+        }
+        Some(m)
+    }
+
+    #[must_use]
+    pub fn any(self) -> bool {
+        self.shift || self.ctrl || self.alt || self.meta
+    }
+}
+
+/// Button, count and modifiers of a [`CursorOp::Click`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClickOpts {
+    pub button: MouseButton,
+    /// 1 for a click, 2 for a double click, 3 for a triple click.
+    pub count: u8,
+    pub modifiers: Modifiers,
 }
 
 /// Input humanization mode. Wire form: `--mode={human,careful,robotic}`.

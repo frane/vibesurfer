@@ -524,3 +524,130 @@ pub(super) fn wheel(
     let _ = run_loop_until(|| false, Duration::from_millis(16));
     Ok(())
 }
+
+/// Trusted click at `target` with `opts`: the button's own down/up
+/// events (`rightMouseDown:`, `otherMouseDown:` for the middle one),
+/// `count` press-release pairs whose click counts rise 1, 2, 3 (what
+/// WebKit turns into `dblclick` and `detail`), and the modifier flags
+/// on every event. Arrives with the usual humanized lead-in.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn click_with(
+    web_view: &Retained<WKWebView>,
+    window: &Retained<NSWindow>,
+    webview_height: f64,
+    start: vs_humanize::Point,
+    target: vs_humanize::Point,
+    mode: vs_humanize::InputMode,
+    seed: u64,
+    rec: Option<(&super::record::RecSink, MainThreadMarker)>,
+    opts: crate::engine::ClickOpts,
+) -> EngineResult<vs_humanize::Point> {
+    use crate::engine::MouseButton;
+    let landed = move_along_path(
+        web_view,
+        window,
+        webview_height,
+        start,
+        target,
+        mode,
+        seed,
+        false,
+        rec,
+    )?;
+    let window_number = window.windowNumber();
+    let loc = NSPoint::new(target.x, webview_height - target.y);
+    let mut flags = NSEventModifierFlags::empty();
+    if opts.modifiers.shift {
+        flags |= NSEventModifierFlags::Shift;
+    }
+    if opts.modifiers.ctrl {
+        flags |= NSEventModifierFlags::Control;
+    }
+    if opts.modifiers.alt {
+        flags |= NSEventModifierFlags::Option;
+    }
+    if opts.modifiers.meta {
+        flags |= NSEventModifierFlags::Command;
+    }
+    let (down_ty, up_ty) = match opts.button {
+        MouseButton::Left => (NSEventType::LeftMouseDown, NSEventType::LeftMouseUp),
+        MouseButton::Right => (NSEventType::RightMouseDown, NSEventType::RightMouseUp),
+        MouseButton::Middle => (NSEventType::OtherMouseDown, NSEventType::OtherMouseUp),
+    };
+    let make = |ty: NSEventType, count: isize| -> EngineResult<Retained<NSEvent>> {
+        if opts.button == MouseButton::Middle {
+            return middle_event(
+                ty == NSEventType::OtherMouseDown,
+                target,
+                webview_height,
+                count,
+                flags,
+            );
+        }
+        NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+            ty, loc, flags, 0.0, window_number, None, 0, count, 1.0,
+        ).ok_or_else(|| EngineError::Other(format!("NSEvent::mouseEventWithType returned nil for {ty:?}")))
+    };
+    let (down_ms, up_ms) = click_settle(mode);
+    for n in 1..=isize::from(opts.count.max(1)) {
+        let down = make(down_ty, n)?;
+        match opts.button {
+            MouseButton::Left => web_view.mouseDown(&down),
+            MouseButton::Right => web_view.rightMouseDown(&down),
+            MouseButton::Middle => web_view.otherMouseDown(&down),
+        }
+        let _ = run_loop_until(|| false, Duration::from_millis(down_ms));
+        let up = make(up_ty, n)?;
+        match opts.button {
+            MouseButton::Left => {
+                web_view.mouseUp(&up);
+                super::headless_webview::end_suppressed_drag(web_view, up.locationInWindow());
+            }
+            MouseButton::Right => web_view.rightMouseUp(&up),
+            MouseButton::Middle => web_view.otherMouseUp(&up),
+        }
+        let _ = run_loop_until(|| false, Duration::from_millis(up_ms.max(1)));
+        if let Some((sink, mtm)) = rec {
+            sink.frame(web_view, mtm, target.x, target.y, 0.2, up_ms as u32);
+        }
+    }
+    Ok(landed)
+}
+
+/// A middle-button event: `NSEvent`'s constructor has no button number,
+/// so it comes from a `CGEvent` for the center button (located as in
+/// [`wheel`]).
+fn middle_event(
+    down: bool,
+    at: vs_humanize::Point,
+    webview_height: f64,
+    count: isize,
+    flags: NSEventModifierFlags,
+) -> EngineResult<Retained<NSEvent>> {
+    use objc2_core_graphics::{
+        CGDisplayPixelsHigh, CGEvent, CGEventField, CGEventFlags, CGEventType, CGMainDisplayID,
+        CGMouseButton,
+    };
+    use objc2_foundation::NSPoint as CGPoint;
+    let screen_h = CGDisplayPixelsHigh(CGMainDisplayID()) as f64;
+    let ty = if down {
+        CGEventType::OtherMouseDown
+    } else {
+        CGEventType::OtherMouseUp
+    };
+    let ev = CGEvent::new_mouse_event(
+        None,
+        ty,
+        CGPoint {
+            x: at.x,
+            y: screen_h - (webview_height - at.y),
+        },
+        CGMouseButton::Center,
+    )
+    .ok_or_else(|| EngineError::Other("CGEventCreateMouseEvent returned NULL".into()))?;
+    CGEvent::set_integer_value_field(Some(&ev), CGEventField::MouseEventClickState, count as i64);
+    // NSEvent modifier flags share their bit values with CGEventFlags.
+    CGEvent::set_flags(Some(&ev), CGEventFlags(flags.bits() as u64));
+    NSEvent::eventWithCGEvent(&ev)
+        .ok_or_else(|| EngineError::Other("NSEvent eventWithCGEvent: nil".into()))
+}

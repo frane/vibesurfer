@@ -53,15 +53,11 @@ pub(crate) struct ScreenPoint {
     pub y: i32,
 }
 
-/// Mouse button identifier. Only `Left` is wired by the cursor
-/// primitives today; `Middle` / `Right` exist so a future
-/// right-click primitive can drop into the same dispatcher.
+/// Mouse button identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Button {
     Left,
-    #[allow(dead_code)]
     Middle,
-    #[allow(dead_code)]
     Right,
 }
 
@@ -134,6 +130,16 @@ pub(crate) trait InputDispatcher: Send + Sync {
     /// before a run of typing; best-effort, and a failure here is not
     /// worth failing the call over.
     fn focus_pointer_window(&self) {}
+
+    /// Hold (`pressed`) or let go of a modifier key, by X keysym
+    /// (Shift_L, Control_L, Alt_L, Super_L), for a click with
+    /// modifiers.
+    fn modifier(&self, _keysym: u32, _pressed: bool) -> EngineResult<()> {
+        Err(EngineError::Unsupported {
+            engine: "wpe",
+            primitive: "click modifiers",
+        })
+    }
 
     /// Put the top-level window titled `title` above the others, where
     /// windows share one screen position and input goes by position.
@@ -462,6 +468,25 @@ impl XtestDispatcher {
 }
 
 impl XtestDispatcher {
+    /// The keycode the server's keymap already has for `keysym`.
+    fn keycode_of(&self, keysym: u32) -> EngineResult<Option<u8>> {
+        let setup = self.conn.setup();
+        let (min, max) = (setup.min_keycode, setup.max_keycode);
+        let map = self
+            .conn
+            .get_keyboard_mapping(min, max - min + 1)
+            .map_err(|e| EngineError::Other(format!("GetKeyboardMapping: {e}")))?
+            .reply()
+            .map_err(|e| EngineError::Other(format!("GetKeyboardMapping reply: {e}")))?;
+        let per = usize::from(map.keysyms_per_keycode.max(1));
+        Ok(map
+            .keysyms
+            .chunks(per)
+            .position(|syms| syms.contains(&keysym))
+            .and_then(|i| u8::try_from(i).ok())
+            .map(|i| min + i))
+    }
+
     /// A wheel turn as clicks of the X11 wheel buttons (4/5 vertical,
     /// 6/7 horizontal): XTest has no smooth-scroll axis, so the turn is
     /// rounded to whole clicks of `step` px, at least one for any
@@ -523,6 +548,23 @@ impl InputDispatcher for XtestDispatcher {
         self.conn
             .sync()
             .map_err(|e| EngineError::Other(format!("XSync: {e}")))?;
+        Ok(())
+    }
+
+    fn modifier(&self, keysym: u32, pressed: bool) -> EngineResult<()> {
+        let keycode = match self.keycode_of(keysym)? {
+            Some(k) => k,
+            None => self.bind(keysym, &|d| std::thread::sleep(d))?,
+        };
+        let type_ = if pressed {
+            XT_KEY_PRESS
+        } else {
+            XT_KEY_RELEASE
+        };
+        self.conn
+            .xtest_fake_input(type_, keycode, CURRENT_TIME, self.root, 0, 0, 0)
+            .map_err(|e| EngineError::Other(format!("xtest modifier: {e}")))?
+            .ignore_error();
         Ok(())
     }
 
@@ -1069,6 +1111,21 @@ impl InputDispatcher for LibeiDispatcher {
 
     fn key_up(&self, ch: char) -> EngineResult<()> {
         self.keysym(ch, false)
+    }
+
+    fn modifier(&self, keysym: u32, pressed: bool) -> EngineResult<()> {
+        let (ack_tx, ack_rx) = mpsc::channel();
+        #[allow(clippy::cast_possible_wrap)]
+        self.cmd_tx
+            .send(LibeiCmd::Keysym {
+                keysym: keysym as i32,
+                pressed,
+                ack: ack_tx,
+            })
+            .map_err(|_| EngineError::Other("libei worker thread gone".into()))?;
+        ack_rx
+            .recv()
+            .map_err(|_| EngineError::Other("libei ack channel closed".into()))?
     }
 }
 

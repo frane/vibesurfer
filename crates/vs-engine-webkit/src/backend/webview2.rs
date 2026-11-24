@@ -449,6 +449,39 @@ fn call_cdp(web_view: &ICoreWebView2, method: &str, params_json: &str) -> Engine
         .map_err(|_| EngineError::Other("CallDevToolsProtocolMethod: channel closed".into()))
 }
 
+/// A click with another button, count or modifiers, as DevTools input
+/// (trusted, like `SendMouseInput`, which has no Alt or Meta): one
+/// pressed/released pair per click, with `clickCount` rising, so the
+/// page sees `dblclick` and `detail`.
+fn cdp_click(
+    web_view: &ICoreWebView2,
+    at: vs_humanize::Point,
+    opts: crate::engine::ClickOpts,
+) -> EngineResult<()> {
+    use crate::engine::MouseButton;
+    let button = match opts.button {
+        MouseButton::Left => "left",
+        MouseButton::Right => "right",
+        MouseButton::Middle => "middle",
+    };
+    let m = opts.modifiers;
+    // Alt=1, Ctrl=2, Meta=4, Shift=8.
+    let modifiers = u8::from(m.alt)
+        | (u8::from(m.ctrl) << 1)
+        | (u8::from(m.meta) << 2)
+        | (u8::from(m.shift) << 3);
+    for n in 1..=opts.count.max(1) {
+        for ty in ["mousePressed", "mouseReleased"] {
+            let params = serde_json::json!({
+                "type": ty, "x": at.x, "y": at.y, "button": button,
+                "clickCount": n, "modifiers": modifiers,
+            });
+            call_cdp(web_view, "Input.dispatchMouseEvent", &params.to_string())?;
+        }
+    }
+    Ok(())
+}
+
 /// How one character is spelled to `Input.dispatchKeyEvent`.
 ///
 /// A printable character identifies itself and is inserted because of
@@ -807,6 +840,9 @@ fn host_view(
     // page with popups on, dismissed at once otherwise (as on macOS).
     if let Ok(settings) = unsafe { web_view.Settings() } {
         let _ = unsafe { settings.SetAreDefaultScriptDialogsEnabled(false) };
+        // No native context menu: the page still gets its contextmenu
+        // event, and nothing stays open to swallow the next click.
+        let _ = unsafe { settings.SetAreDefaultContextMenusEnabled(false) };
         // No SmartScreen lookups: they are Edge's own requests, which
         // otherwise show up among the page's (intercept sessions) and
         // cost time on every navigation.
@@ -1716,6 +1752,18 @@ impl Engine for Webview2Backend {
                 let _ = execute_script(&web_view, &html5_js);
                 landed
             }
+            CursorOp::Click { x, y, opts } => {
+                let landed = wv2_move_along_path(
+                    &comp,
+                    start,
+                    vs_humanize::Point { x, y },
+                    humanize_mode,
+                    seed,
+                )?;
+                let web_view = p.web_view.clone();
+                cdp_click(&web_view, landed, opts)?;
+                landed
+            }
             CursorOp::Wheel { x, y, dx, dy } => {
                 let landed = wv2_move_along_path(
                     &comp,
@@ -1729,7 +1777,10 @@ impl Engine for Webview2Backend {
             }
         };
         p.last_mouse.set(landed);
-        self.follow_new_window(page, matches!(op, CursorOp::ClickAt { .. }))
+        self.follow_new_window(
+            page,
+            matches!(op, CursorOp::ClickAt { .. } | CursorOp::Click { .. }),
+        )
     }
 
     fn capabilities(&self) -> EngineCapabilities {
@@ -1767,6 +1818,7 @@ fn wv2_humanize_seed(op: CursorOp) -> u64 {
             (x, y, 0.0, 0.0)
         }
         CursorOp::Wheel { x, y, dx, dy } => (x, y, dx, dy),
+        CursorOp::Click { x, y, .. } => (x, y, 0.0, 0.0),
         CursorOp::Drag { x1, y1, x2, y2 } => (x1, y1, x2, y2),
     };
     let bits = |v: f64| v.to_bits();

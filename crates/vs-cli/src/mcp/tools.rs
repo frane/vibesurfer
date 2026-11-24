@@ -142,6 +142,9 @@ fn base_tools() -> Vec<Value> {
             ("y", num_prop("Click Y in CSS pixels.", true)),
             ("token", str_prop("State token from the most recent read.", true)),
             ("mode", str_prop("Input mode: human | careful | robotic. Default: human.", false)),
+            ("button", str_prop("left | right | middle. Default left.", false)),
+            ("count", num_prop("2 for a double click, 3 for a triple click.", false)),
+            ("modifiers", str_prop("Held keys, comma-separated: shift,ctrl,alt,meta.", false)),
         ])),
 tool("vs_type", "Type text into the FOCUSED element with trusted keystrokes (real keydown/beforeinput/input, isTrusted=true). Use for rich-text editors (DraftJS/ProseMirror/contenteditable) and framework inputs where vs_act fill is ignored. Place the caret first with vs_click_at. Use --secret for credentials.", obj(&[
             ("page", str_prop("Page id.", true)),
@@ -417,6 +420,12 @@ pub fn build_cli(name: &str, args: &Value) -> Result<(Cli, CallOpts)> {
             y: req_f64(args, "y")?,
             token: req_str(args, "token")?,
             mode: opt_str(args, "mode").unwrap_or_else(|| "human".into()),
+            button: opt_str(args, "button"),
+            count: args
+                .get("count")
+                .and_then(Value::as_u64)
+                .and_then(|c| u8::try_from(c).ok()),
+            modifiers: opt_str(args, "modifiers"),
         },
         "vs_type" => Command::Type {
             page: req_str(args, "page")?,

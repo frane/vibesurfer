@@ -963,3 +963,121 @@ fn cell_wheel_scrolls_what_is_under_the_pointer() {
         assert_eq!((up.trim(), left.trim()), ("true", "true"), "{all}");
     }
 }
+
+// click-at with --button, --count and --modifiers: native events with
+// the right button, detail and modifier flags, all trusted; a right
+// click the page does not cancel must not wedge the engine on a
+// context menu.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn cell_click_variants_are_trusted() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, token) = open_fixture(&ctx, "/click-variants.html");
+        let ev = |ctx: &TestContext| eval_js(ctx, &page, "window.__ev.join(' ')");
+        let reset = |ctx: &TestContext| {
+            let _ = eval_js(ctx, &page, "(window.__ev = [], 'ok')");
+        };
+        let tok = format!("--token={token}");
+        let r = ctx.vs(&[
+            "click-at",
+            &page,
+            "120",
+            "70",
+            &tok,
+            "--mode=robotic",
+            "--count",
+            "2",
+        ]);
+        assert_ok("double click", &r);
+        settle(150);
+        let got = ev(&ctx);
+        assert!(got.contains("dblclick:a:0:2:true"), "double click: {got}");
+        assert!(
+            got.contains("click:a:0:2:true"),
+            "second click has detail 2: {got}"
+        );
+        reset(&ctx);
+
+        let r = ctx.vs(&[
+            "click-at",
+            &page,
+            "120",
+            "70",
+            &tok,
+            "--mode=robotic",
+            "--button",
+            "right",
+        ]);
+        assert_ok("right click", &r);
+        settle(150);
+        let got = ev(&ctx);
+        assert!(
+            got.contains("mousedown:a:2:1:true"),
+            "right mousedown: {got}"
+        );
+        assert!(got.contains("contextmenu:a:2:"), "contextmenu: {got}");
+        reset(&ctx);
+
+        let r = ctx.vs(&[
+            "click-at",
+            &page,
+            "120",
+            "70",
+            &tok,
+            "--mode=robotic",
+            "--modifiers",
+            "shift,alt",
+        ]);
+        assert_ok("shift-alt click", &r);
+        settle(150);
+        let got = ev(&ctx);
+        assert!(
+            got.contains("click:a:0:1:true:true:false:true:false"),
+            "modifiers: {got}"
+        );
+        reset(&ctx);
+
+        let r = ctx.vs(&[
+            "click-at",
+            &page,
+            "120",
+            "70",
+            &tok,
+            "--mode=robotic",
+            "--button",
+            "middle",
+        ]);
+        assert_ok("middle click", &r);
+        settle(150);
+        let got = ev(&ctx);
+        assert!(
+            got.contains("mousedown:a:1:1:true"),
+            "middle mousedown: {got}"
+        );
+        reset(&ctx);
+
+        // An uncancelled right click, then the engine still answers.
+        let r = ctx.vs(&[
+            "click-at",
+            &page,
+            "340",
+            "70",
+            &tok,
+            "--mode=robotic",
+            "--button",
+            "right",
+        ]);
+        assert_ok("right click with the native menu", &r);
+        settle(200);
+        let got = ev(&ctx);
+        assert!(got.contains("contextmenu:b:2:"), "contextmenu on b: {got}");
+        let r = ctx.vs(&["click-at", &page, "120", "70", &tok, "--mode=robotic"]);
+        assert_ok("click after the menu", &r);
+        settle(150);
+        assert!(
+            ev(&ctx).contains("click:a:0:1:true"),
+            "engine stuck after a context menu"
+        );
+    }
+}

@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Click variants</title>
+<style>button { position: absolute; width: 160px; height: 60px; }</style>
+<button id="a" style="left: 40px; top: 40px">a</button>
+<button id="b" style="left: 260px; top: 40px">b (native menu)</button>
+<script>
+  window.__ev = [];
+  for (const t of ['mousedown', 'mouseup', 'click', 'auxclick', 'dblclick', 'contextmenu']) {
+    document.addEventListener(t, (e) => {
+      window.__ev.push([t, e.target.id, e.button, e.detail, e.isTrusted, e.shiftKey, e.ctrlKey, e.altKey, e.metaKey].join(':'));
+      if (t === 'contextmenu' && e.target.id === 'a') e.preventDefault();
+    }, true);
+  }
+</script>

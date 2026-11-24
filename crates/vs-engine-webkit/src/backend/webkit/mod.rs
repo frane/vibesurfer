@@ -561,7 +561,8 @@ fn vs_humanize_seed_for_xy(op: CursorOp) -> u64 {
         CursorOp::MoveTo { x, y }
         | CursorOp::HoverAt { x, y }
         | CursorOp::ClickAt { x, y }
-        | CursorOp::Wheel { x, y, .. } => (x, y),
+        | CursorOp::Wheel { x, y, .. }
+        | CursorOp::Click { x, y, .. } => (x, y),
         CursorOp::Drag { x1, y1, .. } => (x1, y1),
     };
     let xi = a.to_bits();
@@ -1416,6 +1417,17 @@ impl Engine for WkBackend {
                 let _ = eval_js_string(&web_view, &html5_js, std::time::Duration::from_secs(2));
                 landed
             }
+            CursorOp::Click { x, y, opts } => input::click_with(
+                &web_view,
+                &window,
+                webview_height,
+                start,
+                vs_humanize::Point { x, y },
+                humanize_mode,
+                seed,
+                rec,
+                opts,
+            )?,
             CursorOp::Wheel { x, y, dx, dy } => {
                 let landed = input::move_along_path(
                     &web_view,
@@ -1435,7 +1447,10 @@ impl Engine for WkBackend {
         if let Some(p) = self.pages.get(&page) {
             p.last_mouse.set(landed);
         }
-        self.follow_new_window(page, matches!(op, CursorOp::ClickAt { .. }))
+        self.follow_new_window(
+            page,
+            matches!(op, CursorOp::ClickAt { .. } | CursorOp::Click { .. }),
+        )
     }
     fn capabilities(&self) -> EngineCapabilities {
         // Inspector console + network reflect actual install-path

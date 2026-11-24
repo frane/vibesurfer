@@ -901,6 +901,7 @@ impl Engine for WpeBackend {
         self.follow_new_window(page, false)
     }
 
+    #[allow(clippy::too_many_lines)]
     fn cursor_op(&mut self, page: PageHandle, op: CursorOp, mode: InputMode) -> EngineResult<()> {
         self.forget_new_window(page)?;
         let p = self.page_mut(page)?;
@@ -987,6 +988,19 @@ impl Engine for WpeBackend {
                 let _ = eval_js_string(&web_view, &html5_js, Duration::from_secs(2));
                 landed
             }
+            CursorOp::Click { x, y, opts } => {
+                let landed = cursor_move_along_path(
+                    dispatcher,
+                    start,
+                    vs_humanize::Point { x, y },
+                    (origin_x, origin_y),
+                    humanize_mode,
+                    seed,
+                    false,
+                )?;
+                click_with(dispatcher, opts)?;
+                landed
+            }
             CursorOp::Wheel { x, y, dx, dy } => {
                 let landed = cursor_move_along_path(
                     dispatcher,
@@ -1011,7 +1025,10 @@ impl Engine for WpeBackend {
         };
         p.last_mouse.set(landed);
         deliver_input(dispatcher, &p.window);
-        self.follow_new_window(page, matches!(op, CursorOp::ClickAt { .. }))
+        self.follow_new_window(
+            page,
+            matches!(op, CursorOp::ClickAt { .. } | CursorOp::Click { .. }),
+        )
     }
 
     fn set_popups(&mut self, page: PageHandle, on: bool) -> EngineResult<()> {
@@ -1108,6 +1125,43 @@ impl Engine for WpeBackend {
 
 /// Deterministic seed for the humanize Bezier path so the same
 /// `cursor_op` invocation produces the same trajectory on every run.
+/// Press and release `opts.button` `opts.count` times at the pointer,
+/// with the modifier keys held around the clicks. Clicks this close
+/// together are one double (or triple) click to GTK.
+fn click_with(
+    dispatcher: &dyn super::wpe_input::InputDispatcher,
+    opts: crate::engine::ClickOpts,
+) -> EngineResult<()> {
+    use super::wpe_input::{Button, InputEvent};
+    use crate::engine::MouseButton;
+    // Shift_L, Control_L, Alt_L, Super_L.
+    let held: Vec<u32> = [
+        (opts.modifiers.shift, 0xffe1),
+        (opts.modifiers.ctrl, 0xffe3),
+        (opts.modifiers.alt, 0xffe9),
+        (opts.modifiers.meta, 0xffeb),
+    ]
+    .into_iter()
+    .filter_map(|(on, k)| on.then_some(k))
+    .collect();
+    for &k in &held {
+        dispatcher.modifier(k, true)?;
+    }
+    let button = match opts.button {
+        MouseButton::Left => Button::Left,
+        MouseButton::Right => Button::Right,
+        MouseButton::Middle => Button::Middle,
+    };
+    for _ in 0..opts.count.max(1) {
+        dispatcher.dispatch(InputEvent::Press(button))?;
+        dispatcher.dispatch(InputEvent::Release(button))?;
+    }
+    for &k in held.iter().rev() {
+        dispatcher.modifier(k, false)?;
+    }
+    dispatcher.flush()
+}
+
 fn humanize_seed(op: CursorOp) -> u64 {
     // Hash the op's coordinates into a u64. Trivial mixer; replays
     // need determinism, not cryptographic spread.
@@ -1116,6 +1170,7 @@ fn humanize_seed(op: CursorOp) -> u64 {
             (x, y, 0.0, 0.0)
         }
         CursorOp::Wheel { x, y, dx, dy } => (x, y, dx, dy),
+        CursorOp::Click { x, y, .. } => (x, y, 0.0, 0.0),
         CursorOp::Drag { x1, y1, x2, y2 } => (x1, y1, x2, y2),
     };
     let bits = |v: f64| v.to_bits();
@@ -1197,6 +1252,9 @@ fn input_origin(
 /// popup is the same kind of page. The caller sets `me` and the window
 /// title once the page has a handle.
 fn host_page(web_view: &WebView, popups: &Popups) -> WpePage {
+    // No native context menu: the page still gets its contextmenu
+    // event, and no menu stays open to take the next click.
+    web_view.connect_context_menu(|_, _, _| true);
     // Hidden host window: XTest input needs a real surface on the
     // display server to land on (see `open`). It shows at the screen's
     // origin until `place` moves it; no placed page keeps that tile.

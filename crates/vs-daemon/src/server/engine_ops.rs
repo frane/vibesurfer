@@ -270,6 +270,43 @@ pub(super) fn handle_type(daemon: &Daemon, req: &Request) -> String {
         Err(e) => format_daemon_error(&e),
     }
 }
+/// `--button left|right|middle`, `--count 1..3`, `--modifiers
+/// shift,ctrl,alt,meta` on `vs_click_at`; `None` for a plain click.
+fn click_opts(req: &Request) -> Result<Option<vs_engine_webkit::ClickOpts>, String> {
+    use vs_engine_webkit::{ClickOpts, Modifiers, MouseButton};
+    let button = match flag_value(req, "button").as_deref() {
+        None | Some("left") => MouseButton::Left,
+        Some("right") => MouseButton::Right,
+        Some("middle") => MouseButton::Middle,
+        Some(b) => {
+            return Err(format!(
+                "vs_click_at: bad --button={b:?} (left|right|middle)"
+            ))
+        }
+    };
+    let count = match flag_value(req, "count") {
+        None => 1,
+        Some(c) => c
+            .parse::<u8>()
+            .ok()
+            .filter(|n| (1..=3).contains(n))
+            .ok_or_else(|| format!("vs_click_at: bad --count={c:?} (1..3)"))?,
+    };
+    let modifiers = match flag_value(req, "modifiers") {
+        None => Modifiers::default(),
+        Some(m) => Modifiers::parse(&m)
+            .ok_or_else(|| format!("vs_click_at: bad --modifiers={m:?} (shift,ctrl,alt,meta)"))?,
+    };
+    if button == MouseButton::Left && count == 1 && !modifiers.any() {
+        return Ok(None);
+    }
+    Ok(Some(ClickOpts {
+        button,
+        count,
+        modifiers,
+    }))
+}
+
 pub(super) fn handle_cursor(daemon: &Daemon, req: &Request, kind: &str) -> String {
     let session_id = match require_session(req) {
         Ok(s) => s,
@@ -304,7 +341,11 @@ pub(super) fn handle_cursor(daemon: &Daemon, req: &Request, kind: &str) -> Strin
             parse_f64(2, "y").map(|y| vs_engine_webkit::engine::CursorOp::MoveTo { x, y })
         }),
         "click_at" => parse_f64(1, "x").and_then(|x| {
-            parse_f64(2, "y").map(|y| vs_engine_webkit::engine::CursorOp::ClickAt { x, y })
+            parse_f64(2, "y").and_then(|y| match click_opts(req) {
+                Ok(None) => Ok(vs_engine_webkit::engine::CursorOp::ClickAt { x, y }),
+                Ok(Some(opts)) => Ok(vs_engine_webkit::engine::CursorOp::Click { x, y, opts }),
+                Err(e) => Err(e),
+            })
         }),
         "hover_at" => parse_f64(1, "x").and_then(|x| {
             parse_f64(2, "y").map(|y| vs_engine_webkit::engine::CursorOp::HoverAt { x, y })
