@@ -1,6 +1,6 @@
 ---
 name: vibesurfer
-version: 0.2.18
+version: 0.2.19
 binary: vs
 description: Agent-native headless browser. 26 primitives over a Unix-socket wire protocol. Real WKWebView (macOS), WebKitGTK 6 (Linux), or WebView2 (Windows) — all three engines verified per-commit by a real-browser integration suite. Optimistic concurrency via state tokens; tree-delta wire format; durable session/page/auth state in SQLite.
 ---
@@ -80,10 +80,13 @@ Coordinate-addressed input with native trusted dispatch on every backend. macOS 
 | # | CLI | Short | What |
 |---|-----|-------|------|
 | 20 | `vs move-to <PAGE> <X> <Y> [-M=human]` | `mt` | Move the cursor to (x, y). No click. |
-| 21 | `vs click-at <PAGE> <X> <Y> --token=<TOK> [-M=human]` | `ca` | Trusted click at (x, y) after a humanized lead-in. |
+| 21 | `vs click-at <PAGE> <X> <Y> --token=<TOK> [-M=human] [--button right\|middle] [--count 2] [--modifiers shift,ctrl,alt,meta]` | `ca` | Trusted click at (x, y) after a humanized lead-in; right, middle, double and modified clicks are native too. |
 | 22 | `vs hover-at <PAGE> <X> <Y> [-M=human]` | `ha` | Hover at (x, y). |
+| 22b | `vs wheel <PAGE> <X> <Y> <DX> <DY> [-M=human]` | `wh` | Trusted wheel turn at (x, y); positive DY scrolls down. |
 | 23 | `vs drag <PAGE> <X1> <Y1> <X2> <Y2> --token=<TOK> [-M=human]` | `dr` | Press at start, drag along a humanized path, release at end. v0.1.11+ also synthesizes the HTML5 `DragEvent` chain (`dragstart` → `dragenter` → `dragover` → `drop` → `dragend` with a real `DataTransfer`) so react-dnd, native `draggable="true"` widgets, and React-Flow HTML5-backend nodes observe the drop. |
 
+
+`vs cookies <PAGE> list|clear|set '<JSON>'` (`ck`) reads and writes the page's jar host-side, HttpOnly included. `vs viewport <PAGE> keep --zoom 0.4` lays the page out wider and fits it to the view (mobile layout).
 
 ### Human-in-loop (24–25, v0.1.9+; MCP-aware in v0.1.12+)
 

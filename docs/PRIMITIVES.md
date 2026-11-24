@@ -33,7 +33,7 @@ tables, see [`codes.md`](codes.md).
 
 ---
 
-## 1. `vs_session_open [--policy=<name>] [--isolated] [--intercept] [--popups]`
+## 1. `vs_session_open [--policy=<name>] [--isolated] [--intercept] [--popups] [--ignore-https-errors]`
 
 Open a new session. Returns the session id and a fresh `state_token` for
 the empty session.
@@ -222,7 +222,10 @@ Downloads over 64 MiB are refused, and a failed read (HTTP error,
 revoked blob, size cap) returns an error naming the cause rather than
 succeeding with nothing.
 
-## 17. `vs_viewport <preset|WxH> [--dpr=N]`
+## 17. `vs_viewport <preset|WxH|keep> [--dpr=N] [--zoom=Z]`
+
+`--zoom=Z` sets the page zoom: CSS px are drawn Z view px wide, so the page lays out `width / Z` CSS px wide (a mobile layout viewport fit to the view). `keep` changes the zoom only.
+
 
 Set the page's viewport. Persistent for the page until changed again.
 Triggers a re-baseline (next `vs_view` is a fresh full tree). Presets
@@ -253,6 +256,14 @@ Persistent, encrypted auth state.
 Auth blobs are scoped per machine (the encryption key is local).
 Cross-host portability is not a v1 feature.
 
+## 18b. Input, cookies and crashes (0.2.19)
+
+- `vs_wheel <page> <x> <y> <dx> <dy> [--mode=]`: move to (x, y) and turn the wheel by (dx, dy) CSS px, a trusted native wheel event (positive dy scrolls down).
+- `vs_click_at <page> <x> <y> --token= [--button=left|right|middle] [--count=1..3] [--modifiers=shift,ctrl,alt,meta]`: native clicks with another button, a click count and modifier keys.
+- `vs_cookies <page> list|clear|set <base64 JSON array>`: the page's jar (its data store), HttpOnly included; answers with the jar after the change as one JSON array line of `{name, value, domain, path, expires_unix?, secure, http_only, same_site?}`.
+- `crash <page>` on `vs_net_poll`: the page's web content process died. `vs_debug_crash <page>` kills it, for tests, when the daemon runs with `VS_ALLOW_CRASH=1`.
+- `sw <base64 JSON>` on `vs_net_poll`: a response a service worker built or took from its cache (request URL, method and headers, response status, headers and body).
+
 ## 19b. `vs_net_*`: request interception
 
 Only for `--intercept` sessions; any other session gets `BAD_REQUEST`.
@@ -263,7 +274,7 @@ the port tells the daemon which session a connection belongs to.
 
 | Engine | How pages reach the proxy | Loopback |
 |--------|---------------------------|----------|
-| macOS WebKit | `WKWebsiteDataStore.proxyConfigurations` with an HTTP CONNECT proxy (macOS 14+), failover off | `127.0.0.1`, `localhost`, `::1` and the host's own addresses always go direct. `*.localhost` names are proxied; the proxy resolves them to loopback. |
+| macOS WebKit | `WKWebsiteDataStore.proxyConfigurations` with an HTTP CONNECT proxy (macOS 14+), failover off | WebKit sends loopback direct whatever the configuration, so a page on `127.0.0.1`, `localhost` or `::1` gets a web view with an `http`/`https` scheme handler that hands every load to the proxy (cookies, redirects, downloads kept in step). Service workers do not control such pages. |
 | WebKitGTK 6 | `NetworkSession::set_proxy_settings`, custom `http://127.0.0.1:<port>`, empty ignore list | Proxied. |
 | WebView2 | `--proxy-server=http://127.0.0.1:<port> --proxy-bypass-list=<-loopback>` on a per-session environment and user data folder | Proxied. |
 

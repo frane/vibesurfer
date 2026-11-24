@@ -6,6 +6,21 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.2.19] - 2026-11-24
+
+### Added
+- macOS: intercept sessions see pages served from `localhost`, `127.0.0.1` or `::1`. WebKit sends loopback around any proxy whatever its configuration, so a page on a loopback host gets a web view whose `http`/`https` loads go through a `WKURLSchemeHandler` that hands them to the session's proxy. It keeps the jar in step (a `Cookie` header from `WKHTTPCookieStore`, every `Set-Cookie` written back before WebKit sees the response), reports redirects so the page lands on the final URL, captures downloads, and fails aborted requests as network errors. A navigation between a loopback host and any other swaps the page's web view (same window, data store, scripts and delegate). Service workers do not control loopback pages on macOS. Cells `cell_intercept_loopback_by_engine`, `cell_intercept_loopback_cookies_and_redirects`; the fulfill, abort and download cells run on both kinds of host.
+- `vs wheel <PAGE> <X> <Y> <DX> <DY>` (`wh`): a trusted wheel turn at a point. macOS posts a pixel-unit `CGEvent` scroll; Windows sends `SendMouseInput` wheel events; Linux sends one XTest wheel click and has WebKit's scroll handler take it as the whole turn, so the page sees the exact delta (the RemoteDesktop portal path sends axis events). Cell `cell_wheel_scrolls_what_is_under_the_pointer`.
+- `vs cookies <PAGE> list|set|clear` (`ck`): the page's jar, HttpOnly cookies included, as one JSON line. Cell `cell_cookies_list_set_clear`.
+- `vs click-at --button left|right|middle --count 1..3 --modifiers shift,ctrl,alt,meta`: right, middle, double and modified clicks as native events (`NSEvent`/`CGEvent`, XTest buttons and keys, DevTools input on Windows), with `detail` and the modifier flags set. Linux and Windows show no native context menu, which used to take the next click. Cell `cell_click_variants_are_trusted`.
+- `vs viewport <PAGE> keep --zoom Z`: page zoom on all three engines; the page lays out `width / Z` CSS px wide, as a mobile browser fits a wide layout to the screen. Cell `cell_viewport_zoom_lays_out_wider`.
+- `vs session-open --intercept --ignore-https-errors`: the proxy accepts any upstream certificate (self-signed dev servers). Cell `cell_intercept_ignore_https_errors`.
+- Intercept sessions report the responses a service worker builds or takes from its cache (`sw <base64 JSON>` on `vs net poll`): the proxy puts a small prelude in front of worker scripts. Worker scripts get one that runs code on request and passes console messages on. Cell `cell_intercept_reports_service_worker_responses`.
+- A page whose web content process dies is reported as `crash <page>` on `vs net poll` (`--popups` sessions), on all three engines. Cell `cell_crash_is_reported`.
+
+### Fixed
+- macOS wheel input at a point on the view's edge reached nothing.
+
 ## [0.2.18] - 2026-11-23
 
 ### Added
