@@ -294,6 +294,7 @@ fn send_upstream(
     mitm: &Mitm,
     out: &ProxyRequest,
     url_changed: bool,
+    insecure: bool,
 ) -> io::Result<(BufReader<Stream>, u16, String, Head)> {
     let target = parse_http_url(&out.url)?;
     let sock = connect(&target.host, target.port)?;
@@ -301,7 +302,7 @@ fn send_upstream(
     sock.set_read_timeout(Some(UPSTREAM_READ))?;
     let mut stream = if target.tls {
         sock.set_read_timeout(Some(CONNECT_TIMEOUT))?;
-        let s = mitm.connect(sock, &target.host)?;
+        let s = mitm.connect(sock, &target.host, insecure)?;
         s.set_read_timeout(Some(UPSTREAM_READ))?;
         s
     } else {
@@ -399,14 +400,15 @@ fn forward(
 ) -> io::Result<()> {
     let sw = is_sw_script(req);
     let out = &without_compression(out, sw);
-    let (mut up_r, status, reason, head) = match send_upstream(&net.mitm, out, url_changed) {
-        Ok(v) => v,
-        Err(e) => {
-            net.ev_failed(id, &e.to_string());
-            abort(conn.get_mut());
-            return Ok(());
-        }
-    };
+    let (mut up_r, status, reason, head) =
+        match send_upstream(&net.mitm, out, url_changed, net.insecure()) {
+            Ok(v) => v,
+            Err(e) => {
+                net.ev_failed(id, &e.to_string());
+                abort(conn.get_mut());
+                return Ok(());
+            }
+        };
     net.ev_response(id, status, &reason, &req.url, &head.headers);
 
     if status == 101 {
@@ -500,8 +502,9 @@ pub(super) fn fetch_full(
     mitm: &Mitm,
     out: &ProxyRequest,
     url_changed: bool,
+    insecure: bool,
 ) -> io::Result<(u16, String, Headers, Vec<u8>)> {
-    let (mut r, status, reason, head) = send_upstream(mitm, out, url_changed)?;
+    let (mut r, status, reason, head) = send_upstream(mitm, out, url_changed, insecure)?;
     let body = read_body(&mut r, response_framing(&out.method, status, &head.headers))?;
     let reason = if reason.is_empty() {
         http::reason(status).to_string()

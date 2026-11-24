@@ -137,9 +137,20 @@ pub struct SessionNet {
     /// engine opened. A main-frame navigation waits for it briefly, so
     /// a popup's `page` line precedes its first request.
     popups_settled: Mutex<Option<Arc<dyn Fn() -> bool + Send + Sync>>>,
+    /// Upstream certificates are not checked (`--ignore-https-errors`).
+    insecure: AtomicBool,
 }
 
 impl SessionNet {
+    /// Stop (or resume) checking upstream certificates.
+    pub(crate) fn set_insecure(&self, on: bool) {
+        self.insecure.store(on, Ordering::Relaxed);
+    }
+
+    fn insecure(&self) -> bool {
+        self.insecure.load(Ordering::Relaxed)
+    }
+
     /// Bind a proxy on an ephemeral loopback port and start serving.
     /// `mitm` answers the browser's TLS and checks upstream TLS.
     pub fn start(mitm: Arc<Mitm>) -> io::Result<Arc<Self>> {
@@ -148,6 +159,7 @@ impl SessionNet {
         let net = Arc::new(Self {
             port,
             mitm,
+            insecure: AtomicBool::new(false),
             next_id: AtomicU64::new(1),
             route: AtomicBool::new(false),
             closed: AtomicBool::new(false),
@@ -226,7 +238,7 @@ impl SessionNet {
             .map(|h| h.req.clone())
             .ok_or(FetchError::NotHeld)?;
         let (out, url_changed) = o.apply(&req);
-        proxy::fetch_full(&self.mitm, &out, url_changed)
+        proxy::fetch_full(&self.mitm, &out, url_changed, self.insecure())
             .map(|(status, reason, headers, body)| Fetched {
                 status,
                 reason,

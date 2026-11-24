@@ -50,6 +50,57 @@ pub struct Mitm {
     leaves: Mutex<HashMap<String, Arc<CertifiedKey>>>,
     sessions: Arc<dyn StoresServerSessions>,
     upstream: Arc<ClientConfig>,
+    /// The same without certificate checks, for `--ignore-https-errors`.
+    insecure: Arc<ClientConfig>,
+}
+
+/// Accepts any upstream certificate; signatures are still checked.
+#[derive(Debug)]
+struct AnyCert(Arc<rustls::crypto::CryptoProvider>);
+
+impl rustls::client::danger::ServerCertVerifier for AnyCert {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
+    }
 }
 
 impl std::fmt::Debug for Mitm {
@@ -108,6 +159,14 @@ impl Mitm {
                 .with_root_certificates(roots)
                 .with_no_client_auth();
         upstream.alpn_protocols = vec![b"http/1.1".to_vec()];
+        let provider = Arc::new(provider::default_provider());
+        let mut insecure = ClientConfig::builder_with_provider(provider.clone())
+            .with_safe_default_protocol_versions()
+            .map_err(tls_err)?
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(AnyCert(provider)))
+            .with_no_client_auth();
+        insecure.alpn_protocols = vec![b"http/1.1".to_vec()];
         Ok(Self {
             ca_der,
             issuer,
@@ -116,6 +175,7 @@ impl Mitm {
             leaves: Mutex::new(HashMap::new()),
             sessions: rustls::server::ServerSessionMemoryCache::new(1024),
             upstream: Arc::new(upstream),
+            insecure: Arc::new(insecure),
         })
     }
 
@@ -219,11 +279,21 @@ impl Mitm {
     }
 
     /// TLS client handshake to `host` over `sock`, verifying the
-    /// server's certificate.
-    pub(crate) fn connect(&self, sock: TcpStream, host: &str) -> io::Result<Stream> {
+    /// server's certificate unless `insecure`.
+    pub(crate) fn connect(
+        &self,
+        sock: TcpStream,
+        host: &str,
+        insecure: bool,
+    ) -> io::Result<Stream> {
         let name = host.trim_start_matches('[').trim_end_matches(']');
         let name = ServerName::try_from(name.to_string()).map_err(tls_err)?;
-        let mut conn = ClientConnection::new(self.upstream.clone(), name).map_err(tls_err)?;
+        let config = if insecure {
+            &self.insecure
+        } else {
+            &self.upstream
+        };
+        let mut conn = ClientConnection::new(config.clone(), name).map_err(tls_err)?;
         let mut s = sock;
         while conn.is_handshaking() {
             conn.complete_io(&mut s).map_err(tls_err)?;

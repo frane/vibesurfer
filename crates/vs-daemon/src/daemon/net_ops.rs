@@ -21,6 +21,7 @@ impl SessionState {
         if self.popups {
             net.set_popups_settled(daemon.popups_settled_fn());
         }
+        net.set_insecure(self.ignore_https_errors);
         self.net = Some(net.clone());
         Ok(net)
     }

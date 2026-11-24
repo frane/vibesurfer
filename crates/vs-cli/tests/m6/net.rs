@@ -922,3 +922,33 @@ fn cell_intercept_reports_service_worker_responses() {
         assert!(cached.contains("\"cached\":true"), "{cached}");
     }
 }
+
+// (t) An upstream with a certificate nobody trusts: refused by default,
+// fetched with `--ignore-https-errors`.
+#[test]
+fn cell_intercept_ignore_https_errors() {
+    for _ in each_available_backend() {
+        let up = HitServer::tls();
+        let ctx = TestContext::start();
+        let url = up.url("/hit");
+        let fetch = format!(
+            "(fetch('{url}').then(r => r.text()).then(t => window.__hit = 'got ' + t, e => window.__hit = 'ERR ' + e), 'started')"
+        );
+        for (flags, want) in [
+            (vec!["--intercept"], "ERR"),
+            (vec!["--intercept", "--ignore-https-errors"], "got"),
+        ] {
+            let mut a = vec!["session-open"];
+            a.extend(flags);
+            let r = ctx.vs(&a);
+            assert_ok("session-open", &r);
+            let s = body_first(&r);
+            let r = sv(&ctx, &s, &["open", &purl(&ctx, "/net.html")]);
+            assert_ok("open", &r);
+            let page = body_first(&r);
+            eval(&ctx, &s, &page, &fetch);
+            let got = eventually(&ctx, &s, &page, "String(window.__hit)", want);
+            assert!(got.starts_with(want), "{a:?}: {got}");
+        }
+    }
+}

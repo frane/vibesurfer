@@ -36,6 +36,20 @@ impl Daemon {
         intercept: bool,
         popups: bool,
     ) -> Result<SessionOpenResponse> {
+        self.session_open_full(policy, isolated, intercept, popups, false)
+    }
+
+    /// [`Self::session_open_with`], and `ignore_https_errors`: the
+    /// intercept proxy accepts any upstream certificate.
+    #[allow(clippy::fn_params_excessive_bools)]
+    pub fn session_open_full(
+        &self,
+        policy: Option<&str>,
+        isolated: bool,
+        intercept: bool,
+        popups: bool,
+        ignore_https_errors: bool,
+    ) -> Result<SessionOpenResponse> {
         let id = format!("s_{}", short_id());
         let mut hash_args: Vec<String> = policy.into_iter().map(str::to_string).collect();
         let mut flags: Vec<(String, Option<String>)> =
@@ -60,6 +74,7 @@ impl Daemon {
             ctx.after_token = Some(StateToken::ZERO);
             let mut state = SessionState::new(isolated);
             state.popups = popups;
+            state.ignore_https_errors = ignore_https_errors;
             if intercept {
                 state.intercept = true;
                 state.running_net(self)?;

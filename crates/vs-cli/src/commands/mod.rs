@@ -75,6 +75,10 @@ pub enum Command {
         /// an `--intercept` session also reports it on `vs net poll`.
         #[arg(long)]
         popups: bool,
+        /// With `--intercept`: accept any upstream certificate
+        /// (self-signed dev servers).
+        #[arg(long)]
+        ignore_https_errors: bool,
     },
     /// 2. Close the active session, or a whole sweep of them.
     #[command(visible_alias = "sc")]
@@ -782,6 +786,7 @@ impl Command {
                 isolated,
                 intercept,
                 popups,
+                ignore_https_errors,
             } => {
                 let mut r = Request::new("vs_session_open");
                 if let Some(p) = policy {
@@ -795,6 +800,9 @@ impl Command {
                 }
                 if *popups {
                     r = r.flag("popups");
+                }
+                if *ignore_https_errors {
+                    r = r.flag("ignore-https-errors");
                 }
                 r
             }

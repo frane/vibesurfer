@@ -48,6 +48,7 @@ pub use responses::{
 
 /// One in-memory session.
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools)]
 pub(crate) struct SessionState {
     pub(crate) pages: HashMap<String, PageState>,
     /// When a primitive last addressed this session. The reaper reads
@@ -65,6 +66,8 @@ pub(crate) struct SessionState {
     pub(crate) net: Option<Arc<crate::net::SessionNet>>,
     /// Pages open real popup windows (see `Daemon::adopt_popups`).
     pub(crate) popups: bool,
+    /// The proxy does not check upstream certificates.
+    pub(crate) ignore_https_errors: bool,
 }
 
 impl SessionState {
@@ -76,6 +79,7 @@ impl SessionState {
             intercept: false,
             net: None,
             popups: false,
+            ignore_https_errors: false,
         }
     }
 }
