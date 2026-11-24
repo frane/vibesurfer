@@ -6,6 +6,12 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.2.20] - 2026-11-24
+
+### Fixed
+- Linux (and any engine whose network stack asks a proxy for `ws://` URLs): WebSockets in intercept sessions failed; the proxy now forwards a handshake asked as `GET ws://…` or `wss://…`. Cell `cell_intercept_passes_websockets`, on a named host and on loopback.
+- macOS before 26: cookies a loopback page's responses set never reached the jar (`setCookies:` is macOS 26+); they are stored one at a time. The Mac engine tests now run on macOS 15 as well as the latest.
+
 ## [0.2.19] - 2026-11-24
 
 ### Added
