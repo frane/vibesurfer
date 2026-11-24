@@ -2,6 +2,20 @@
   // vibesurfer: evaluate code for the test (worker.evaluate) on request
   // of the page that started this worker.
   try {
+    // Console messages go to the page too, for page.on('console').
+    ['log', 'debug', 'info', 'warn', 'error'].forEach(function (k) {
+      var orig = console[k];
+      console[k] = function () {
+        try {
+          var text = Array.prototype.map.call(arguments, function (a) {
+            if (typeof a === 'string') return a;
+            try { return JSON.stringify(a); } catch (e) { return String(a); }
+          }).join(' ');
+          self.postMessage({ __tsConsole: { type: k === 'warn' ? 'warning' : k, text: text } });
+        } catch (e) {}
+        return orig.apply(console, arguments);
+      };
+    });
     self.addEventListener('message', function (e) {
       var d = e.data;
       if (!d || typeof d !== 'object' || d.__tsEval === undefined) return;
