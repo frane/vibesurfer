@@ -256,11 +256,13 @@ Persistent, encrypted auth state.
 Auth blobs are scoped per machine (the encryption key is local).
 Cross-host portability is not a v1 feature.
 
-## 18b. Input, cookies and crashes (0.2.19)
+## 18b. Input, drops, cookies, recordings and crashes (0.2.19)
 
 - `vs_wheel <page> <x> <y> <dx> <dy> [--mode=]`: move to (x, y) and turn the wheel by (dx, dy) CSS px, a trusted native wheel event (positive dy scrolls down).
 - `vs_click_at <page> <x> <y> --token= [--button=left|right|middle] [--count=1..3] [--modifiers=shift,ctrl,alt,meta]`: native clicks with another button, a click count and modifier keys.
 - `vs_cookies <page> list|clear|set <base64 JSON array>`: the page's jar (its data store), HttpOnly included; answers with the jar after the change as one JSON array line of `{name, value, domain, path, expires_unix?, secure, http_only, same_site?}`.
+- `vs_drop <page> <x> <y> <base64 JSON {"files": [path], "data": [[mime, value]]}>`: a drop from another application at (x, y), answered `accepted` or `refused` (the page's dragover declined). The page sees trusted `dragenter`, `dragover` and `drop`, with files as real `File` objects. macOS: WebKit's drag-destination methods with a pasteboard. Windows: the composition controller's `DragEnter`/`DragOver`/`Drop` with a shell data object. Linux on X11: XDND, with vibesurfer as the source. A script keeps the strings and files on the drop's `DataTransfer` after the event, as Playwright's drop does. Pure Wayland answers `UNSUPPORTED`.
+- `vs_record start <page> ... [--format=mp4|webm]`: MP4 (H.264, default) or WebM (VP8, libvpx).
 - `crash <page>` on `vs_net_poll`: the page's web content process died. `vs_debug_crash <page>` kills it, for tests, when the daemon runs with `VS_ALLOW_CRASH=1`.
 - `sw <base64 JSON>` on `vs_net_poll`: a response a service worker built or took from its cache (request URL, method and headers, response status, headers and body).
 
