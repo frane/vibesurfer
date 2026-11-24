@@ -175,6 +175,9 @@ fn handle(mut req: Request) -> std::io::Result<()> {
             .with_header(no_store());
         return req.respond(resp);
     }
+    if path.starts_with("/redirect-chain/") || path == "/set-cookie" {
+        return handle_chain_or_cookie(req, &url, &path);
+    }
     if path == "/redirect-static" {
         let resp = Response::empty(StatusCode(302))
             .with_header(header("Location", "/static.html"))
@@ -189,6 +192,39 @@ fn handle(mut req: Request) -> std::io::Result<()> {
         return serve_file(req, &candidate);
     }
     respond_text(req, 404, "text/plain", &format!("not found: {path}"))
+}
+
+/// `/redirect-chain/N` redirects N-1 more times, then to /net.html;
+/// `/set-cookie?n=NAME&v=VALUE` sets one cookie on `/`.
+fn handle_chain_or_cookie(req: Request, url: &str, path: &str) -> std::io::Result<()> {
+    if let Some(n) = path.strip_prefix("/redirect-chain/") {
+        // `/redirect-chain/N` redirects N-1 more times, then to /net.html.
+        let n: u32 = n.parse().unwrap_or(1);
+        let to = if n <= 1 {
+            "/net.html".to_string()
+        } else {
+            format!("/redirect-chain/{}", n - 1)
+        };
+        let resp = Response::empty(StatusCode(302))
+            .with_header(header("Location", &to))
+            .with_header(no_store());
+        return req.respond(resp);
+    }
+    let q = url.split_once('?').map_or("", |(_, q)| q);
+    let get = |k: &str| {
+        q.split('&')
+            .find_map(|kv| kv.strip_prefix(&format!("{k}=")))
+            .unwrap_or("")
+            .to_string()
+    };
+    let resp = Response::from_string("set")
+        .with_header(header(
+            "Set-Cookie",
+            &format!("{}={}; Path=/", get("n"), get("v")),
+        ))
+        .with_header(header("Content-Type", "text/plain"))
+        .with_header(no_store());
+    req.respond(resp)
 }
 
 fn handle_login(mut req: Request) -> std::io::Result<()> {

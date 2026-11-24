@@ -76,6 +76,15 @@ fn purl(ctx: &TestContext, path: &str) -> String {
     ctx.url(path).replace("//127.0.0.1:", "//vs.localhost:")
 }
 
+/// The fixture URL on 127.0.0.1 for `loopback`, else under a name.
+fn hurl(ctx: &TestContext, loopback: bool, path: &str) -> String {
+    if loopback {
+        ctx.url(path)
+    } else {
+        purl(ctx, path)
+    }
+}
+
 fn intercept_session(ctx: &TestContext) -> String {
     let r = ctx.vs(&["session-open", "--intercept"]);
     assert_ok("session-open --intercept", &r);
@@ -244,12 +253,12 @@ fn cell_intercept_observes_document_and_subresources() {
 // (b) With routing on, a navigation can be answered by the client.
 #[test]
 fn cell_intercept_fulfills_a_navigation() {
-    for _ in each_available_backend() {
+    for (_, loopback) in each_available_backend().flat_map(|b| [(b, false), (b, true)]) {
         let ctx = TestContext::start();
         let s = intercept_session(&ctx);
         let page = open_blank(&ctx, &s);
         assert_ok("route on", &sv(&ctx, &s, &["net", "route", "on"]));
-        let url = purl(&ctx, "/does-not-exist.html");
+        let url = hurl(&ctx, loopback, "/does-not-exist.html");
         let nav = goto_async(&ctx, &s, &page, &url);
         let html = B64.encode("<!doctype html><title>t</title><h1 id=x>fulfilled by client</h1>");
         drive(
@@ -287,12 +296,12 @@ fn cell_intercept_fulfills_a_navigation() {
 // (c) Aborting an image fails it for the page and reports `fail`.
 #[test]
 fn cell_intercept_aborts_an_image() {
-    for _ in each_available_backend() {
+    for (_, loopback) in each_available_backend().flat_map(|b| [(b, false), (b, true)]) {
         let ctx = TestContext::start();
         let s = intercept_session(&ctx);
         let page = open_blank(&ctx, &s);
         assert_ok("route on", &sv(&ctx, &s, &["net", "route", "on"]));
-        let nav = goto_async(&ctx, &s, &page, &purl(&ctx, "/net.html"));
+        let nav = goto_async(&ctx, &s, &page, &hurl(&ctx, loopback, "/net.html"));
         let evs = drive(
             &ctx,
             &s,
@@ -491,28 +500,90 @@ fn cell_intercept_off_by_default() {
     }
 }
 
-// Loopback by address: WebKit on macOS never proxies `127.0.0.1`, so
-// such a page loads but is not seen. WebKitGTK (empty ignore list) and
-// WebView2 (`<-loopback>`) proxy it like any other host.
+// (g2) A page served from 127.0.0.1 is proxied too. WebKitGTK (empty
+// ignore list) and WebView2 (`<-loopback>`) proxy it like any other
+// host; WebKit on macOS never proxies loopback, so such a page gets a
+// web view whose http(s) goes to the proxy through a scheme handler.
+// Either way the document, its script and its image are seen, and a
+// later navigation to another host still is.
 #[test]
 fn cell_intercept_loopback_by_engine() {
     for _ in each_available_backend() {
         let ctx = TestContext::start();
         let s = intercept_session(&ctx);
-        let r = sv(&ctx, &s, &["open", &ctx.url("/net.html")]);
-        assert_ok("open", &r);
-        let page = body_first(&r);
+        let page = open_blank(&ctx, &s);
+        let r = sv(&ctx, &s, &["goto", &page, &ctx.url("/net.html")]);
+        assert_ok("goto", &r);
         assert_eq!(
             eventually(&ctx, &s, &page, "String(window.__img)", "ok"),
             "ok"
         );
         let evs = poll(&ctx, &s, 0);
-        let seen = find(&evs, "req", "/net.html").is_some();
-        if cfg!(target_os = "macos") {
-            assert!(!seen, "macOS proxied 127.0.0.1 after all: {evs:#?}");
-        } else {
-            assert!(seen, "127.0.0.1 was not proxied: {evs:#?}");
-        }
+        let doc = find(&evs, "req", "/net.html").expect("127.0.0.1 was not proxied");
+        assert_eq!(doc.field("type"), Some("document"), "{doc:?}");
+        assert_eq!(doc.field("nav"), Some("1"), "{doc:?}");
+        assert_eq!(status_of(&evs, doc.id).as_deref(), Some("200"));
+        let script = find(&evs, "req", "/static/script-a.js").expect("script req");
+        assert_eq!(script.field("type"), Some("script"), "{script:?}");
+        let img = find(&evs, "req", "/img/pixel.gif").expect("image req");
+        assert_eq!(img.field("type"), Some("image"), "{img:?}");
+
+        // Over to a non-loopback name and back: both seen.
+        let r = sv(&ctx, &s, &["goto", &page, &purl(&ctx, "/net.html")]);
+        assert_ok("goto vs.localhost", &r);
+        let r = sv(&ctx, &s, &["goto", &page, &ctx.url("/net.html")]);
+        assert_ok("goto 127.0.0.1", &r);
+        assert_eq!(
+            eventually(&ctx, &s, &page, "String(window.__img)", "ok"),
+            "ok"
+        );
+        let evs = poll(&ctx, &s, 0);
+        let docs: Vec<&Ev> = evs
+            .iter()
+            .filter(|e| e.kind == "req" && e.url().ends_with("/net.html"))
+            .collect();
+        assert_eq!(docs.len(), 2, "{evs:#?}");
+        assert!(docs[0].url().contains("vs.localhost"), "{docs:?}");
+        assert!(docs[1].url().contains("127.0.0.1"), "{docs:?}");
+    }
+}
+
+// (g3) Cookies and redirects on a loopback page: a Set-Cookie lands in
+// the jar (document.cookie sees it, the next request sends it), and a
+// redirect chain ends on the final URL with each hop reported.
+#[test]
+fn cell_intercept_loopback_cookies_and_redirects() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let s = intercept_session(&ctx);
+        let page = open_blank(&ctx, &s);
+        let r = sv(&ctx, &s, &["goto", &page, &ctx.url("/redirect-chain/3")]);
+        assert_ok("goto redirect chain", &r);
+        let href = eval(&ctx, &s, &page, "location.pathname");
+        assert!(href.contains("/net.html"), "landed on {href}");
+        let evs = poll(&ctx, &s, 0);
+        let hops = evs
+            .iter()
+            .filter(|e| e.kind == "req" && e.url().contains("/redirect-chain/"))
+            .count();
+        assert_eq!(hops, 3, "{evs:#?}");
+
+        eval(
+            &ctx,
+            &s,
+            &page,
+            "fetch('/set-cookie?n=vs_loop&v=1').then(() => fetch('/echo-headers')).then(r => r.text()).then(t => { window.__echo = t; }), 1",
+        );
+        let got = eventually(&ctx, &s, &page, "document.cookie", "vs_loop=1");
+        assert!(got.contains("vs_loop=1"), "document.cookie: {got}");
+        let echoed = eventually(
+            &ctx,
+            &s,
+            &page,
+            "JSON.stringify(String(window.__echo))",
+            "vs_loop=1",
+        );
+        assert!(echoed.contains("vs_loop=1"), "request headers: {echoed}");
     }
 }
 

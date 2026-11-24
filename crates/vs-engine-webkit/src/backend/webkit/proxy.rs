@@ -8,8 +8,9 @@
 //!
 //! WebKit never proxies loopback: `127.0.0.1`, `localhost`, `::1` and
 //! the host's own interface addresses go direct whatever the config
-//! says (match domains do not change that). `*.localhost` names are
-//! proxied, and the daemon's proxy resolves them to loopback.
+//! says (match domains, `prohibit_direct` and the legacy proxy
+//! dictionary do not change that). Pages served from loopback get a
+//! scheme-handler web view instead; see `loopback.rs`.
 
 use std::ffi::{c_char, CString};
 

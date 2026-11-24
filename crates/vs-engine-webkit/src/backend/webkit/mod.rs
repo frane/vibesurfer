@@ -24,6 +24,7 @@ mod headless_webview;
 mod headless_window;
 mod input;
 mod inspector_handler;
+mod loopback;
 mod nav_delegate;
 mod proxy;
 mod record;
@@ -98,6 +99,11 @@ struct WkPage {
     /// Subframes that reported in, for `eval_js_in_frame`. Shared with
     /// popups, which share the content controller.
     frames: frames::FrameList,
+    /// The intercept proxy's port, for pages of a proxied store.
+    proxy_port: Option<u16>,
+    /// The web view sends its http(s) through [`loopback`]'s handler:
+    /// the page is served from loopback, which WebKit never proxies.
+    loopback: bool,
 }
 
 // =============================================================================
@@ -119,6 +125,9 @@ pub struct WkBackend {
     /// Windows pages with real popups opened, and pages that closed
     /// themselves, not yet adopted or released.
     popup_queue: PopupQueue,
+    /// Per proxied data store (by address): whether its last
+    /// navigation went to a loopback host. See `wants_loopback`.
+    loopback_hint: HashMap<usize, bool>,
 }
 
 impl WkBackend {
@@ -131,6 +140,7 @@ impl WkBackend {
             recording: HashMap::new(),
             isolated_stores: HashMap::new(),
             popup_queue: PopupQueue::default(),
+            loopback_hint: HashMap::new(),
         }
     }
 
@@ -174,6 +184,66 @@ impl WkBackend {
         Ok(s)
     }
 
+    /// Whether a proxied page opening at `url` gets a loopback web view.
+    /// An http(s) URL decides by its host. A blank page (a context's
+    /// first page, opened ahead of its first `goto`) takes the kind the
+    /// store's last navigation needed, loopback before there was one:
+    /// a test suite mostly runs against one local server, so the
+    /// first navigation rarely has to rebuild the view.
+    fn wants_loopback(&mut self, url: &str, store: usize) -> bool {
+        if url.starts_with("http://") || url.starts_with("https://") {
+            let want = loopback::is_loopback(url);
+            self.loopback_hint.insert(store, want);
+            want
+        } else {
+            self.loopback_hint.get(&store).copied().unwrap_or(true)
+        }
+    }
+
+    /// Swap `page`'s web view for one of the other kind (loopback
+    /// handler or proxy), in the same window, with the same data store,
+    /// content controller, delegate and size. Init scripts, message
+    /// handlers, popup and dialog settings carry over; the old view's
+    /// history does not.
+    fn rebuild_view(
+        &mut self,
+        page: PageHandle,
+        loopback_view: bool,
+        port: u16,
+    ) -> EngineResult<()> {
+        let mtm = self.mtm;
+        let p = self.page_mut(page)?;
+        let old = p.web_view.clone();
+        let old_config = unsafe { old.configuration() };
+        let config = unsafe { WKWebViewConfiguration::new(mtm) };
+        unsafe {
+            config.setWebsiteDataStore(&old_config.websiteDataStore());
+            config.setUserContentController(&p.ucc);
+            config.setPreferences(&old_config.preferences());
+        }
+        enable_media_devices(&config);
+        if loopback_view {
+            loopback::install(mtm, &config, port);
+        }
+        let web_view = headless_webview::HeadlessWebView::create(mtm, old.frame(), &config);
+        unsafe {
+            web_view.setCustomUserAgent(old.customUserAgent().as_deref());
+            let proto: &ProtocolObject<dyn WKNavigationDelegate> =
+                ProtocolObject::from_ref(&*p.nav_delegate);
+            web_view.setNavigationDelegate(Some(proto));
+            let ui: &ProtocolObject<dyn WKUIDelegate> = ProtocolObject::from_ref(&*p.nav_delegate);
+            web_view.setUIDelegate(Some(ui));
+            old.stopLoading();
+            old.setNavigationDelegate(None);
+            old.setUIDelegate(None);
+            p.window.setContentView(Some(&web_view));
+            p.window.makeFirstResponder(Some(&web_view));
+        }
+        p.web_view = web_view;
+        p.loopback = loopback_view;
+        Ok(())
+    }
+
     fn alloc_handle(&mut self) -> PageHandle {
         self.popup_queue.borrow_mut().alloc()
     }
@@ -190,13 +260,15 @@ impl WkBackend {
             // The opener's inspector buffers and content controller:
             // the popup shares its configuration, so its console and
             // scripts land there too.
-            let (inspector, inspector_installed, ucc, frames) =
+            let (inspector, inspector_installed, ucc, frames, proxy_port, loopback) =
                 match b.opener.and_then(|h| self.pages.get(&h)) {
                     Some(o) => (
                         o.inspector.clone(),
                         o.inspector_installed,
                         o.ucc.clone(),
                         o.frames.clone(),
+                        o.proxy_port,
+                        o.loopback,
                     ),
                     None => (
                         super::inspector_bridge::InspectorSlots::new(
@@ -205,6 +277,8 @@ impl WkBackend {
                         false,
                         unsafe { b.web_view.configuration().userContentController() },
                         frames::FrameList::default(),
+                        None,
+                        false,
                     ),
                 };
             self.pages.insert(
@@ -220,6 +294,8 @@ impl WkBackend {
                     cookie_next_seq: std::cell::RefCell::new(0),
                     last_mouse: std::cell::Cell::new(vs_humanize::Point { x: 0.0, y: 0.0 }),
                     frames: frames.clone(),
+                    proxy_port,
+                    loopback,
                 },
             );
         }
@@ -613,6 +689,12 @@ impl Engine for WkBackend {
         let config = unsafe { WKWebViewConfiguration::new(mtm) };
         let data_store = self.data_store(store)?;
         unsafe { config.setWebsiteDataStore(&data_store) };
+        let proxy_port = store.proxy_port();
+        let loopback = proxy_port.is_some()
+            && self.wants_loopback(url, Retained::as_ptr(&data_store) as usize);
+        if let (true, Some(port)) = (loopback, proxy_port) {
+            loopback::install(mtm, &config, port);
+        }
         // Expose `navigator.mediaDevices`. WKWebView gates the whole
         // MediaDevices surface behind a preference that is off by
         // default, so the object was simply absent — even on https with
@@ -711,12 +793,32 @@ impl Engine for WkBackend {
                 cookie_next_seq: std::cell::RefCell::new(0),
                 last_mouse: std::cell::Cell::new(vs_humanize::Point { x: 0.0, y: 0.0 }),
                 frames: frames.clone(),
+                proxy_port,
+                loopback,
             },
         );
         Ok(handle)
     }
 
     fn navigate(&mut self, page: PageHandle, url: &str) -> EngineResult<()> {
+        // A proxied page moving between a loopback host and any other
+        // needs the other kind of web view (see `loopback`).
+        if let Some(port) = self.page_mut(page)?.proxy_port {
+            if url.starts_with("http://") || url.starts_with("https://") {
+                let want = loopback::is_loopback(url);
+                let key = unsafe {
+                    self.page_mut(page)?
+                        .web_view
+                        .configuration()
+                        .websiteDataStore()
+                };
+                self.loopback_hint
+                    .insert(Retained::as_ptr(&key) as usize, want);
+                if want != self.page_mut(page)?.loopback {
+                    self.rebuild_view(page, want, port)?;
+                }
+            }
+        }
         // Reuse the existing web view, host window, and web-content
         // process: just reset the shared nav slot and load the new URL.
         // This skips the whole WKWebView / NSWindow / process spin-up
