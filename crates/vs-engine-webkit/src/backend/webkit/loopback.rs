@@ -529,7 +529,8 @@ fn request_head(hop: &Hop, cookie: Option<&str>) -> String {
     if !hop.body.is_empty() || !matches!(hop.method.as_str(), "GET" | "HEAD" | "OPTIONS") {
         let _ = write!(head, "Content-Length: {}\r\n", hop.body.len());
     }
-    head.push_str("Connection: close\r\n\r\n");
+    // Tells the proxy to abort with a plain close (see its LOOPBACK_MARK).
+    head.push_str("X-Vs-Loopback: 1\r\nConnection: close\r\n\r\n");
     head
 }
 

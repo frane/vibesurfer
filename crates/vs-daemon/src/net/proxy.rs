@@ -125,13 +125,17 @@ fn handle_conn(net: &SessionNet, stream: TcpStream) -> io::Result<()> {
             },
         };
         let body = read_body(&mut conn, request_framing(&head.headers))?;
+        let plain_abort = head.get(LOOPBACK_MARK).is_some();
         let req = ProxyRequest {
             method,
             url,
             headers: head
                 .headers
                 .iter()
-                .filter(|(k, _)| !k.to_ascii_lowercase().starts_with("proxy-"))
+                .filter(|(k, _)| {
+                    let k = k.to_ascii_lowercase();
+                    !k.starts_with("proxy-") && k != LOOPBACK_MARK
+                })
                 .cloned()
                 .collect(),
             body,
@@ -140,7 +144,7 @@ fn handle_conn(net: &SessionNet, stream: TcpStream) -> io::Result<()> {
         // reused connection close without a response retries the
         // request, which would turn an abort into a second attempt
         // (see `abort` for the retry CFNetwork makes even so).
-        return exchange(net, &req, conn);
+        return exchange(net, &req, conn, plain_abort);
     }
 }
 
@@ -205,7 +209,12 @@ fn without_compression(out: &ProxyRequest, sw: bool) -> std::borrow::Cow<'_, Pro
     std::borrow::Cow::Owned(o)
 }
 
-fn exchange(net: &SessionNet, req: &ProxyRequest, mut conn: BufReader<Stream>) -> io::Result<()> {
+fn exchange(
+    net: &SessionNet,
+    req: &ProxyRequest,
+    mut conn: BufReader<Stream>,
+    plain_abort: bool,
+) -> io::Result<()> {
     if is_sw_report(req) {
         net.ev_service_worker(&req.body);
         let w = conn.get_mut();
@@ -228,7 +237,7 @@ fn exchange(net: &SessionNet, req: &ProxyRequest, mut conn: BufReader<Stream>) -
     match decision {
         Decision::Abort(error) => {
             net.ev_failed(id, &error);
-            abort(conn.get_mut());
+            abort(conn.get_mut(), plain_abort);
             Ok(())
         }
         Decision::Fulfill {
@@ -254,10 +263,17 @@ fn exchange(net: &SessionNet, req: &ProxyRequest, mut conn: BufReader<Stream>) -
         }
         Decision::Continue(o) => {
             let (out, url_changed) = o.apply(req);
-            forward(net, id, req, &out, url_changed, conn)
+            forward(net, id, req, &out, url_changed, conn, plain_abort)
         }
     }
 }
+
+/// The header the macOS loopback scheme handler (`vs-engine-webkit`'s
+/// `loopback.rs`) marks its requests with. It reports a closed
+/// connection as a network error itself, so an abort is a plain close
+/// for it, without the head CFNetwork needs. Taken off before anything
+/// else sees the request.
+const LOOPBACK_MARK: &str = "x-vs-loopback";
 
 /// Fail the browser's request without a retry. On macOS, CFNetwork
 /// silently retries a request whose connection closed before any
@@ -267,8 +283,8 @@ fn exchange(net: &SessionNet, req: &ProxyRequest, mut conn: BufReader<Stream>) -
 /// and a navigation fails, with no retry. Chromium and libsoup do not
 /// retry a fresh connection, so elsewhere the connection is just
 /// dropped.
-fn abort(conn: &mut Stream) {
-    if cfg!(target_os = "macos") {
+fn abort(conn: &mut Stream, plain: bool) {
+    if cfg!(target_os = "macos") && !plain {
         let _ = conn.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1048576\r\n\r\n");
         let _ = conn.flush();
     }
@@ -397,6 +413,7 @@ fn forward(
     out: &ProxyRequest,
     url_changed: bool,
     mut conn: BufReader<Stream>,
+    plain_abort: bool,
 ) -> io::Result<()> {
     let sw = is_sw_script(req);
     let out = &without_compression(out, sw);
@@ -405,7 +422,7 @@ fn forward(
             Ok(v) => v,
             Err(e) => {
                 net.ev_failed(id, &e.to_string());
-                abort(conn.get_mut());
+                abort(conn.get_mut(), plain_abort);
                 return Ok(());
             }
         };

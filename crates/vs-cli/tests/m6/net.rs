@@ -671,13 +671,13 @@ fn cell_intercept_records_a_real_https_response() {
 // plain http and over https.
 #[test]
 fn cell_intercept_abort_is_not_retried() {
-    for _ in each_available_backend() {
+    for (_, loopback) in each_available_backend().flat_map(|b| [(b, false), (b, true)]) {
         let tls = HitServer::tls();
         let plain = HitServer::plain();
         let roots = tls.ca_pem_path().to_string_lossy().to_string();
         let ctx = TestContext::start_with_env(&[("VS_INTERCEPT_EXTRA_ROOTS", &roots)]);
         let s = intercept_session(&ctx);
-        let r = sv(&ctx, &s, &["open", &purl(&ctx, "/net.html")]);
+        let r = sv(&ctx, &s, &["open", &hurl(&ctx, loopback, "/net.html")]);
         assert_ok("open", &r);
         let page = body_first(&r);
         for up in [&plain, &tls] {
