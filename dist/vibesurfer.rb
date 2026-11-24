@@ -35,6 +35,7 @@ class Vibesurfer < Formula
   end
 
   def install
+    ENV["LIBCLANG_PATH"] = Formula["llvm"].opt_lib.to_s
     system "cargo", "install", *std_cargo_args(path: "crates/vs-cli")
   end
 
