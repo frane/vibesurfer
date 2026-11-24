@@ -511,11 +511,16 @@ pub(super) fn wheel(
     )
     .ok_or_else(|| EngineError::Other("CGEventCreateScrollWheelEvent2 returned NULL".into()))?;
     let screen_h = CGDisplayPixelsHigh(CGMainDisplayID()) as f64;
+    // A point on the view's edge (the pointer's (0, 0) start) is outside
+    // WebKit's hit test: keep it half a pixel inside.
+    let width = web_view.frame().size.width;
+    let x = at.x.clamp(0.5, (width - 0.5).max(0.5));
+    let y = at.y.clamp(0.5, (webview_height - 0.5).max(0.5));
     CGEvent::set_location(
         Some(&ev),
         CGPoint {
-            x: at.x,
-            y: screen_h - (webview_height - at.y),
+            x,
+            y: screen_h - (webview_height - y),
         },
     );
     let ns = NSEvent::eventWithCGEvent(&ev)
