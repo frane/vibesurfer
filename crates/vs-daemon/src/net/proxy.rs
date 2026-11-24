@@ -197,6 +197,15 @@ fn is_sw_script(req: &ProxyRequest) -> bool {
     get(&req.headers, "service-worker").is_some_and(|v| v.eq_ignore_ascii_case("script"))
 }
 
+/// Prepended to dedicated and shared worker scripts: it runs code for
+/// the test on request (Playwright's worker.evaluate).
+const WORKER_PRELUDE: &str = include_str!("worker_prelude.js");
+
+fn is_worker_script(req: &ProxyRequest) -> bool {
+    get(&req.headers, "sec-fetch-dest")
+        .is_some_and(|v| v.eq_ignore_ascii_case("worker") || v.eq_ignore_ascii_case("sharedworker"))
+}
+
 /// `out` as sent upstream: a service worker script is asked for
 /// uncompressed, so the prelude can go in front of it.
 fn without_compression(out: &ProxyRequest, sw: bool) -> std::borrow::Cow<'_, ProxyRequest> {
@@ -416,7 +425,8 @@ fn forward(
     plain_abort: bool,
 ) -> io::Result<()> {
     let sw = is_sw_script(req);
-    let out = &without_compression(out, sw);
+    let worker = is_worker_script(req);
+    let out = &without_compression(out, sw || worker);
     let (mut up_r, status, reason, head) =
         match send_upstream(&net.mitm, out, url_changed, net.insecure()) {
             Ok(v) => v,
@@ -435,10 +445,11 @@ fn forward(
     let framing = response_framing(&out.method, status, &head.headers);
     let encoded = get(&head.headers, "content-encoding")
         .is_some_and(|e| !e.trim().eq_ignore_ascii_case("identity"));
-    let prelude: &[u8] = if sw && status == 200 && !encoded {
-        SW_PRELUDE.as_bytes()
-    } else {
-        b""
+    let prelude: &[u8] = match (sw, worker) {
+        _ if status != 200 || encoded => b"",
+        (true, _) => SW_PRELUDE.as_bytes(),
+        (_, true) => WORKER_PRELUDE.as_bytes(),
+        _ => b"",
     };
     let mut hs = strip_hop_by_hop(&head.headers);
     let chunked = match framing {
