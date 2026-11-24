@@ -37,6 +37,7 @@ use std::ffi::c_void;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::ptr::NonNull;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Once};
 use std::time::Duration;
@@ -873,15 +874,22 @@ fn on_head(id: u64, generation: u64, status: u16, headers: Vec<(String, String)>
         next();
         return;
     }
-    let refs: Vec<&NSHTTPCookie> = jar.iter().map(|c| &**c).collect();
-    let array = NSArray::from_slice(&refs);
-    let next = RefCell::new(Some(next));
-    let block = RcBlock::new(move || {
-        if let Some(f) = next.borrow_mut().take() {
-            f();
-        }
-    });
-    unsafe { cookies.setCookies_completionHandler(&array, Some(&block)) };
+    // One `setCookie:` each: `setCookies:` (all at once) is macOS 26+.
+    // Answer WebKit once the last one is stored.
+    let left = Rc::new(Cell::new(jar.len()));
+    let next = Rc::new(RefCell::new(Some(next)));
+    for cookie in &jar {
+        let (left, next) = (left.clone(), next.clone());
+        let block = RcBlock::new(move || {
+            left.set(left.get() - 1);
+            if left.get() == 0 {
+                if let Some(f) = next.borrow_mut().take() {
+                    f();
+                }
+            }
+        });
+        unsafe { cookies.setCookie_completionHandler(cookie, Some(&block)) };
+    }
 }
 
 /// `location` resolved against `base`, as an absolute URL.
