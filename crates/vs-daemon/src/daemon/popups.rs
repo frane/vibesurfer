@@ -86,6 +86,7 @@ impl Daemon {
             match e {
                 PopupEvent::Opened(p) => self.adopt(&p),
                 PopupEvent::Closed(h) => self.forget_closed(h),
+                PopupEvent::Crashed(h) => self.report_crash(h),
                 PopupEvent::Dialog(d) => self.report_dialog(&feed, &d),
             }
             self.inner.popups.handled.fetch_add(1, Ordering::SeqCst);
@@ -138,6 +139,22 @@ impl Daemon {
 
     /// `dialog <page> <id> <kind> <message-b64> <default-b64>` on the
     /// page's event stream; with no stream to answer on, dismissed now.
+    /// `crash <page>` on the page's event stream.
+    fn report_crash(&self, h: PageHandle) {
+        let found = {
+            let sessions = self.inner.sessions.lock().expect("poisoned");
+            sessions.values().find_map(|s| {
+                s.pages
+                    .values()
+                    .find(|pg| pg.engine_handle == Some(h))
+                    .map(|pg| (pg.id.clone(), s.net.clone()))
+            })
+        };
+        if let Some((page_id, Some(net))) = found {
+            net.push_line(format!("crash {page_id}\n"));
+        }
+    }
+
     fn report_dialog(&self, feed: &PopupFeed, d: &Dialog) {
         use base64::Engine as _;
         let b64 = |s: &str| base64::engine::general_purpose::STANDARD.encode(s);

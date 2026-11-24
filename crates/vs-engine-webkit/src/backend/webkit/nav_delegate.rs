@@ -153,6 +153,17 @@ define_class!(
             slot.committed = true;
         }
 
+        #[unsafe(method(webViewWebContentProcessDidTerminate:))]
+        fn process_terminated(&self, _web_view: &WKWebView) {
+            if let (Some(q), Some(h)) = (self.ivars().popups.borrow().as_ref(), self.ivars().page.get()) {
+                q.borrow_mut().feed.push(crate::engine::PopupEvent::Crashed(h));
+            }
+            let mut slot = self.ivars().slot.borrow_mut();
+            if slot.done.is_none() {
+                slot.done = Some(Err("the web content process terminated".into()));
+            }
+        }
+
         #[unsafe(method(webView:didFinishNavigation:))]
         fn did_finish(&self, _web_view: &WKWebView, _nav: Option<&WKNavigation>) {
             let mut slot = self.ivars().slot.borrow_mut();

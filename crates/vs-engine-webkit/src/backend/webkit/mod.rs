@@ -1125,6 +1125,22 @@ impl Engine for WkBackend {
         Ok(())
     }
 
+    fn crash(&mut self, page: PageHandle) -> EngineResult<()> {
+        unsafe extern "C" {
+            fn kill(pid: i32, sig: i32) -> i32;
+        }
+        let p = self.page_mut(page)?;
+        // SIGKILL to the web content process: what a real crash looks
+        // like to WebKit (asking it to stop the process reports no crash).
+        let pid: i32 = unsafe { objc2::msg_send![&*p.web_view, _webProcessIdentifier] };
+        if pid <= 0 {
+            return Err(EngineError::Other("no web content process".into()));
+        }
+        unsafe { kill(pid, 9) };
+        let _ = run_loop_until(|| false, Duration::from_millis(200));
+        Ok(())
+    }
+
     fn set_zoom(&mut self, page: PageHandle, zoom: f64) -> EngineResult<()> {
         let p = self.page_mut(page)?;
         let _: () = unsafe { objc2::msg_send![&*p.web_view, setPageZoom: zoom] };

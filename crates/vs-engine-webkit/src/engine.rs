@@ -788,6 +788,14 @@ pub trait Engine {
         })
     }
 
+    /// Kill `page`'s web content process, to test crash handling.
+    fn crash(&mut self, _page: PageHandle) -> EngineResult<()> {
+        Err(EngineError::Unsupported {
+            engine: "unknown",
+            primitive: "crash",
+        })
+    }
+
     /// Read, add to or empty the cookie jar `page` uses (its data
     /// store: every page of an isolated session shares it), HttpOnly
     /// cookies included. Returns the jar after the change.
@@ -913,6 +921,9 @@ pub enum PopupEvent {
     Opened(Popup),
     /// The page called `window.close()`; the engine releases it.
     Closed(PageHandle),
+    /// The page's web content process died (a crash or the OS killing
+    /// it). The page stays; its next load starts a new process.
+    Crashed(PageHandle),
     /// The page opened `alert()`, `confirm()` or `prompt()` and waits
     /// for [`PopupFeed::answer`] (dismissed after [`DIALOG_TIMEOUT`]).
     Dialog(Dialog),

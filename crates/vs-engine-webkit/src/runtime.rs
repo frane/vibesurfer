@@ -507,6 +507,10 @@ impl EngineRuntime {
         self.dispatch(move |e| e.performance(page))
     }
 
+    pub fn crash(&self, page: PageHandle) -> EngineResult<()> {
+        self.dispatch(move |e| e.crash(page))
+    }
+
     pub fn set_zoom(&self, page: PageHandle, zoom: f64) -> EngineResult<()> {
         self.dispatch(move |e| e.set_zoom(page, zoom))
     }

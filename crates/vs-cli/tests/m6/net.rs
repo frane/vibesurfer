@@ -952,3 +952,26 @@ fn cell_intercept_ignore_https_errors() {
         }
     }
 }
+
+// (u) A page whose web content process dies is reported as `crash`.
+#[test]
+fn cell_crash_is_reported() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start_with_env(&[("VS_ALLOW_CRASH", "1")]);
+        let r = ctx.vs(&["session-open", "--intercept", "--popups"]);
+        assert_ok("session-open", &r);
+        let s = body_first(&r);
+        let r = sv(&ctx, &s, &["open", &purl(&ctx, "/net.html")]);
+        assert_ok("open", &r);
+        let page = body_first(&r);
+        let r = sv(&ctx, &s, &["debug-crash", &page]);
+        assert_ok("debug-crash", &r);
+        let start = Instant::now();
+        let mut seen = false;
+        while !seen && start.elapsed() < Duration::from_secs(10) {
+            let r = sv(&ctx, &s, &["net", "poll", "--wait-ms", "300"]);
+            seen = r.stdout.lines().any(|l| l == format!("crash {page}"));
+        }
+        assert!(seen, "no crash line for {page}");
+    }
+}

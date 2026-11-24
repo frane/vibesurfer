@@ -633,6 +633,13 @@ impl Engine for WpeBackend {
         }
     }
 
+    fn crash(&mut self, page: PageHandle) -> EngineResult<()> {
+        let p = self.page_mut(page)?;
+        p.web_view.terminate_web_process();
+        let _ = run_loop_until(|| false, Duration::from_millis(200));
+        Ok(())
+    }
+
     fn set_zoom(&mut self, page: PageHandle, zoom: f64) -> EngineResult<()> {
         let p = self.page_mut(page)?;
         p.web_view.set_zoom_level(zoom);
@@ -1269,6 +1276,7 @@ fn input_origin(
 /// pages `open` creates and for windows a page opens (`create`), so a
 /// popup is the same kind of page. The caller sets `me` and the window
 /// title once the page has a handle.
+#[allow(clippy::too_many_lines)]
 fn host_page(web_view: &WebView, popups: &Popups) -> WpePage {
     // No native context menu: the page still gets its contextmenu
     // event, and no menu stays open to take the next click.
@@ -1360,6 +1368,20 @@ fn host_page(web_view: &WebView, popups: &Popups) -> WpePage {
                 let mut s = popups.borrow_mut();
                 s.closed.push(h);
                 s.feed.push(crate::engine::PopupEvent::Closed(h));
+            }
+        });
+    }
+    // The web process died: report it.
+    {
+        let on = popups_on.clone();
+        let me = me.clone();
+        let popups = popups.clone();
+        web_view.connect_web_process_terminated(move |_, _| {
+            if let (true, Some(h)) = (on.get(), me.get()) {
+                popups
+                    .borrow_mut()
+                    .feed
+                    .push(crate::engine::PopupEvent::Crashed(h));
             }
         });
     }

@@ -908,6 +908,24 @@ fn host_view(
         unsafe { web_view.add_WindowCloseRequested(&handler, &raw mut token) }
             .map_err(|e| EngineError::Other(format!("add_WindowCloseRequested: {e}")))?;
     }
+    // The renderer died: report it.
+    {
+        let on = popups_on.clone();
+        let me = me.clone();
+        let popups = popups.clone();
+        let handler = webview2_com::ProcessFailedEventHandler::create(Box::new(move |_, _| {
+            if let (true, Some(h)) = (on.get(), me.get()) {
+                popups
+                    .borrow_mut()
+                    .feed
+                    .push(crate::engine::PopupEvent::Crashed(h));
+            }
+            Ok(())
+        }));
+        let mut token: i64 = 0;
+        unsafe { web_view.add_ProcessFailed(&handler, &raw mut token) }
+            .map_err(|e| EngineError::Other(format!("add_ProcessFailed: {e}")))?;
+    }
     // `alert`/`confirm`/`prompt`.
     {
         let on = popups_on.clone();
@@ -1430,6 +1448,12 @@ impl Engine for Webview2Backend {
             })
         }
         .map_err(|e| EngineError::Other(format!("SetBounds: {e}")))?;
+        Ok(())
+    }
+
+    fn crash(&mut self, page: PageHandle) -> EngineResult<()> {
+        let web_view = self.page_mut(page)?.web_view.clone();
+        let _ = call_cdp(&web_view, "Page.crash", "{}");
         Ok(())
     }
 

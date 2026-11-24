@@ -416,6 +416,32 @@ pub(super) fn handle_cursor(daemon: &Daemon, req: &Request, kind: &str) -> Strin
         Err(e) => format_daemon_error(&e),
     }
 }
+/// `vs_debug_crash <page>`: kill the page's web content process, for
+/// crash-handling tests. Only with `VS_ALLOW_CRASH=1` in the daemon's
+/// environment.
+pub(super) fn handle_debug_crash(daemon: &Daemon, req: &Request) -> String {
+    if std::env::var("VS_ALLOW_CRASH").as_deref() != Ok("1") {
+        return format_error(
+            ErrorCode::BadRequest,
+            vec!["vs_debug_crash: needs VS_ALLOW_CRASH=1".into()],
+        );
+    }
+    let session_id = match require_session(req) {
+        Ok(s) => s,
+        Err(msg) => return format_error(ErrorCode::BadRequest, vec![msg]),
+    };
+    let Some(page_id) = req.args.first() else {
+        return format_error(
+            ErrorCode::BadRequest,
+            vec!["vs_debug_crash: missing page id".into()],
+        );
+    };
+    match daemon.debug_crash(&session_id, page_id) {
+        Ok(()) => ResponseHead::ok(StateToken::ZERO).encode(),
+        Err(e) => format_daemon_error(&e),
+    }
+}
+
 /// `vs_cookies <page> list|clear|set <base64 JSON array>`: the jar of
 /// the page's data store, as one JSON array line, after the change.
 pub(super) fn handle_cookies(daemon: &Daemon, req: &Request) -> String {

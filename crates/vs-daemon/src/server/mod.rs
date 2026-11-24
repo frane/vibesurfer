@@ -176,6 +176,7 @@ pub fn dispatch(daemon: &Daemon, req: &Request) -> String {
         "vs_hover_at" => engine_ops::handle_cursor(daemon, req, "hover_at"),
         "vs_wheel" => engine_ops::handle_cursor(daemon, req, "wheel"),
         "vs_cookies" => engine_ops::handle_cookies(daemon, req),
+        "vs_debug_crash" => engine_ops::handle_debug_crash(daemon, req),
         "vs_drag" => engine_ops::handle_cursor(daemon, req, "drag"),
         "vs_type" => engine_ops::handle_type(daemon, req),
         "vs_prompt_input_queue" => engine_ops::handle_prompt_input_queue(daemon, req),

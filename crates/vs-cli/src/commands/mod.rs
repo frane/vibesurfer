@@ -378,6 +378,10 @@ pub enum Command {
         #[arg(long, short = 'M', default_value = "human")]
         mode: String,
     },
+    /// Kill the page's web content process (crash-handling tests; the
+    /// daemon must run with VS_ALLOW_CRASH=1).
+    #[command(hide = true)]
+    DebugCrash { page: String },
     /// The page's cookie jar (its data store), HttpOnly included:
     /// `list`, `clear`, or `set '<JSON array>'` of {name, value,
     /// domain, path, expires_unix?, secure, http_only, same_site?}.
@@ -1180,6 +1184,12 @@ impl Command {
                     .arg(y.to_string())
                     .flag_value("session", s)
                     .flag_value("mode", mode.clone())
+            }
+            Self::DebugCrash { page } => {
+                let s = require_session(session_id)?;
+                Request::new("vs_debug_crash")
+                    .arg(page.clone())
+                    .flag_value("session", s)
             }
             Self::Cookies { page, op, data } => {
                 use base64::Engine as _;

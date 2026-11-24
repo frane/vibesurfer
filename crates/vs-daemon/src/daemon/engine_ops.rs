@@ -191,6 +191,13 @@ impl Daemon {
         })
     }
 
+    /// Kill a page's web content process (`vs_debug_crash`).
+    pub fn debug_crash(&self, session_id: &str, page_id: &str) -> Result<()> {
+        let engine_handle = self.engine_handle_for(session_id, page_id)?;
+        self.inner.engine.crash(engine_handle)?;
+        Ok(())
+    }
+
     /// Page zoom for `vs_viewport --zoom` (see `Engine::set_zoom`).
     pub fn zoom(&self, session_id: &str, page_id: &str, zoom: f64) -> Result<()> {
         let arg = format!("zoom={zoom}");
