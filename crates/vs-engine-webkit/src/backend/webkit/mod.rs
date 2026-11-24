@@ -1125,6 +1125,12 @@ impl Engine for WkBackend {
         Ok(())
     }
 
+    fn set_zoom(&mut self, page: PageHandle, zoom: f64) -> EngineResult<()> {
+        let p = self.page_mut(page)?;
+        let _: () = unsafe { objc2::msg_send![&*p.web_view, setPageZoom: zoom] };
+        Ok(())
+    }
+
     fn cookies(
         &mut self,
         page: PageHandle,

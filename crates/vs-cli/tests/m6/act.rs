@@ -1081,3 +1081,39 @@ fn cell_click_variants_are_trusted() {
         );
     }
 }
+
+// viewport --zoom: a 390 px wide view at zoom 390/980 lays the page out
+// 980 CSS px wide (the mobile default without a viewport tag), and a
+// click at view coordinates lands on what is drawn there.
+#[test]
+fn cell_viewport_zoom_lays_out_wider() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, token) = open_fixture(&ctx, "/click-variants.html");
+        let r = ctx.vs(&["viewport", &page, "390x664", "--dpr", "1"]);
+        assert_ok("viewport", &r);
+        let zoom = 390.0 / 980.0;
+        let r = ctx.vs(&["viewport", &page, "keep", "--zoom", &zoom.to_string()]);
+        assert_ok("zoom", &r);
+        settle(200);
+        let w: f64 = eval_js(&ctx, &page, "String(window.innerWidth)")
+            .trim()
+            .parse()
+            .unwrap_or(0.0);
+        assert!((975.0..=985.0).contains(&w), "innerWidth {w}");
+        // Button a is at CSS (40..200, 40..100): its middle, in view px.
+        let (x, y) = (120.0 * zoom, 70.0 * zoom);
+        let r = ctx.vs(&[
+            "click-at",
+            &page,
+            &x.to_string(),
+            &y.to_string(),
+            &format!("--token={token}"),
+            "--mode=robotic",
+        ]);
+        assert_ok("click", &r);
+        settle(150);
+        let ev = eval_js(&ctx, &page, "window.__ev.join(' ')");
+        assert!(ev.contains("click:a:0:1:true"), "{ev}");
+    }
+}

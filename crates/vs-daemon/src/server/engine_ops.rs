@@ -217,6 +217,20 @@ pub(super) fn handle_viewport(daemon: &Daemon, req: &Request) -> String {
             vec!["vs_viewport: missing preset|WxH".into()],
         );
     };
+    if let Some(z) = flag_value(req, "zoom") {
+        let Some(zoom) = z.parse::<f64>().ok().filter(|z| *z > 0.0 && *z <= 10.0) else {
+            return format_error(
+                ErrorCode::BadRequest,
+                vec![format!("vs_viewport: bad --zoom={z:?}")],
+            );
+        };
+        if let Err(e) = daemon.zoom(&session_id, &page_id, zoom) {
+            return format_daemon_error(&e);
+        }
+        if spec == "keep" {
+            return ResponseHead::ok(StateToken::ZERO).encode();
+        }
+    }
     let dpr: u32 = flag_value(req, "dpr")
         .and_then(|s| s.parse().ok())
         .unwrap_or(2);

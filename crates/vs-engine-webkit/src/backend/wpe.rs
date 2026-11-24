@@ -633,6 +633,12 @@ impl Engine for WpeBackend {
         }
     }
 
+    fn set_zoom(&mut self, page: PageHandle, zoom: f64) -> EngineResult<()> {
+        let p = self.page_mut(page)?;
+        p.web_view.set_zoom_level(zoom);
+        Ok(())
+    }
+
     fn cookies(
         &mut self,
         page: PageHandle,

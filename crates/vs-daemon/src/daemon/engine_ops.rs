@@ -191,6 +191,19 @@ impl Daemon {
         })
     }
 
+    /// Page zoom for `vs_viewport --zoom` (see `Engine::set_zoom`).
+    pub fn zoom(&self, session_id: &str, page_id: &str, zoom: f64) -> Result<()> {
+        let arg = format!("zoom={zoom}");
+        let ctx = AuditCtx::new("vs_viewport", session_id)
+            .with_page(page_id)
+            .with_args(arg.clone(), tokens::args_hash("vs_viewport", &[arg]));
+        self.audit_call(ctx, |_ctx| {
+            let engine_handle = self.engine_handle_for(session_id, page_id)?;
+            self.inner.engine.set_zoom(engine_handle, zoom)?;
+            Ok(())
+        })
+    }
+
     pub fn download_list(&self, session_id: &str, page_id: &str) -> Result<DownloadListResponse> {
         let ctx = AuditCtx::new("vs_download", session_id)
             .with_page(page_id)

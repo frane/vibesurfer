@@ -376,6 +376,7 @@ pub fn build_cli(name: &str, args: &Value) -> Result<(Cli, CallOpts)> {
             page: req_str(args, "page")?,
             spec: req_str(args, "spec")?,
             dpr: opt_u32(args, "dpr").unwrap_or(2),
+            zoom: args.get("zoom").and_then(Value::as_f64),
         },
         "vs_layout" => {
             let refs_arr = args

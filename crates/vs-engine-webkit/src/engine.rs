@@ -778,6 +778,16 @@ pub trait Engine {
         Ok(Vec::new())
     }
 
+    /// Page zoom: CSS px are drawn `zoom` view px wide, so the page lays
+    /// out `view width / zoom` CSS px wide (a mobile layout viewport,
+    /// fit to the screen). 1.0 is normal.
+    fn set_zoom(&mut self, _page: PageHandle, _zoom: f64) -> EngineResult<()> {
+        Err(EngineError::Unsupported {
+            engine: "unknown",
+            primitive: "zoom",
+        })
+    }
+
     /// Read, add to or empty the cookie jar `page` uses (its data
     /// store: every page of an isolated session shares it), HttpOnly
     /// cookies included. Returns the jar after the change.

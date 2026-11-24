@@ -279,9 +279,13 @@ pub enum Command {
     #[command(visible_alias = "vp")]
     Viewport {
         page: String,
+        /// Preset or WxH; `keep` with --zoom changes only the zoom.
         spec: String,
         #[arg(long, default_value_t = 2)]
         dpr: u32,
+        /// Page zoom: the page lays out `width / zoom` CSS px wide.
+        #[arg(long)]
+        zoom: Option<f64>,
     },
     /// 18. Compute layout boxes for one or more refs.
     #[command(visible_alias = "lay")]
@@ -1052,13 +1056,22 @@ impl Command {
                 }
                 req.flag_value("timeout-ms", timeout_ms.to_string())
             }
-            Self::Viewport { page, spec, dpr } => {
+            Self::Viewport {
+                page,
+                spec,
+                dpr,
+                zoom,
+            } => {
                 let s = require_session(session_id)?;
-                Request::new("vs_viewport")
+                let mut r = Request::new("vs_viewport")
                     .arg(page.clone())
                     .arg(spec.clone())
                     .flag_value("session", s)
-                    .flag_value("dpr", dpr.to_string())
+                    .flag_value("dpr", dpr.to_string());
+                if let Some(z) = zoom {
+                    r = r.flag_value("zoom", z.to_string());
+                }
+                r
             }
             Self::Layout { page, refs } => {
                 let s = require_session(session_id)?;

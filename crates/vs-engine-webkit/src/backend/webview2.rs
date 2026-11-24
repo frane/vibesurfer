@@ -1433,6 +1433,12 @@ impl Engine for Webview2Backend {
         Ok(())
     }
 
+    fn set_zoom(&mut self, page: PageHandle, zoom: f64) -> EngineResult<()> {
+        let p = self.page_mut(page)?;
+        unsafe { p.controller.SetZoomFactor(zoom) }
+            .map_err(|e| EngineError::Other(format!("SetZoomFactor: {e}")))
+    }
+
     fn cookies(
         &mut self,
         page: PageHandle,
