@@ -1,15 +1,14 @@
 //! The script half of a native drop. Every engine delivers the drop as
-//! trusted OS input; this covers what the OS pasteboard cannot carry:
-//! string items of MIME types it has no slot for, strings next to files
-//! (WebKit shows a file drag only as `Files`), and the files themselves
-//! where the engine delivers none (WebKitGTK from an X11 source).
+//! trusted OS input; this keeps the drop's data on its `DataTransfer`
+//! the way Playwright's drop does: string items of MIME types the OS
+//! pasteboard has no slot for, strings next to files (WebKit shows a
+//! file drag only as `Files`), every string after the event ends (a
+//! native `DataTransfer` empties then), and the files themselves where
+//! the engine delivers none (WebKitGTK from an X11 source).
 
 use base64::Engine as _;
 
 use crate::engine::DropData;
-
-/// MIME types a native drop carries on every engine's pasteboard.
-pub(crate) const NATIVE_DROP_TYPES: [&str; 3] = ["text/plain", "text/html", "text/uri-list"];
 
 /// Files larger than this are left to the engine alone.
 const FALLBACK_FILE_LIMIT: u64 = 64 << 20;
@@ -20,15 +19,12 @@ const SHIM: &str = include_str!("drop_shim.js");
 pub(crate) const RESTORE_JS: &str = "(window.__vsDropRestore && window.__vsDropRestore(), 'ok')";
 
 /// The script to run before the native drop, or `None` when the drop
-/// needs no help.
+/// carries nothing.
 pub(crate) fn install_js(data: &DropData) -> Option<String> {
-    let with_files = !data.files.is_empty();
     let extra: serde_json::Map<String, serde_json::Value> = data
         .items
         .iter()
-        .map(|(k, v)| (k.to_ascii_lowercase(), v.clone()))
-        .filter(|(k, _)| with_files || !NATIVE_DROP_TYPES.contains(&k.as_str()))
-        .map(|(k, v)| (k, serde_json::Value::String(v)))
+        .map(|(k, v)| (k.to_ascii_lowercase(), serde_json::Value::String(v.clone())))
         .collect();
     let files: Vec<serde_json::Value> = data.files.iter().filter_map(|p| file_spec(p)).collect();
     if extra.is_empty() && files.is_empty() {
@@ -89,12 +85,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plain_text_alone_needs_no_script() {
-        let data = DropData {
-            files: vec![],
-            items: vec![("text/plain".into(), "hi".into())],
-        };
-        assert!(install_js(&data).is_none());
+    fn an_empty_drop_needs_no_script() {
+        assert!(install_js(&DropData::default()).is_none());
     }
 
     #[test]
