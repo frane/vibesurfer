@@ -884,3 +884,41 @@ fn cell_dialogs_wait_for_an_answer() {
         }
     }
 }
+
+// (s) A service worker's own responses: one it builds and one it takes
+// from its cache reach the page without a network request; the proxy
+// reports each as an `sw` line carrying the request and the response.
+#[test]
+fn cell_intercept_reports_service_worker_responses() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let s = intercept_session(&ctx);
+        let r = sv(&ctx, &s, &["open", &purl(&ctx, "/sw.html")]);
+        assert_ok("open", &r);
+        let page = body_first(&r);
+        let got = eventually(&ctx, &s, &page, "String(window.__sw)", "built,from-cache");
+        assert_eq!(got, "built,from-cache");
+        let mut reports = Vec::new();
+        let start = Instant::now();
+        while reports.len() < 2 && start.elapsed() < Duration::from_secs(10) {
+            let r = sv(&ctx, &s, &["net", "poll", "--wait-ms", "300"]);
+            assert_ok("net poll", &r);
+            for l in r.stdout.lines() {
+                if let Some(b) = l.strip_prefix("sw ") {
+                    reports.push(String::from_utf8(B64.decode(b).unwrap()).unwrap());
+                }
+            }
+        }
+        let built = reports
+            .iter()
+            .find(|r| r.contains("/sw-built"))
+            .unwrap_or_else(|| panic!("no report for /sw-built: {reports:?}"));
+        assert!(built.contains("\"status\":201"), "{built}");
+        assert!(built.contains("\"cached\":false"), "{built}");
+        let cached = reports
+            .iter()
+            .find(|r| r.contains("/sw-cached"))
+            .unwrap_or_else(|| panic!("no report for /sw-cached: {reports:?}"));
+        assert!(cached.contains("\"cached\":true"), "{cached}");
+    }
+}

@@ -380,6 +380,12 @@ impl SessionNet {
         self.push(s);
     }
 
+    /// A response a service worker built or took from its cache, as
+    /// its prelude reported it: `sw <base64 JSON>`.
+    fn ev_service_worker(&self, report: &[u8]) {
+        self.push(format!("sw {}\n", B64.encode(report)));
+    }
+
     fn ev_finished(&self, id: u64, size: u64) {
         self.push(format!("fin {id} size={size}\n"));
     }

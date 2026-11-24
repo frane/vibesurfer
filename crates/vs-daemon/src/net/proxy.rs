@@ -175,7 +175,45 @@ fn browser_gone(sock: &TcpStream) -> bool {
 
 /// Record, maybe hold, then answer one request. The browser
 /// connection is consumed: it carries one request.
+/// Prepended to service worker scripts (see `forward`): it reports the
+/// responses a worker builds itself or serves from its cache, which no
+/// network request carries, to [`SW_REPORT_PATH`] on its own origin.
+const SW_PRELUDE: &str = include_str!("sw_prelude.js");
+/// Where the prelude posts its reports. Answered here, never forwarded
+/// and never reported as a request of its own.
+const SW_REPORT_PATH: &str = "/__vs_sw_report__";
+
+fn is_sw_report(req: &ProxyRequest) -> bool {
+    req.method.eq_ignore_ascii_case("POST")
+        && get(&req.headers, "x-vs-sw-report") == Some("1")
+        && parse_http_url(&req.url).is_ok_and(|u| u.path == SW_REPORT_PATH)
+}
+
+fn is_sw_script(req: &ProxyRequest) -> bool {
+    get(&req.headers, "service-worker").is_some_and(|v| v.eq_ignore_ascii_case("script"))
+}
+
+/// `out` as sent upstream: a service worker script is asked for
+/// uncompressed, so the prelude can go in front of it.
+fn without_compression(out: &ProxyRequest, sw: bool) -> std::borrow::Cow<'_, ProxyRequest> {
+    if !sw {
+        return std::borrow::Cow::Borrowed(out);
+    }
+    let mut o = out.clone();
+    o.headers
+        .retain(|(k, _)| !k.eq_ignore_ascii_case("accept-encoding"));
+    std::borrow::Cow::Owned(o)
+}
+
 fn exchange(net: &SessionNet, req: &ProxyRequest, mut conn: BufReader<Stream>) -> io::Result<()> {
+    if is_sw_report(req) {
+        net.ev_service_worker(&req.body);
+        let w = conn.get_mut();
+        write_head(w, "HTTP/1.1 204 No Content", &vec![close_field()])?;
+        w.flush()?;
+        w.finish();
+        return Ok(());
+    }
     let id = net.next_id();
     // Held before it is announced, so an immediate decision finds it.
     let parked = net.routing().then(|| net.park(id, req));
@@ -328,6 +366,29 @@ fn connect(host: &str, port: u16) -> io::Result<TcpStream> {
     Err(last)
 }
 
+/// A `101 Switching Protocols` (WebSocket): hand the head on, then
+/// pipe both ways.
+fn upgrade(
+    net: &SessionNet,
+    id: u64,
+    conn: BufReader<Stream>,
+    up_r: BufReader<Stream>,
+    head: &Head,
+) -> io::Result<()> {
+    let leftover_browser = conn.buffer().to_vec();
+    let leftover_up = up_r.buffer().to_vec();
+    let mut browser = conn.into_inner();
+    let mut upstream = up_r.into_inner();
+    write_head(&mut browser, &head.line, &head.headers)?;
+    browser.write_all(&leftover_up)?;
+    browser.flush()?;
+    net.ev_finished(id, 0);
+    upstream.write_all(&leftover_browser)?;
+    upstream.flush()?;
+    pipe(browser, upstream);
+    Ok(())
+}
+
 fn forward(
     net: &SessionNet,
     id: u64,
@@ -336,6 +397,8 @@ fn forward(
     url_changed: bool,
     mut conn: BufReader<Stream>,
 ) -> io::Result<()> {
+    let sw = is_sw_script(req);
+    let out = &without_compression(out, sw);
     let (mut up_r, status, reason, head) = match send_upstream(&net.mitm, out, url_changed) {
         Ok(v) => v,
         Err(e) => {
@@ -347,21 +410,17 @@ fn forward(
     net.ev_response(id, status, &reason, &req.url, &head.headers);
 
     if status == 101 {
-        let leftover_browser = conn.buffer().to_vec();
-        let leftover_up = up_r.buffer().to_vec();
-        let mut browser = conn.into_inner();
-        let mut upstream = up_r.into_inner();
-        write_head(&mut browser, &head.line, &head.headers)?;
-        browser.write_all(&leftover_up)?;
-        browser.flush()?;
-        net.ev_finished(id, 0);
-        upstream.write_all(&leftover_browser)?;
-        upstream.flush()?;
-        pipe(browser, upstream);
-        return Ok(());
+        return upgrade(net, id, conn, up_r, &head);
     }
 
     let framing = response_framing(&out.method, status, &head.headers);
+    let encoded = get(&head.headers, "content-encoding")
+        .is_some_and(|e| !e.trim().eq_ignore_ascii_case("identity"));
+    let prelude: &[u8] = if sw && status == 200 && !encoded {
+        SW_PRELUDE.as_bytes()
+    } else {
+        b""
+    };
     let mut hs = strip_hop_by_hop(&head.headers);
     let chunked = match framing {
         Framing::Empty => {
@@ -372,7 +431,10 @@ fn forward(
             false
         }
         Framing::Length(n) => {
-            hs.push(("Content-Length".into(), n.to_string()));
+            hs.push((
+                "Content-Length".into(),
+                (n + prelude.len() as u64).to_string(),
+            ));
             false
         }
         Framing::Chunked | Framing::Close => {
@@ -388,6 +450,13 @@ fn forward(
     };
     let writer = conn.get_mut();
     write_head(writer, &status_line, &hs)?;
+    if !prelude.is_empty() {
+        if chunked {
+            write_chunk(writer, prelude)?;
+        } else {
+            writer.write_all(prelude)?;
+        }
+    }
 
     let mut kept: Option<Vec<u8>> = Some(Vec::new());
     let copied = copy_body(&mut up_r, framing, &mut |b| {

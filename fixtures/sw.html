@@ -1,0 +1,16 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Service worker fixture</title>
+<p id="state">starting</p>
+<script>
+  window.__sw = 'starting';
+  navigator.serviceWorker.register('/sw-fixture.js').then(() => navigator.serviceWorker.ready).then(async () => {
+    if (!navigator.serviceWorker.controller) {
+      await new Promise((r) => navigator.serviceWorker.addEventListener('controllerchange', r, { once: true }));
+    }
+    const built = await (await fetch('/sw-built')).text();
+    const cached = await (await fetch('/sw-cached')).text();
+    window.__sw = built + ',' + cached;
+    document.getElementById('state').textContent = window.__sw;
+  }).catch((e) => { window.__sw = 'error ' + e; });
+</script>

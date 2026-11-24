@@ -342,7 +342,7 @@ impl Daemon {
         // hardcoded daemon version). Always first, both modes.
         writeln!(
             out,
-            "daemon\tversion={}\tproto=1\tflags=actDeltas,clickVia",
+            "daemon\tversion={}\tproto=1\tflags=actDeltas,clickVia,wheel,cookies",
             env!("CARGO_PKG_VERSION")
         )
         .ok();
