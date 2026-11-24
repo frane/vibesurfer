@@ -67,8 +67,16 @@ pub(super) fn eval_js_string_in(
             *slot_for_block.borrow_mut() = Some(Ok(String::new()));
             return;
         }
-        let s: &NSString = unsafe { &*(result as *const NSString) };
-        *slot_for_block.borrow_mut() = Some(Ok(s.to_string()));
+        // Callers ask for strings, but a script can return anything:
+        // take a non-string by its description rather than crash.
+        let obj: &AnyObject = unsafe { &*result };
+        let text = if let Some(s) = obj.downcast_ref::<NSString>() {
+            s.to_string()
+        } else {
+            let d: objc2::rc::Retained<NSString> = unsafe { objc2::msg_send![obj, description] };
+            d.to_string()
+        };
+        *slot_for_block.borrow_mut() = Some(Ok(text));
     });
     let ns_js = NSString::from_str(js);
     match frame {
@@ -86,8 +94,26 @@ pub(super) fn eval_js_string_in(
             );
         },
     }
-    let slot_check = slot.clone();
-    let ok = run_loop_until(move || slot_check.borrow().is_some(), budget);
+    // The budget leaves out time a dialog is up: the script that opened
+    // it cannot finish before it is answered.
+    let start = std::time::Instant::now();
+    let dialogs_before = super::dialogs::open_time();
+    let mut ok = false;
+    loop {
+        let allowed = budget + super::dialogs::open_time().saturating_sub(dialogs_before);
+        let left = allowed.saturating_sub(start.elapsed());
+        if left.is_zero() {
+            break;
+        }
+        let slot_check = slot.clone();
+        if run_loop_until(
+            move || slot_check.borrow().is_some(),
+            left.min(Duration::from_millis(200)),
+        ) {
+            ok = true;
+            break;
+        }
+    }
     if !ok {
         return Err(EngineError::Timeout {
             budget,

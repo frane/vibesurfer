@@ -11,6 +11,7 @@ All notable changes to vibesurfer are recorded here. The format follows
 ### Fixed
 - Linux (and any engine whose network stack asks a proxy for `ws://` URLs): WebSockets in intercept sessions failed; the proxy now forwards a handshake asked as `GET ws://…` or `wss://…`. Cell `cell_intercept_passes_websockets`, on a named host and on loopback.
 - macOS before 26: cookies a loopback page's responses set never reached the jar (`setCookies:` is macOS 26+); they are stored one at a time. The Mac engine tests now run on macOS 15 as well as the latest.
+- macOS: an action whose script opens a dialog no longer times out while the dialog waits for its answer; the eval budget leaves out the time a dialog is up. A script returning something other than a string no longer crashes the daemon.
 
 ## [0.2.19] - 2026-11-24
 
