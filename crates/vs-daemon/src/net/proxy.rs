@@ -111,15 +111,14 @@ fn handle_conn(net: &SessionNet, stream: TcpStream) -> io::Result<()> {
             }
         }
 
-        let lower = target.to_ascii_lowercase();
-        let url = match &tunnel {
-            _ if lower.starts_with("http://") || lower.starts_with("https://") => target.clone(),
-            Some(t) => format!(
+        let url = match (absolute_http(&target), &tunnel) {
+            (Some(url), _) => url,
+            (None, Some(t)) => format!(
                 "{}://{}{target}",
                 if t.https { "https" } else { "http" },
                 t.authority
             ),
-            None => match head.get("host") {
+            (None, None) => match head.get("host") {
                 Some(h) if target.starts_with('/') => format!("http://{h}{target}"),
                 _ => return Err(http::bad("request target is not an http URL")),
             },
@@ -302,6 +301,19 @@ fn abort(conn: &mut Stream, plain: bool) {
 
 fn close_field() -> (String, String) {
     ("Connection".into(), "close".into())
+}
+
+/// An absolute-form request target as the http(s) URL to fetch. libsoup
+/// (WebKitGTK) asks a proxy for a WebSocket as `GET ws://host/path`;
+/// the handshake is plain HTTP, so `ws`/`wss` map to `http`/`https`.
+pub(super) fn absolute_http(target: &str) -> Option<String> {
+    let (scheme, rest) = target.split_once("://")?;
+    let scheme = match scheme.to_ascii_lowercase().as_str() {
+        "http" | "ws" => "http",
+        "https" | "wss" => "https",
+        _ => return None,
+    };
+    Some(format!("{scheme}://{rest}"))
 }
 
 /// Upgrade request (WebSocket): keep `Connection`/`Upgrade` upstream.

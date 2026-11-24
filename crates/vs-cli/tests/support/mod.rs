@@ -9,6 +9,7 @@
 
 pub mod fixture_server;
 pub mod hit_server;
+pub mod ws_echo;
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};

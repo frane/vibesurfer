@@ -100,6 +100,10 @@ fn handle(mut req: Request) -> std::io::Result<()> {
     let method = req.method().clone();
     let path = url.split('?').next().unwrap_or(&url).to_string();
 
+    if path == "/ws" {
+        super::ws_echo::accept(req);
+        return Ok(());
+    }
     if path == "/login" && matches!(method, Method::Post) {
         return handle_login(req);
     }

@@ -975,3 +975,32 @@ fn cell_crash_is_reported() {
         assert!(seen, "no crash line for {page}");
     }
 }
+
+// (w) WebSockets pass through an intercept session's proxy, on a named
+// host and on loopback (WebKitGTK and WebView2 proxy loopback too).
+#[test]
+fn cell_intercept_passes_websockets() {
+    for (_, loopback) in each_available_backend().flat_map(|b| [(b, false), (b, true)]) {
+        let ctx = TestContext::start();
+        let s = intercept_session(&ctx);
+        let r = sv(&ctx, &s, &["open", &hurl(&ctx, loopback, "/net.html")]);
+        assert_ok("open", &r);
+        let page = body_first(&r);
+        eval(
+            &ctx,
+            &s,
+            &page,
+            "(() => { window.__ws = 'pending'; const w = new WebSocket(`ws://${location.host}/ws`); w.onopen = () => w.send('hi'); w.onmessage = (e) => { window.__ws = e.data; }; w.onerror = () => { window.__ws = 'error'; }; return 'ok'; })()",
+        );
+        let got = eventually(&ctx, &s, &page, "String(window.__ws)", "echo:hi");
+        if !got.contains("echo:hi") {
+            let r = sv(&ctx, &s, &["net", "poll", "--wait-ms", "0"]);
+            let log =
+                std::fs::read_to_string(ctx.home_path().join("daemon.log")).unwrap_or_default();
+            panic!(
+                "loopback={loopback}: {got}\nproxy events:\n{}\ndaemon log:\n{log}",
+                r.stdout
+            );
+        }
+    }
+}

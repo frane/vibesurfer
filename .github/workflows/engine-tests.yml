@@ -19,8 +19,15 @@ env:
 jobs:
 
   mac:
-    name: Mac (real WKWebView)
-    runs-on: macos-latest
+    name: ${{ matrix.os == 'macos-latest' && 'Mac (real WKWebView)' || format('Mac {0} (real WKWebView)', matrix.os) }}
+    # macos-15 too: WebKit differs by macOS release (the loopback
+    # handler's cookie sync failed on 15 while 26 passed), and the
+    # testsurfer bench runs on 15.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-15]
+    runs-on: ${{ matrix.os }}
     # 30, matching Linux. The suite grew past what 20 allowed: the Mac
     # job ran the whole 89-cell WKWebView pass and was then cut off
     # mid-"Workspace tests", which reads as a cancelled gate rather
@@ -42,6 +49,7 @@ jobs:
       - name: M6 cell suite (sequential, real WKWebView)
         run: cargo test --test m6 -- --test-threads=1
       - name: Workspace tests
+        if: matrix.os == 'macos-latest'
         run: cargo test --workspace -- --test-threads=1
 
   linux:

@@ -568,3 +568,19 @@ fn a_held_request_the_browser_drops_fails_as_cancelled() {
     assert!(!net.decide(id, Decision::Continue(Overrides::default())));
     net.shutdown();
 }
+
+#[test]
+fn websocket_targets_are_fetched_over_http() {
+    use super::proxy::absolute_http;
+    assert_eq!(
+        absolute_http("ws://h:1/ws").as_deref(),
+        Some("http://h:1/ws")
+    );
+    assert_eq!(
+        absolute_http("WSS://h/ws?a").as_deref(),
+        Some("https://h/ws?a")
+    );
+    assert_eq!(absolute_http("http://h/").as_deref(), Some("http://h/"));
+    assert_eq!(absolute_http("/path"), None);
+    assert_eq!(absolute_http("ftp://h/"), None);
+}
