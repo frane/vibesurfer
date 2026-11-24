@@ -751,6 +751,9 @@ pub enum RecordSub {
         /// default downscale. Much larger and heavier.
         #[arg(long)]
         retina: bool,
+        /// mp4 (H.264, the default) or webm (VP8).
+        #[arg(long)]
+        format: Option<String>,
     },
     /// Stop recording a page, flush the encoder, print the file path.
     Stop { page: String },
@@ -1376,6 +1379,7 @@ impl Command {
                         fps,
                         width,
                         retina,
+                        format,
                     } => {
                         let mut r = Request::new("vs_record")
                             .arg("start")
@@ -1387,6 +1391,9 @@ impl Command {
                         }
                         if *retina {
                             r = r.flag("retina");
+                        }
+                        if let Some(f) = format {
+                            r = r.flag_value("format", f.clone());
                         }
                         r
                     }

@@ -29,6 +29,11 @@
     clippy::map_unwrap_or
 )]
 
+#[cfg(feature = "webm")]
+mod webm;
+#[cfg(feature = "webm")]
+pub use webm::WebmRecorder;
+
 use std::io::{Seek as _, Write};
 use std::path::Path;
 
@@ -637,6 +642,45 @@ impl H264Recorder {
                 .finish_in_place()
                 .map_err(|e| RecordError::Encode(format!("mp4 finish: {e}"))),
             None => Err(RecordError::Frame("no frames encoded")),
+        }
+    }
+}
+
+/// A recorder chosen by the output file's extension: `.webm` (VP8, with
+/// the `webm` feature) or MP4 (H.264) otherwise.
+pub enum VideoRecorder {
+    Mp4(Box<H264Recorder>),
+    #[cfg(feature = "webm")]
+    Webm(WebmRecorder),
+}
+
+impl VideoRecorder {
+    pub fn create(path: &Path, width: usize, height: usize, fps: u32) -> Result<Self> {
+        #[cfg(feature = "webm")]
+        if path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("webm"))
+        {
+            return Ok(Self::Webm(WebmRecorder::create(path, width, height, fps)?));
+        }
+        Ok(Self::Mp4(Box::new(H264Recorder::create(
+            path, width, height, fps,
+        )?)))
+    }
+
+    pub fn push_rgb(&mut self, w: usize, h: usize, rgb: &[u8]) -> Result<()> {
+        match self {
+            Self::Mp4(r) => r.push_rgb(w, h, rgb),
+            #[cfg(feature = "webm")]
+            Self::Webm(r) => r.push_rgb(w, h, rgb),
+        }
+    }
+
+    pub fn finish(self) -> Result<()> {
+        match self {
+            Self::Mp4(r) => r.finish(),
+            #[cfg(feature = "webm")]
+            Self::Webm(r) => r.finish(),
         }
     }
 }

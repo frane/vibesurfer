@@ -50,6 +50,7 @@ impl Daemon {
         page_id: &str,
         fps: u32,
         max_width: u32,
+        webm: bool,
     ) -> Result<PathBuf> {
         self.require_session(session_id)?;
         let handle = self.engine_handle_for(session_id, page_id)?;
@@ -65,7 +66,8 @@ impl Daemon {
             )));
         }
         std::fs::create_dir_all(&self.inner.captures_dir).map_err(DaemonError::Io)?;
-        let out = self.inner.captures_dir.join(format!("rec-{page_id}.mp4"));
+        let ext = if webm { "webm" } else { "mp4" };
+        let out = self.inner.captures_dir.join(format!("rec-{page_id}.{ext}"));
         let fps = fps.clamp(1, 30);
 
         // Prefer inline recording. The engine keeps the sender and emits
@@ -255,7 +257,7 @@ fn record_inline(
     // (e.g. a 2 s pause) isn't decoded on every output tick.
     let step_ms = u128::from(1000 / u64::from(fps.max(1)));
     let end_ms = caps.last().map_or(0, |c| c.t_ms);
-    let mut rec: Option<vs_record::H264Recorder> = None;
+    let mut rec: Option<vs_record::VideoRecorder> = None;
     let mut src = 0usize;
     let mut cached_i: Option<usize> = None;
     let mut base: Vec<u8> = Vec::new();
@@ -286,7 +288,7 @@ fn record_inline(
         if rec.is_none() {
             rec = Some(
                 // Offline encode: a slower preset for sharper text/edges.
-                vs_record::H264Recorder::create(out, bw, bh, fps).map_err(|e| e.to_string())?,
+                vs_record::VideoRecorder::create(out, bw, bh, fps).map_err(|e| e.to_string())?,
             );
         }
         if let Some(r) = rec.as_mut() {
@@ -321,7 +323,7 @@ fn record_polling(
     stop: &AtomicBool,
 ) -> std::result::Result<PathBuf, String> {
     let interval = Duration::from_millis(1000 / u64::from(fps));
-    let mut rec: Option<vs_record::H264Recorder> = None;
+    let mut rec: Option<vs_record::VideoRecorder> = None;
     let mut misses = 0u32;
     let give_up_after = fps * 5;
     let max_frames = u64::from(fps) * 60 * 30;
@@ -341,7 +343,8 @@ fn record_polling(
             continue;
         };
         if rec.is_none() {
-            rec = Some(vs_record::H264Recorder::create(out, w, h, fps).map_err(|e| e.to_string())?);
+            rec =
+                Some(vs_record::VideoRecorder::create(out, w, h, fps).map_err(|e| e.to_string())?);
         }
         if let Some(r) = rec.as_mut() {
             r.push_rgb(w, h, &rgb).map_err(|e| e.to_string())?;

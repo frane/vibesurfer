@@ -51,6 +51,32 @@ define_class!(
             DRAG_SUPPRESSED.with(|f| f.set(true));
             std::ptr::null_mut()
         }
+
+        /// No native context menu, as on the other engines: the page
+        /// still gets its `contextmenu` event, but a menu would run a
+        /// modal tracking loop on the main thread and stall every page.
+        /// An empty menu shows nothing; the cancel ends tracking in case
+        /// AppKit enters it anyway.
+        #[unsafe(method(willOpenMenu:withEvent:))]
+        fn will_open_menu(&self, menu: *mut AnyObject, _event: *mut AnyObject) {
+            if menu.is_null() {
+                return;
+            }
+            unsafe {
+                let _: () = msg_send![menu, removeAllItems];
+                let modes: Retained<AnyObject> = msg_send![
+                    objc2::class!(NSArray),
+                    arrayWithObject: objc2_foundation::NSRunLoopCommonModes
+                ];
+                let _: () = msg_send![
+                    menu,
+                    performSelector: objc2::sel!(cancelTrackingWithoutAnimation),
+                    withObject: std::ptr::null_mut::<AnyObject>(),
+                    afterDelay: 0.0f64,
+                    inModes: &*modes
+                ];
+            }
+        }
     }
 );
 

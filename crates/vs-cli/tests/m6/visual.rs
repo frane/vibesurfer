@@ -168,3 +168,44 @@ fn cell_layout() {
         );
     }
 }
+
+// 31c. vs record --format=webm and the default MP4: a recording of a
+// page holds at least one frame and has the container's signature.
+#[test]
+fn cell_record_formats() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/static.html");
+        for (fmt, magic, at) in [
+            ("webm", &[0x1A, 0x45, 0xDF, 0xA3][..], 0),
+            ("mp4", &b"ftyp"[..], 4),
+        ] {
+            let r = ctx.vs(&["record", "start", &page, "--fps", "10", "--format", fmt]);
+            assert_ok("record start", &r);
+            for i in 0..6 {
+                let _ = ctx.vs(&[
+                    "move-to",
+                    &page,
+                    &format!("{}", 40 + i * 30),
+                    "60",
+                    "-M",
+                    "careful",
+                ]);
+                settle(120);
+            }
+            let r = ctx.vs(&["record", "stop", &page]);
+            assert_ok("record stop", &r);
+            let body = body_rest(&r);
+            let path = body
+                .lines()
+                .find_map(|l| l.strip_prefix("path\t"))
+                .unwrap_or(body.lines().next().unwrap_or(""))
+                .trim()
+                .to_string();
+            assert!(path.ends_with(&format!(".{fmt}")), "{fmt}: path {path}");
+            let bytes = std::fs::read(&path).expect("read recording");
+            assert_eq!(&bytes[at..at + magic.len()], magic, "{fmt}: bad signature");
+            assert!(bytes.len() > 500, "{fmt}: only {} bytes", bytes.len());
+        }
+    }
+}

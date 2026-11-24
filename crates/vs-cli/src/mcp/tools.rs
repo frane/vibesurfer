@@ -121,6 +121,7 @@ fn base_tools() -> Vec<Value> {
             ("fps", uint_prop("Frames per second, clamped 1..=30. Default 24.", false)),
             ("width", uint_prop("Downscale width in px. Smaller = faster encode, lighter files. Default 960. Ignored with retina.", false)),
             ("retina", bool_prop("Record at full device (retina) resolution instead of the downscale. Much larger and heavier.", false)),
+            ("format", str_prop("mp4 (default) or webm (VP8).", false)),
         ])),
         tool("vs_record_stop", "Stop recording a page, flush the encoder, and return `path\\t<mp4 file>`.", obj(&[
             ("page", str_prop("Page id.", true)),
@@ -524,6 +525,7 @@ pub fn build_cli(name: &str, args: &Value) -> Result<(Cli, CallOpts)> {
                 fps: opt_u32(args, "fps").unwrap_or(24),
                 width: opt_u32(args, "width"),
                 retina: opt_bool(args, "retina").unwrap_or(false),
+                format: opt_str(args, "format"),
             },
         },
         "vs_record_stop" => Command::Record {

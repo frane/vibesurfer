@@ -1,0 +1,43 @@
+name: libvpx
+description: Static libvpx for vs-record's WebM recordings, built once per target and cached, and the env vars its -sys crate reads.
+inputs:
+  target:
+    description: Rust target triple
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Cache libvpx
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/libvpx-${{ inputs.target }}
+        key: libvpx-1.15.2-${{ inputs.target }}-v2
+    - name: Build libvpx (macOS, Linux)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        scripts/build-libvpx.sh "${{ inputs.target }}" "$RUNNER_TEMP/libvpx-${{ inputs.target }}"
+    - name: Build libvpx (Windows, vcpkg)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $prefix = "$env:RUNNER_TEMP\libvpx-${{ inputs.target }}"
+        if (-not (Test-Path "$prefix\lib\libvpx.lib")) {
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install libvpx:x64-windows-static-md
+          $root = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static-md"
+          New-Item -ItemType Directory -Force "$prefix\lib", "$prefix\include" | Out-Null
+          $lib = Get-ChildItem "$root\lib" -Filter "vpx*.lib" | Select-Object -First 1
+          Copy-Item $lib.FullName "$prefix\lib\libvpx.lib"
+          Copy-Item -Recurse -Force "$root\include\vpx" "$prefix\include\"
+        }
+    - name: Point vs-record at it
+      shell: bash
+      run: |
+        prefix="$RUNNER_TEMP/libvpx-${{ inputs.target }}"
+        if [ "$RUNNER_OS" = Windows ]; then prefix="$(cygpath -m "$prefix")"; fi
+        {
+          echo "VPX_LIB_DIR=$prefix/lib"
+          echo "VPX_INCLUDE_DIR=$prefix/include"
+          echo "VPX_VERSION=1.15.2"
+          echo "VPX_STATIC=1"
+        } >> "$GITHUB_ENV"

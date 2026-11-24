@@ -67,7 +67,7 @@ git clone https://github.com/frane/vibesurfer && cd vibesurfer
 cargo install --path crates/vs-cli
 ```
 
-Linux needs WebKitGTK 6. Windows needs the WebView2 runtime (already on Windows 11, available for Windows 10 from Microsoft).
+Linux needs WebKitGTK 6. Windows needs the WebView2 runtime (already on Windows 11, available for Windows 10 from Microsoft). Building with Cargo also needs libvpx and clang for WebM recordings (`brew install libvpx`; `apt install libvpx-dev libclang-dev`; `vcpkg install libvpx` on Windows with `VPX_LIB_DIR` set). The prebuilt binaries carry libvpx inside.
 
 ## Wire it into your agent
 
@@ -210,7 +210,7 @@ The daemon auto-spawns on first call. State, captures, and downloads live under 
 
 34 wire primitives total — the 19 core primitives are specified in [docs/PRIMITIVES.md](docs/PRIMITIVES.md); the later additions (`vs_inspect`, the four cursor primitives, trusted `vs_type`, prompt-input and the pending queue, prompt-form, watch, and record) are documented in the bundled [SKILL.md](crates/vs-cli/SKILL.md) and the CHANGELOG.
 
-Two of those exist for the humans next to the agents. `vs prompt-form` asks for credentials through a browser form on a single-use `127.0.0.1` link — the human's password manager fills it, the daemon writes the values into the page, and the agent never sees them. `vs watch` prints the same kind of link for a read-only live view of a page (~1 fps) so you can watch what the agent's browser is doing; in MCP Apps hosts (Claude Desktop, ChatGPT) the view also renders as a panel inside the conversation. `vs record start`/`stop` saves the session to an H.264 MP4 while the agent works: it captures a frame at every mouse move, keystroke, and click and composites the cursor on (a headless snapshot has no OS pointer), so the video shows continuous motion rather than a slideshow. Encoding is real-time via openh264 and the file plays natively everywhere, no ffmpeg. The full wire format with every sigil and edge case is in [docs/PROTOCOL.md](docs/PROTOCOL.md). The per-platform per-primitive verification matrix is in [docs/REALITY_CHECK.md](docs/REALITY_CHECK.md).
+Two of those exist for the humans next to the agents. `vs prompt-form` asks for credentials through a browser form on a single-use `127.0.0.1` link — the human's password manager fills it, the daemon writes the values into the page, and the agent never sees them. `vs watch` prints the same kind of link for a read-only live view of a page (~1 fps) so you can watch what the agent's browser is doing; in MCP Apps hosts (Claude Desktop, ChatGPT) the view also renders as a panel inside the conversation. `vs record start`/`stop` saves the session to an H.264 MP4 (or WebM with `--format webm`) while the agent works: it captures a frame at every mouse move, keystroke, and click and composites the cursor on (a headless snapshot has no OS pointer), so the video shows continuous motion rather than a slideshow. Encoding is real-time via openh264 and the file plays natively everywhere, no ffmpeg. The full wire format with every sigil and edge case is in [docs/PROTOCOL.md](docs/PROTOCOL.md). The per-platform per-primitive verification matrix is in [docs/REALITY_CHECK.md](docs/REALITY_CHECK.md).
 
 ## Configuration
 

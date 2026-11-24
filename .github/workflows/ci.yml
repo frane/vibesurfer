@@ -64,6 +64,9 @@ jobs:
             libgtk-4-dev \
             libsoup-3.0-dev \
             pkg-config
+      - uses: ./.github/actions/libvpx  # vs-record WebM, linked statically
+        with:
+          target: ${{ runner.os == 'Linux' && 'x86_64-unknown-linux-gnu' || runner.os == 'Windows' && 'x86_64-pc-windows-msvc' || 'aarch64-apple-darwin' }}
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
@@ -83,6 +86,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ilammy/setup-nasm@v1  # openh264 (vs-record) builds from source
       - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/libvpx  # vs-record WebM, linked statically
+        with:
+          target: ${{ runner.os == 'Linux' && 'x86_64-unknown-linux-gnu' || runner.os == 'Windows' && 'x86_64-pc-windows-msvc' || 'aarch64-apple-darwin' }}
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --lib --bins --locked
   build:
@@ -105,6 +111,9 @@ jobs:
             libgtk-4-dev \
             libsoup-3.0-dev \
             pkg-config
+      - uses: ./.github/actions/libvpx  # vs-record WebM, linked statically
+        with:
+          target: ${{ runner.os == 'Linux' && 'x86_64-unknown-linux-gnu' || runner.os == 'Windows' && 'x86_64-pc-windows-msvc' || 'aarch64-apple-darwin' }}
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace --all-targets --locked
 
@@ -127,6 +136,9 @@ jobs:
             libgtk-4-dev \
             libsoup-3.0-dev \
             pkg-config
+      - uses: ./.github/actions/libvpx  # vs-record WebM, linked statically
+        with:
+          target: ${{ runner.os == 'Linux' && 'x86_64-unknown-linux-gnu' || runner.os == 'Windows' && 'x86_64-pc-windows-msvc' || 'aarch64-apple-darwin' }}
       - uses: Swatinem/rust-cache@v2
       - name: cargo install --path (no lock → latest deps)
         run: |
@@ -141,6 +153,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ilammy/setup-nasm@v1  # openh264 (vs-record) builds from source
       - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/libvpx  # vs-record WebM, linked statically
+        with:
+          target: ${{ runner.os == 'Linux' && 'x86_64-unknown-linux-gnu' || runner.os == 'Windows' && 'x86_64-pc-windows-msvc' || 'aarch64-apple-darwin' }}
       - uses: Swatinem/rust-cache@v2
       - name: cargo run --example wk_smoke
         run: |

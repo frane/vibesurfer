@@ -17,6 +17,8 @@ All notable changes to vibesurfer are recorded here. The format follows
 - `vs session-open --intercept --ignore-https-errors`: the proxy accepts any upstream certificate (self-signed dev servers). Cell `cell_intercept_ignore_https_errors`.
 - Intercept sessions report the responses a service worker builds or takes from its cache (`sw <base64 JSON>` on `vs net poll`): the proxy puts a small prelude in front of worker scripts. Worker scripts get one that runs code on request and passes console messages on. Cell `cell_intercept_reports_service_worker_responses`.
 - A page whose web content process dies is reported as `crash <page>` on `vs net poll` (`--popups` sessions), on all three engines. Cell `cell_crash_is_reported`.
+- `vs record start --format webm`: VP8 in WebM, the format Playwright writes, encoded with libvpx. Release binaries link libvpx statically; building from source needs libvpx and clang (`brew install libvpx`, `apt install libvpx-dev libclang-dev`). MP4 stays the default. Cell `cell_record_formats`.
+- macOS shows no native context menu either, so a right-click can't stall the main thread in AppKit's menu loop.
 
 ### Fixed
 - macOS wheel input at a point on the view's edge reached nothing.

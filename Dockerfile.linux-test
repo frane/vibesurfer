@@ -58,6 +58,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
         git \
         libwebkit2gtk-4.1-dev \
+        libvpx-dev \
+        libclang-dev \
+        clang \
     && rm -rf /var/lib/apt/lists/*
 
 # Install rustup + the workspace MSRV (1.78). The host runs 1.93;

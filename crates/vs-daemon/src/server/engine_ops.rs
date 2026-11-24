@@ -1405,7 +1405,17 @@ pub(super) fn handle_record(daemon: &Daemon, req: &Request) -> String {
                     .filter(|w| *w > 0)
                     .unwrap_or(960)
             };
-            daemon.record_start(&session_id, &page_id, fps, max_width)
+            let webm = match flag_value(req, "format").as_deref() {
+                None | Some("mp4") => false,
+                Some("webm") => true,
+                Some(f) => {
+                    return format_error(
+                        ErrorCode::BadRequest,
+                        vec![format!("vs_record: bad --format={f:?} (mp4|webm)")],
+                    )
+                }
+            };
+            daemon.record_start(&session_id, &page_id, fps, max_width, webm)
         }
         "stop" => daemon.record_stop(&page_id),
         other => {

@@ -1453,7 +1453,20 @@ impl Engine for Webview2Backend {
 
     fn crash(&mut self, page: PageHandle) -> EngineResult<()> {
         let web_view = self.page_mut(page)?.web_view.clone();
-        let _ = call_cdp(&web_view, "Page.crash", "{}");
+        // Not `call_cdp`: the renderer dies before it answers, so waiting
+        // for the reply would pump messages forever. ProcessFailed
+        // reports the crash.
+        let done = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(|_, _| Ok(())));
+        let m = pwstr_from_str("Page.crash");
+        let p = pwstr_from_str("{}");
+        unsafe {
+            web_view.CallDevToolsProtocolMethod(
+                windows::core::PCWSTR(m.0),
+                windows::core::PCWSTR(p.0),
+                &done,
+            )
+        }
+        .map_err(|e| EngineError::Other(format!("Page.crash: {e}")))?;
         Ok(())
     }
 

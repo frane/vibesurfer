@@ -70,6 +70,9 @@ jobs:
             libsoup-3.0-dev \
             pkg-config
 
+      - uses: ./.github/actions/libvpx  # vs-record WebM, linked statically
+        with:
+          target: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
 
       - name: Resolve version
