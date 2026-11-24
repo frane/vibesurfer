@@ -418,3 +418,73 @@ fn describe_idb(ctx: &TestContext, page: &str) -> String {
           }).catch(function(e){ done('databases() failed: ' + e); });",
     )
 }
+
+// `vs cookies` reads, sets and clears the jar host-side: an HttpOnly
+// cookie set through it is listed, hidden from document.cookie, and
+// sent with the page's requests; `clear` empties the jar.
+#[test]
+fn cell_cookies_list_set_clear() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let r = ctx.vs(&["session-open", "--isolated"]);
+        assert_ok("session-open --isolated", &r);
+        let s = body_first(&r);
+        let sess = format!("--session={s}");
+        let r = ctx.vs(&["open", &ctx.url("/static.html"), &sess]);
+        assert_ok("open", &r);
+        let page = body_first(&r);
+        let json = r#"[{"name":"vs_ho","value":"secret","domain":"127.0.0.1","path":"/","secure":false,"http_only":true},{"name":"vs_js","value":"open","domain":"127.0.0.1","path":"/","secure":false,"http_only":false}]"#;
+        let r = ctx.vs(&["cookies", &page, "set", json, &sess]);
+        assert_ok("cookies set", &r);
+        let r = ctx.vs(&["cookies", &page, "list", &sess]);
+        assert_ok("cookies list", &r);
+        let jar = body_first(&r);
+        assert!(
+            jar.contains("\"vs_ho\"") && jar.contains("\"http_only\":true"),
+            "{jar}"
+        );
+        assert!(jar.contains("\"vs_js\""), "{jar}");
+        let seen = eval_js_in(&ctx, &s, &page, "document.cookie");
+        assert!(
+            seen.contains("vs_js=open") && !seen.contains("vs_ho"),
+            "document.cookie: {seen}"
+        );
+        let _ = eval_js_in(
+            &ctx,
+            &s,
+            &page,
+            "fetch('/echo-headers').then(r => r.text()).then(t => { window.__h = t; }), 1",
+        );
+        let mut sent = String::new();
+        for _ in 0..50 {
+            sent = eval_js_in(&ctx, &s, &page, "JSON.stringify(String(window.__h))");
+            if sent.contains("vs_ho=secret") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(sent.contains("vs_ho=secret"), "request headers: {sent}");
+        let r = ctx.vs(&["cookies", &page, "clear", &sess]);
+        assert_ok("cookies clear", &r);
+        assert_eq!(body_first(&r).trim(), "[]");
+        let seen = eval_js_in(&ctx, &s, &page, "document.cookie");
+        assert!(!seen.contains("vs_js"), "after clear: {seen}");
+    }
+}
+
+fn eval_js_in(ctx: &TestContext, s: &str, page: &str, expr: &str) -> String {
+    let r = ctx.vs(&[
+        "inspect",
+        page,
+        "eval",
+        expr,
+        "--full",
+        &format!("--session={s}"),
+    ]);
+    assert_ok(&format!("eval {expr}"), &r);
+    r.stdout
+        .lines()
+        .find_map(|l| l.strip_prefix("result="))
+        .unwrap_or("")
+        .to_string()
+}

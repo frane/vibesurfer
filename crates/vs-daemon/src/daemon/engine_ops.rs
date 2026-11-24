@@ -163,6 +163,34 @@ impl Daemon {
 
     /// List the download intents the page has produced. Cheap — no
     /// payload is read.
+    /// `vs_cookies`: read, add to or empty the cookie jar of `page_id`'s
+    /// data store (HttpOnly included). Returns the jar after the
+    /// change. Values stay out of the audit row; it records the count.
+    pub fn cookies(
+        &self,
+        session_id: &str,
+        page_id: &str,
+        op: vs_engine_webkit::CookieOp,
+    ) -> Result<Vec<vs_engine_webkit::CookieData>> {
+        let label = match &op {
+            vs_engine_webkit::CookieOp::List => "list",
+            vs_engine_webkit::CookieOp::Set(_) => "set",
+            vs_engine_webkit::CookieOp::Clear => "clear",
+        };
+        let ctx = AuditCtx::new("vs_cookies", session_id)
+            .with_page(page_id)
+            .with_args(
+                label.into(),
+                tokens::args_hash("vs_cookies", &[label.into()]),
+            );
+        self.audit_call(ctx, |ctx| {
+            let engine_handle = self.engine_handle_for(session_id, page_id)?;
+            let jar = self.inner.engine.cookies(engine_handle, op)?;
+            ctx.result_summary = Some(format!("{} cookies", jar.len()));
+            Ok(jar)
+        })
+    }
+
     pub fn download_list(&self, session_id: &str, page_id: &str) -> Result<DownloadListResponse> {
         let ctx = AuditCtx::new("vs_download", session_id)
             .with_page(page_id)

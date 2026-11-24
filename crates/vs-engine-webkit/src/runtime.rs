@@ -507,6 +507,14 @@ impl EngineRuntime {
         self.dispatch(move |e| e.performance(page))
     }
 
+    pub fn cookies(
+        &self,
+        page: PageHandle,
+        op: crate::engine::CookieOp,
+    ) -> EngineResult<Vec<crate::engine::CookieData>> {
+        self.dispatch(move |e| e.cookies(page, op))
+    }
+
     pub fn main_response(
         &self,
         page: PageHandle,

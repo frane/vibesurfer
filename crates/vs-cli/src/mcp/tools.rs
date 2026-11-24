@@ -155,6 +155,11 @@ tool("vs_type", "Type text into the FOCUSED element with trusted keystrokes (rea
             ("y", num_prop("Hover Y in CSS pixels.", true)),
             ("mode", str_prop("Input mode: human | careful | robotic. Default: human.", false)),
         ])),
+        tool("vs_cookies", "The page's cookie jar, HttpOnly included: op list | clear | set (json: array of {name, value, domain, path, expires_unix?, secure, http_only, same_site?}). Returns the jar as JSON.", obj(&[
+            ("page", str_prop("Page id.", true)),
+            ("op", str_prop("list | set | clear.", true)),
+            ("json", str_prop("JSON array of cookies, for set.", false)),
+        ])),
         tool("vs_wheel", "Move to (x, y) and turn the wheel by (dx, dy) CSS px: a trusted wheel event (positive dy scrolls down).", obj(&[
             ("page", str_prop("Page id.", true)),
             ("x", num_prop("Pointer X in CSS pixels.", true)),
@@ -424,6 +429,11 @@ pub fn build_cli(name: &str, args: &Value) -> Result<(Cli, CallOpts)> {
             x: req_f64(args, "x")?,
             y: req_f64(args, "y")?,
             mode: opt_str(args, "mode").unwrap_or_else(|| "human".into()),
+        },
+        "vs_cookies" => Command::Cookies {
+            page: req_str(args, "page")?,
+            op: req_str(args, "op")?,
+            data: opt_str(args, "json"),
         },
         "vs_wheel" => Command::Wheel {
             page: req_str(args, "page")?,

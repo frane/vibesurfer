@@ -361,6 +361,59 @@ pub(super) fn handle_cursor(daemon: &Daemon, req: &Request, kind: &str) -> Strin
         Err(e) => format_daemon_error(&e),
     }
 }
+/// `vs_cookies <page> list|clear|set <base64 JSON array>`: the jar of
+/// the page's data store, as one JSON array line, after the change.
+pub(super) fn handle_cookies(daemon: &Daemon, req: &Request) -> String {
+    use base64::Engine as _;
+    let session_id = match require_session(req) {
+        Ok(s) => s,
+        Err(msg) => return format_error(ErrorCode::BadRequest, vec![msg]),
+    };
+    let (Some(page_id), Some(sub)) = (req.args.first(), req.args.get(1)) else {
+        return format_error(
+            ErrorCode::BadRequest,
+            vec!["vs_cookies: usage <page> list|set <b64 json>|clear".into()],
+        );
+    };
+    let op = match sub.as_str() {
+        "list" => vs_engine_webkit::CookieOp::List,
+        "clear" => vs_engine_webkit::CookieOp::Clear,
+        "set" => {
+            let parsed = req
+                .args
+                .get(2)
+                .ok_or_else(|| "vs_cookies set: missing cookies".to_string())
+                .and_then(|b| {
+                    base64::engine::general_purpose::STANDARD
+                        .decode(b)
+                        .map_err(|e| format!("vs_cookies set: bad base64: {e}"))
+                })
+                .and_then(|bytes| {
+                    serde_json::from_slice::<Vec<vs_engine_webkit::CookieData>>(&bytes)
+                        .map_err(|e| format!("vs_cookies set: bad JSON: {e}"))
+                });
+            match parsed {
+                Ok(list) => vs_engine_webkit::CookieOp::Set(list),
+                Err(msg) => return format_error(ErrorCode::BadRequest, vec![msg]),
+            }
+        }
+        other => {
+            return format_error(
+                ErrorCode::BadRequest,
+                vec![format!("vs_cookies: unknown {other:?} (list|set|clear)")],
+            )
+        }
+    };
+    match daemon.cookies(&session_id, page_id, op) {
+        Ok(jar) => format!(
+            "{}{}\n",
+            ResponseHead::ok(StateToken::ZERO).encode(),
+            serde_json::to_string(&jar).unwrap_or_else(|_| "[]".into())
+        ),
+        Err(e) => format_daemon_error(&e),
+    }
+}
+
 pub(super) fn handle_layout(daemon: &Daemon, req: &Request) -> String {
     let session_id = match require_session(req) {
         Ok(s) => s,

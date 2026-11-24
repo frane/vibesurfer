@@ -361,6 +361,18 @@ pub enum Command {
         #[arg(long, short = 'M', default_value = "human")]
         mode: String,
     },
+    /// The page's cookie jar (its data store), HttpOnly included:
+    /// `list`, `clear`, or `set '<JSON array>'` of {name, value,
+    /// domain, path, expires_unix?, secure, http_only, same_site?}.
+    /// Prints the jar after the change as one JSON line.
+    #[command(visible_alias = "ck")]
+    Cookies {
+        page: String,
+        /// list | set | clear
+        op: String,
+        /// JSON array for `set`.
+        data: Option<String>,
+    },
     /// Move to `(x, y)` and turn the wheel by `(dx, dy)` CSS px, a
     /// trusted native wheel event (positive dy scrolls down).
     #[command(visible_alias = "wh")]
@@ -1126,6 +1138,15 @@ impl Command {
                     .arg(y.to_string())
                     .flag_value("session", s)
                     .flag_value("mode", mode.clone())
+            }
+            Self::Cookies { page, op, data } => {
+                use base64::Engine as _;
+                let s = require_session(session_id)?;
+                let mut r = Request::new("vs_cookies").arg(page.clone()).arg(op.clone());
+                if let Some(j) = data {
+                    r = r.arg(base64::engine::general_purpose::STANDARD.encode(j.as_bytes()));
+                }
+                r.flag_value("session", s)
             }
             Self::Wheel {
                 page,

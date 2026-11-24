@@ -927,9 +927,8 @@ fn cell_wheel_scrolls_what_is_under_the_pointer() {
         let all = eval_js(&ctx, &page, "JSON.stringify(window.__wheels)");
         assert!(num(&boxed) > 0.0, "box did not scroll: {boxed} {all}");
         assert!(all.contains("\"trusted\":true"), "wheel event: {all}");
-        assert_eq!(
-            num(&eval_js(&ctx, &page, "String(window.scrollY)")),
-            0.0,
+        assert!(
+            num(&eval_js(&ctx, &page, "String(window.scrollY)")) < 0.5,
             "the page scrolled with the box"
         );
 

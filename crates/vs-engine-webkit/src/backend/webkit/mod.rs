@@ -1124,6 +1124,20 @@ impl Engine for WkBackend {
         Ok(())
     }
 
+    fn cookies(
+        &mut self,
+        page: PageHandle,
+        op: crate::engine::CookieOp,
+    ) -> EngineResult<Vec<crate::engine::CookieData>> {
+        let web_view = self.page_mut(page)?.web_view.clone();
+        match op {
+            crate::engine::CookieOp::List => {}
+            crate::engine::CookieOp::Set(list) => cookie_store::set_cookies(&web_view, &list)?,
+            crate::engine::CookieOp::Clear => cookie_store::delete_all(&web_view)?,
+        }
+        cookie_store::get_all_cookies(&web_view)
+    }
+
     fn save_auth(&mut self, page: PageHandle) -> EngineResult<AuthBlob> {
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();

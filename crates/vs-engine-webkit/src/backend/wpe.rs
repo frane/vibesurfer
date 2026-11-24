@@ -633,6 +633,20 @@ impl Engine for WpeBackend {
         }
     }
 
+    fn cookies(
+        &mut self,
+        page: PageHandle,
+        op: crate::engine::CookieOp,
+    ) -> EngineResult<Vec<crate::engine::CookieData>> {
+        let web_view = self.page_mut(page)?.web_view.clone();
+        match op {
+            crate::engine::CookieOp::List => {}
+            crate::engine::CookieOp::Set(list) => wpe_cookies::set_cookies(&web_view, &list)?,
+            crate::engine::CookieOp::Clear => wpe_cookies::delete_all(&web_view)?,
+        }
+        wpe_cookies::get_all_cookies(&web_view)
+    }
+
     fn save_auth(&mut self, page: PageHandle) -> EngineResult<AuthBlob> {
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
@@ -1609,6 +1623,41 @@ mod wpe_cookies {
                     detail: "",
                 });
             }
+        }
+        Ok(())
+    }
+
+    /// Delete every cookie of the web view's network session.
+    pub(super) fn delete_all(web_view: &WebView) -> EngineResult<()> {
+        let manager = cookie_manager(web_view)?;
+        let slot: Rc<RefCell<Option<Vec<soup::Cookie>>>> = Rc::new(RefCell::new(None));
+        let slot_cb = slot.clone();
+        manager.all_cookies(None::<&gio::Cancellable>, move |result| {
+            *slot_cb.borrow_mut() = Some(result.unwrap_or_default());
+        });
+        let check = slot.clone();
+        if !run_loop_until(move || check.borrow().is_some(), ASYNC_BUDGET) {
+            return Err(EngineError::Timeout {
+                budget: ASYNC_BUDGET,
+                primitive: "cookies clear (all_cookies)",
+                detail: "",
+            });
+        }
+        let all = slot.borrow_mut().take().unwrap_or_default();
+        let left = Rc::new(RefCell::new(all.len()));
+        for c in &all {
+            let left_cb = left.clone();
+            manager.delete_cookie(c, None::<&gio::Cancellable>, move |_| {
+                *left_cb.borrow_mut() -= 1;
+            });
+        }
+        let check = left.clone();
+        if !run_loop_until(move || *check.borrow() == 0, ASYNC_BUDGET) {
+            return Err(EngineError::Timeout {
+                budget: ASYNC_BUDGET,
+                primitive: "cookies clear (delete_cookie)",
+                detail: "",
+            });
         }
         Ok(())
     }

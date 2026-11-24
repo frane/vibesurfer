@@ -117,6 +117,15 @@ fn serialize(cookie: &NSHTTPCookie) -> CookieData {
         let s = d.timeIntervalSince1970().round() as i64;
         s
     });
+    let same_site =
+        cookie
+            .sameSitePolicy()
+            .and_then(|p| match p.to_string().to_ascii_lowercase().as_str() {
+                "strict" => Some("Strict".to_string()),
+                "lax" => Some("Lax".to_string()),
+                "none" => Some("None".to_string()),
+                _ => None,
+            });
     CookieData {
         name,
         value,
@@ -125,8 +134,51 @@ fn serialize(cookie: &NSHTTPCookie) -> CookieData {
         expires_unix,
         secure,
         http_only,
-        same_site: None,
+        same_site,
     }
+}
+
+/// Delete every cookie in the WKWebView's data store.
+pub(crate) fn delete_all(web_view: &Retained<WKWebView>) -> EngineResult<()> {
+    let store = unsafe {
+        web_view
+            .configuration()
+            .websiteDataStore()
+            .httpCookieStore()
+    };
+    let slot: Rc<RefCell<Option<Vec<Retained<NSHTTPCookie>>>>> = Rc::new(RefCell::new(None));
+    let slot_for_block = slot.clone();
+    let block = StackBlock::new(move |cookies: std::ptr::NonNull<NSArray<NSHTTPCookie>>| {
+        let array: &NSArray<NSHTTPCookie> = unsafe { cookies.as_ref() };
+        *slot_for_block.borrow_mut() = Some(array.to_vec());
+    });
+    unsafe { store.getAllCookies(&block) };
+    let check = slot.clone();
+    if !run_loop_until(move || check.borrow().is_some(), ASYNC_BUDGET) {
+        return Err(EngineError::Timeout {
+            budget: ASYNC_BUDGET,
+            primitive: "cookies clear (getAllCookies)",
+            detail: "",
+        });
+    }
+    let all = slot.borrow_mut().take().unwrap_or_default();
+    let left = Rc::new(RefCell::new(all.len()));
+    for c in &all {
+        let left_cb = left.clone();
+        let block = block2::RcBlock::new(move || {
+            *left_cb.borrow_mut() -= 1;
+        });
+        unsafe { store.deleteCookie_completionHandler(c, Some(&block)) };
+    }
+    let check = left.clone();
+    if !run_loop_until(move || *check.borrow() == 0, ASYNC_BUDGET) {
+        return Err(EngineError::Timeout {
+            budget: ASYNC_BUDGET,
+            primitive: "cookies clear (deleteCookie)",
+            detail: "",
+        });
+    }
+    Ok(())
 }
 
 /// Build an `NSHTTPCookie` from our wire shape. `cookieWithProperties:`

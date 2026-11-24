@@ -80,6 +80,18 @@ pub enum CursorOp {
     Wheel { x: f64, y: f64, dx: f64, dy: f64 },
 }
 
+pub use crate::backend::auth::CookieData;
+
+/// What [`Engine::cookies`] does to the jar.
+#[derive(Debug, Clone)]
+pub enum CookieOp {
+    List,
+    /// Add these, replacing any with the same name, domain and path.
+    Set(Vec<CookieData>),
+    /// Delete every cookie.
+    Clear,
+}
+
 /// Input humanization mode. Wire form: `--mode={human,careful,robotic}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode {
@@ -707,6 +719,16 @@ pub trait Engine {
         _page: PageHandle,
     ) -> EngineResult<Vec<crate::inspector::CookieEvent>> {
         Ok(Vec::new())
+    }
+
+    /// Read, add to or empty the cookie jar `page` uses (its data
+    /// store: every page of an isolated session shares it), HttpOnly
+    /// cookies included. Returns the jar after the change.
+    fn cookies(&mut self, _page: PageHandle, _op: CookieOp) -> EngineResult<Vec<CookieData>> {
+        Err(EngineError::Unsupported {
+            engine: "unknown",
+            primitive: "cookies",
+        })
     }
 
     /// Trusted keyboard typing into the focused element. Sends real
