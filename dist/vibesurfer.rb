@@ -14,21 +14,24 @@
 class Vibesurfer < Formula
   desc "A browser for LLMs, not humans."
   homepage "https://github.com/frane/vibesurfer"
-  url "https://github.com/frane/vibesurfer/archive/refs/tags/v0.2.18.tar.gz"
+  url "https://github.com/frane/vibesurfer/archive/refs/tags/v0.2.19.tar.gz"
   # Update on each release: `shasum -a 256 <tarball>`.
-  sha256 "8ab834475e946c458d21b83269b91f480df2a5d600163af8481652f45b28e4af"
+  sha256 "5b56c59b078bab5ed7b410b6f03362782e404f5b93e78908d8c6acd6db58579a"
   license "Apache-2.0"
   head "https://github.com/frane/vibesurfer.git", branch: "main"
 
   depends_on "rust" => :build
   # openh264 (recording encoder) compiles from vendored source via nasm.
   depends_on "nasm" => :build
+  # WebM recordings: libvpx, found with pkg-config; bindgen needs libclang.
+  depends_on "llvm" => :build
+  depends_on "pkgconf" => :build
+  depends_on "libvpx"
 
   on_linux do
     depends_on "gtk4"
     depends_on "webkitgtk@6"
     depends_on "libsoup@3"
-    depends_on "pkg-config" => :build
   end
 
   def install
