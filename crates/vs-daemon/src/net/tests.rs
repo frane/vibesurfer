@@ -145,7 +145,13 @@ fn absolute_form_requests_are_forwarded_and_recorded() {
         assert_eq!(body, format!("GET {path} x-test=t body="));
         assert_eq!(status, if path == "/plain" { 201 } else { 200 });
     }
-    let ev = net.poll(Duration::ZERO);
+    // The proxy reports `fin` after it has written the answer, which the
+    // client may read first: collect until the last one is in.
+    let mut ev = String::new();
+    let until = std::time::Instant::now() + Duration::from_secs(5);
+    while !ev.contains("fin 3 ") && std::time::Instant::now() < until {
+        ev.push_str(&net.poll(Duration::from_millis(100)));
+    }
     assert!(
         ev.contains(&format!(
             "req 1 GET http://vs.localhost:{up}/plain type=other nav=0\n"
