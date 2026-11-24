@@ -664,20 +664,12 @@ impl Engine for WpeBackend {
         };
         let (ox, oy) = input_origin(dispatcher, page, home);
         dispatcher.raise_window(&title);
-        let extra = super::drop_shim::install_js(data);
-        if let Some(js) = &extra {
-            eval_js_string(&web_view, js, Duration::from_secs(2))?;
+        if let Some(js) = super::drop_shim::install_js(data) {
+            eval_js_string(&web_view, &js, Duration::from_secs(2))?;
         }
         let accepted = super::wpe_xdnd::drop_data(target, ox + x, oy + y, data, |d| {
             let _ = run_loop_until(|| false, d);
         });
-        if extra.is_some() {
-            let _ = eval_js_string(
-                &web_view,
-                super::drop_shim::RESTORE_JS,
-                Duration::from_secs(2),
-            );
-        }
         let accepted = accepted?;
         self.follow_new_window(page, false)?;
         Ok(accepted)

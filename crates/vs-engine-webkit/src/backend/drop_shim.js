@@ -2,8 +2,8 @@
 // DataTransfer also lists and returns string items the OS pasteboard
 // has no slot for, and the dropped files when the engine delivered
 // none. They stay on that DataTransfer, so a handler that reads it after
-// an await sees them too. window.__vsDropRestore() forgets a drop that
-// never happened.
+// an await sees them too. The next vs drop replaces data a refused drop
+// left pending.
 (() => {
   const pending = { extra: __EXTRA__, files: __FILES__ };
   if (!window.__vsDrop) {
@@ -50,7 +50,6 @@
       return d && d.files ? d.files : files.get.call(this);
     } });
     window.__vsDrop = state;
-    window.__vsDropRestore = () => { state.pending = null; };
   }
   window.__vsDrop.pending = pending;
   return 'ok';

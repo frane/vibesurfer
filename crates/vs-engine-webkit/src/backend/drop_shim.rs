@@ -15,9 +15,6 @@ const FALLBACK_FILE_LIMIT: u64 = 64 << 20;
 
 const SHIM: &str = include_str!("drop_shim.js");
 
-/// Undoes [`install_js`].
-pub(crate) const RESTORE_JS: &str = "(window.__vsDropRestore && window.__vsDropRestore(), 'ok')";
-
 /// The script to run before the native drop, or `None` when the drop
 /// carries nothing.
 pub(crate) fn install_js(data: &DropData) -> Option<String> {

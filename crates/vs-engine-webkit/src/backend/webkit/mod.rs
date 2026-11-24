@@ -1159,18 +1159,10 @@ impl Engine for WkBackend {
         self.forget_new_window(page)?;
         let web_view = self.page_mut(page)?.web_view.clone();
         let height = web_view.frame().size.height;
-        let extra = super::drop_shim::install_js(data);
-        if let Some(js) = &extra {
-            eval_js_string(&web_view, js, Duration::from_secs(2))?;
+        if let Some(js) = super::drop_shim::install_js(data) {
+            eval_js_string(&web_view, &js, Duration::from_secs(2))?;
         }
         let accepted = drop::drop_data(&web_view, height, x, y, data);
-        if extra.is_some() {
-            let _ = eval_js_string(
-                &web_view,
-                super::drop_shim::RESTORE_JS,
-                Duration::from_secs(2),
-            );
-        }
         let _ = eval_js_string(
             &web_view,
             "String(window.__vsFlushRAF ? window.__vsFlushRAF() : 0)",
