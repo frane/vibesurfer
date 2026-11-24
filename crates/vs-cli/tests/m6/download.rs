@@ -250,3 +250,34 @@ fn cell_iframe_src_is_visible_in_tree() {
         );
     }
 }
+
+// Downloads in an intercepting session, on a loopback host (the macOS
+// scheme-handler web view) and under a name: an attachment response
+// and an in-page blob save both reach the download list.
+#[test]
+fn cell_download_in_intercept_sessions() {
+    for _ in each_available_backend() {
+        for loopback in [true, false] {
+            let ctx = TestContext::start();
+            let r = ctx.vs(&["session-open", "--intercept"]);
+            assert_ok("session-open --intercept", &r);
+            let url = if loopback {
+                ctx.url("/download.html")
+            } else {
+                ctx.url("/download.html")
+                    .replace("//127.0.0.1:", "//vs.localhost:")
+            };
+            let r = ctx.vs(&["open", &url]);
+            assert_ok("open", &r);
+            let page = crate::support::body_first(&r);
+            let path = click_and_drain(&ctx, &page, "Export (form)");
+            assert_eq!(
+                path.file_name().unwrap().to_string_lossy(),
+                EXPORT_RIS_NAME,
+                "loopback={loopback}"
+            );
+            let path = click_and_drain(&ctx, &page, "Save blob");
+            assert!(path.exists(), "loopback={loopback}: {path:?}");
+        }
+    }
+}

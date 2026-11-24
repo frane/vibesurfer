@@ -56,6 +56,8 @@ use objc2_web_kit::{
     WKHTTPCookieStore, WKURLSchemeHandler, WKURLSchemeTask, WKWebView, WKWebViewConfiguration,
 };
 
+use crate::backend::native_download::SharedDownloads;
+
 /// Give up on a hop whose proxy connection says nothing for this long.
 const READ_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -192,6 +194,52 @@ struct TaskState {
     responded: bool,
     queued: Vec<Vec<u8>>,
     finished: bool,
+    /// A copy of a document's body, in case it turns into a download
+    /// (see [`capture`]).
+    tee: Option<Vec<u8>>,
+    /// WebKit let go of the task for a download: the body goes to
+    /// `download`, not to WebKit.
+    download: Option<(SharedDownloads, u64)>,
+}
+
+thread_local! {
+    /// Downloads the navigation delegate asked for that their task has
+    /// not handed over yet: response URL to buffer and entry.
+    static CAPTURES: RefCell<HashMap<String, (SharedDownloads, u64)>> = RefCell::new(HashMap::new());
+    /// Bodies of documents that finished, newest last.
+    static RECENT: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A response on a loopback page that is a download: WebKit cannot turn
+/// a scheme-handler load into a `WKDownload`, so the navigation
+/// delegate cancels it instead and the handler, which has the bytes,
+/// finishes download `id` in `downloads` with them.
+pub(super) fn capture(url: &str, downloads: SharedDownloads, id: u64) {
+    let done = RECENT.with(|r| {
+        let mut r = r.borrow_mut();
+        let i = r.iter().position(|(u, _)| u == url)?;
+        Some(r.remove(i).1)
+    });
+    match done {
+        Some(bytes) => {
+            if let Ok(mut d) = downloads.lock() {
+                d.finish(id, Ok(bytes));
+            }
+        }
+        None => {
+            CAPTURES.with(|c| c.borrow_mut().insert(url.to_string(), (downloads, id)));
+        }
+    }
+}
+
+/// The web view sends its http(s) through this handler.
+pub(super) fn handles(web_view: &WKWebView) -> bool {
+    unsafe {
+        web_view
+            .configuration()
+            .urlSchemeHandlerForURLScheme(&NSString::from_str("http"))
+            .is_some()
+    }
 }
 
 thread_local! {
@@ -255,6 +303,8 @@ fn start_task(port: u16, web_view: &WKWebView, task: &ProtocolObject<dyn WKURLSc
                 responded: false,
                 queued: Vec::new(),
                 finished: false,
+                tee: None,
+                download: None,
             },
         );
     });
@@ -266,14 +316,58 @@ fn stop_task(task: &ProtocolObject<dyn WKURLSchemeTask>) {
     let Some(id) = BY_ADDR.with(|b| b.borrow_mut().remove(&addr(task))) else {
         return;
     };
-    if let Some(s) = TASKS.with(|t| t.borrow_mut().remove(&id)) {
-        s.stopped.store(true, Ordering::Relaxed);
+    // A download the delegate cancelled the navigation for: keep
+    // reading, into the download.
+    let kept = TASKS.with(|t| {
+        let mut t = t.borrow_mut();
+        let s = t.get_mut(&id)?;
+        let target = CAPTURES.with(|c| c.borrow_mut().remove(&s.hop.url))?;
+        s.download = Some(target);
+        if s.finished {
+            Some(true)
+        } else {
+            Some(false)
+        }
+    });
+    match kept {
+        Some(true) => finish_download(id, Ok(())),
+        Some(false) => {}
+        None => {
+            if let Some(s) = TASKS.with(|t| t.borrow_mut().remove(&id)) {
+                s.stopped.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
+/// Hand a captured download its bytes (or its failure) and drop the task.
+fn finish_download(id: u64, result: Result<(), String>) {
+    let Some(s) = TASKS.with(|t| t.borrow_mut().remove(&id)) else {
+        return;
+    };
+    if let Some((downloads, dl)) = s.download {
+        let bytes = result.map(|()| s.tee.unwrap_or_default());
+        if let Ok(mut d) = downloads.lock() {
+            d.finish(dl, bytes);
+        }
     }
 }
 
 fn forget(id: u64) {
     if let Some(s) = TASKS.with(|t| t.borrow_mut().remove(&id)) {
         BY_ADDR.with(|b| b.borrow_mut().remove(&addr(&s.task)));
+        // A document that finished before the delegate decided it is a
+        // download: keep its body for `capture`.
+        if let (Some(tee), true) = (s.tee, s.finished) {
+            RECENT.with(|r| {
+                let mut r = r.borrow_mut();
+                r.retain(|(u, _)| *u != s.hop.url);
+                r.push((s.hop.url.clone(), tee));
+                if r.len() > 8 {
+                    r.remove(0);
+                }
+            });
+        }
     }
 }
 
@@ -655,6 +749,12 @@ fn on_msg(id: u64, generation: u64, msg: Msg) {
             let deliver = TASKS.with(|t| {
                 let mut t = t.borrow_mut();
                 let s = t.get_mut(&id)?;
+                if let Some(tee) = s.tee.as_mut() {
+                    tee.extend_from_slice(&d);
+                }
+                if s.download.is_some() {
+                    return None;
+                }
                 if s.responded {
                     Some(s.task.clone())
                 } else {
@@ -668,6 +768,10 @@ fn on_msg(id: u64, generation: u64, msg: Msg) {
             }
         }
         Msg::Done => {
+            if TASKS.with(|t| t.borrow().get(&id).is_some_and(|s| s.download.is_some())) {
+                finish_download(id, Ok(()));
+                return;
+            }
             let finish = TASKS.with(|t| {
                 let mut t = t.borrow_mut();
                 let s = t.get_mut(&id)?;
@@ -680,6 +784,10 @@ fn on_msg(id: u64, generation: u64, msg: Msg) {
             }
         }
         Msg::Fail(why) => {
+            if TASKS.with(|t| t.borrow().get(&id).is_some_and(|s| s.download.is_some())) {
+                finish_download(id, Err(why));
+                return;
+            }
             let task = TASKS.with(|t| t.borrow().get(&id).map(|s| s.task.clone()));
             if let Some(task) = task {
                 let err = url_error(&why);
@@ -703,6 +811,25 @@ fn url_error(_why: &str) -> Retained<NSError> {
 }
 
 fn on_head(id: u64, generation: u64, status: u16, headers: Vec<(String, String)>) {
+    // A document may turn out to be a download (the delegate decides
+    // once WebKit has the response): keep a copy of its body.
+    TASKS.with(|t| {
+        if let Some(s) = t.borrow_mut().get_mut(&id) {
+            let dest = s
+                .hop
+                .headers
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("sec-fetch-dest"))
+                .map(|(_, v)| v.to_ascii_lowercase());
+            let attachment = headers.iter().any(|(k, v)| {
+                k.eq_ignore_ascii_case("content-disposition")
+                    && crate::backend::native_download::is_attachment(v)
+            });
+            if attachment || matches!(dest.as_deref(), Some("document" | "iframe" | "frame")) {
+                s.tee = Some(Vec::new());
+            }
+        }
+    });
     let Some((url, cookies)) = TASKS.with(|t| {
         t.borrow()
             .get(&id)

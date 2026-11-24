@@ -199,7 +199,7 @@ define_class!(
         #[unsafe(method(webView:decidePolicyForNavigationResponse:decisionHandler:))]
         fn decide_response(
             &self,
-            _web_view: &WKWebView,
+            web_view: &WKWebView,
             resp: &WKNavigationResponse,
             handler: &block2::DynBlock<dyn Fn(WKNavigationResponsePolicy)>,
         ) {
@@ -208,7 +208,21 @@ define_class!(
                 if main {
                     self.ivars().main_became_download.set(true);
                 }
-                WKNavigationResponsePolicy::Download
+                if super::loopback::handles(web_view) {
+                    // A scheme-handler load cannot become a WKDownload;
+                    // the handler, which has the bytes, saves it.
+                    let r = unsafe { resp.response() };
+                    let url = response_url(&r);
+                    let cd = disposition(&r);
+                    let name = name_from_disposition(&cd).unwrap_or_default();
+                    let mime = r.MIMEType().map(|m| m.to_string()).unwrap_or_default();
+                    let downloads = self.ivars().downloads.clone();
+                    let id = downloads.lock().map(|mut d| d.begin(&url, &name, &mime)).unwrap_or(0);
+                    super::loopback::capture(&url, downloads, id);
+                    WKNavigationResponsePolicy::Cancel
+                } else {
+                    WKNavigationResponsePolicy::Download
+                }
             } else {
                 if main {
                     let r = unsafe { resp.response() };
