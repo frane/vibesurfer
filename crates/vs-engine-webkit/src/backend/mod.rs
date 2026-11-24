@@ -23,6 +23,9 @@ pub mod wpe;
 mod wpe_input;
 
 #[cfg(target_os = "linux")]
+mod wpe_wheel;
+
+#[cfg(target_os = "linux")]
 mod wpe_popups;
 
 #[cfg(target_os = "linux")]

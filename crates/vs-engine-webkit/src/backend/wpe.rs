@@ -1011,15 +1011,27 @@ impl Engine for WpeBackend {
                     seed,
                     false,
                 )?;
-                // WebKitGTK scrolls a wheel click by the visible size to
-                // the power of 2/3 on that axis (86 px of an 800 px
-                // high view).
-                let step = (
-                    f64::from(p.web_view.width().max(1)).powf(2.0 / 3.0),
-                    f64::from(p.web_view.height().max(1)).powf(2.0 / 3.0),
-                );
-                dispatcher.dispatch(super::wpe_input::InputEvent::Wheel { dx, dy, step })?;
+                // One click that WebKit's handler takes as the exact
+                // turn (see wpe_wheel); the XTest step stays the
+                // fallback when that hook is not in place.
+                // The portal's axis events are exact already.
+                if dispatcher.backend_name() == "xtest" {
+                    super::wpe_wheel::arm(dx, dy, (p.web_view.width(), p.web_view.height()));
+                    dispatcher.dispatch(super::wpe_input::InputEvent::Wheel {
+                        dx: if dy == 0.0 { dx.signum() } else { 0.0 },
+                        dy: dy.signum(),
+                        step: (1.0, 1.0),
+                    })?;
+                } else {
+                    dispatcher.dispatch(super::wpe_input::InputEvent::Wheel {
+                        dx,
+                        dy,
+                        step: (1.0, 1.0),
+                    })?;
+                }
                 dispatcher.flush()?;
+                deliver_input(dispatcher, &p.window);
+                super::wpe_wheel::disarm();
                 landed
             }
         };
@@ -1255,6 +1267,7 @@ fn host_page(web_view: &WebView, popups: &Popups) -> WpePage {
     // No native context menu: the page still gets its contextmenu
     // event, and no menu stays open to take the next click.
     web_view.connect_context_menu(|_, _, _| true);
+    super::wpe_wheel::install(web_view);
     // Hidden host window: XTest input needs a real surface on the
     // display server to land on (see `open`). It shows at the screen's
     // origin until `place` moves it; no placed page keeps that tile.

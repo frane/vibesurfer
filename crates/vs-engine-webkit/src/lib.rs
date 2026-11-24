@@ -20,7 +20,7 @@
 
 #![cfg_attr(
     not(any(target_os = "macos", target_os = "windows")),
-    forbid(unsafe_code)
+    deny(unsafe_code)
 )]
 // On macOS we have a small surface of FFI to AppKit/WebKit. The unsafe
 // code is constrained to `backend::webkit`; everywhere else stays
