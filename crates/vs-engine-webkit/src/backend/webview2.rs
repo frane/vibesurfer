@@ -1481,12 +1481,22 @@ impl Engine for Webview2Backend {
             let p = self.page_mut(page)?;
             (p.web_view.clone(), p.comp_controller.clone())
         };
-        if let Some(js) = super::drop_shim::install_js(data) {
-            execute_script(&web_view, &js)?;
+        let shim = super::drop_shim::install_js(data);
+        if let Some(js) = &shim {
+            execute_script(&web_view, js)?;
         }
-        let accepted =
-            super::wv2_drop::drop_data(&comp, point_at(vs_humanize::Point { x, y }), data);
-        let accepted = accepted?;
+        super::wv2_drop::drop_data(&comp, point_at(vs_humanize::Point { x, y }), data)?;
+        // The shim's capture listener takes the pending data on the
+        // trusted drop: consumed means the page got `drop`.
+        let mut accepted = shim.is_none();
+        for _ in 0..10 {
+            if accepted {
+                break;
+            }
+            accepted = execute_script(&web_view, super::drop_shim::CONSUMED_JS)
+                .is_ok_and(|r| r.contains("true"));
+            std::thread::sleep(Duration::from_millis(50));
+        }
         self.follow_new_window(page, false)?;
         Ok(accepted)
     }

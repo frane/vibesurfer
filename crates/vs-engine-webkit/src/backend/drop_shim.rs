@@ -15,6 +15,12 @@ const FALLBACK_FILE_LIMIT: u64 = 64 << 20;
 
 const SHIM: &str = include_str!("drop_shim.js");
 
+/// `"true"` once a trusted drop took the data [`install_js`] left
+/// pending (the page got its `drop` event).
+#[allow(dead_code)] // used by the WebView2 backend
+pub(crate) const CONSUMED_JS: &str =
+    "String(!!(window.__vsDrop && window.__vsDrop.pending === null))";
+
 /// The script to run before the native drop, or `None` when the drop
 /// carries nothing.
 pub(crate) fn install_js(data: &DropData) -> Option<String> {

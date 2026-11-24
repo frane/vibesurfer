@@ -162,12 +162,15 @@ fn data_object(data: &DropData) -> EngineResult<IDataObject> {
 }
 
 /// Drop `data` at `at` (view client coordinates, as `SendMouseInput`
-/// takes them). Returns whether the page accepted it.
+/// takes them). WebView2 learns the page's answer to `dragover`
+/// asynchronously and reports no effect from these calls, so the drop
+/// always goes ahead and Chromium decides: the page gets `drop` only if
+/// its `dragover` accepted. Whether it did is read from the page.
 pub(super) fn drop_data(
     comp: &ICoreWebView2CompositionController,
     at: POINT,
     data: &DropData,
-) -> EngineResult<bool> {
+) -> EngineResult<()> {
     let comp3: ICoreWebView2CompositionController3 = comp
         .cast()
         .map_err(|e| err("ICoreWebView2CompositionController3", e))?;
@@ -184,15 +187,10 @@ pub(super) fn drop_data(
         effect = ANY_EFFECT;
         unsafe { comp3.DragOver(LEFT_BUTTON, at, &raw mut effect) }
             .map_err(|e| err("DragOver", e))?;
-        pump(30);
-    }
-    if effect == 0 {
-        unsafe { comp3.DragLeave() }.map_err(|e| err("DragLeave", e))?;
-        pump(30);
-        return Ok(false);
+        pump(40);
     }
     effect = ANY_EFFECT;
     unsafe { comp3.Drop(&obj, 0, at, &raw mut effect) }.map_err(|e| err("Drop", e))?;
     pump(200);
-    Ok(true)
+    Ok(())
 }
