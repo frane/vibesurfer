@@ -104,6 +104,9 @@ struct WkPage {
     /// The web view sends its http(s) through [`loopback`]'s handler:
     /// the page is served from loopback, which WebKit never proxies.
     loopback: bool,
+    /// The page's configuration without a loopback handler, which a
+    /// rebuilt web view copies.
+    base_config: Retained<WKWebViewConfiguration>,
 }
 
 // =============================================================================
@@ -214,14 +217,8 @@ impl WkBackend {
         let mtm = self.mtm;
         let p = self.page_mut(page)?;
         let old = p.web_view.clone();
-        let old_config = unsafe { old.configuration() };
-        let config = unsafe { WKWebViewConfiguration::new(mtm) };
-        unsafe {
-            config.setWebsiteDataStore(&old_config.websiteDataStore());
-            config.setUserContentController(&p.ucc);
-            config.setPreferences(&old_config.preferences());
-        }
-        enable_media_devices(&config);
+        let config: Retained<WKWebViewConfiguration> =
+            unsafe { objc2::msg_send![&*p.base_config, copy] };
         if loopback_view {
             loopback::install(mtm, &config, port);
         }
@@ -260,7 +257,7 @@ impl WkBackend {
             // The opener's inspector buffers and content controller:
             // the popup shares its configuration, so its console and
             // scripts land there too.
-            let (inspector, inspector_installed, ucc, frames, proxy_port, loopback) =
+            let (inspector, inspector_installed, ucc, frames, proxy_port, loopback, base) =
                 match b.opener.and_then(|h| self.pages.get(&h)) {
                     Some(o) => (
                         o.inspector.clone(),
@@ -269,6 +266,7 @@ impl WkBackend {
                         o.frames.clone(),
                         o.proxy_port,
                         o.loopback,
+                        Some(o.base_config.clone()),
                     ),
                     None => (
                         super::inspector_bridge::InspectorSlots::new(
@@ -279,8 +277,11 @@ impl WkBackend {
                         frames::FrameList::default(),
                         None,
                         false,
+                        None,
                     ),
                 };
+            let base_config = base
+                .unwrap_or_else(|| unsafe { objc2::msg_send![&*b.web_view.configuration(), copy] });
             self.pages.insert(
                 b.handle,
                 WkPage {
@@ -296,6 +297,7 @@ impl WkBackend {
                     frames: frames.clone(),
                     proxy_port,
                     loopback,
+                    base_config,
                 },
             );
         }
@@ -694,9 +696,6 @@ impl Engine for WkBackend {
         let proxy_port = store.proxy_port();
         let loopback = proxy_port.is_some()
             && self.wants_loopback(url, Retained::as_ptr(&data_store) as usize);
-        if let (true, Some(port)) = (loopback, proxy_port) {
-            loopback::install(mtm, &config, port);
-        }
         // Expose `navigator.mediaDevices`. WKWebView gates the whole
         // MediaDevices surface behind a preference that is off by
         // default, so the object was simply absent — even on https with
@@ -757,6 +756,13 @@ impl Engine for WkBackend {
         // the logical size pages render at. Retina still doubles the
         // pixel density for screenshots; recordings capture at this size.
         let size = NSSize::new(1440.0, 900.0);
+        // The configuration before any loopback handler: a rebuilt view
+        // starts from a copy of it (see `rebuild_view`).
+        let base_config: Retained<WKWebViewConfiguration> =
+            unsafe { objc2::msg_send![&*config, copy] };
+        if let (true, Some(port)) = (loopback, proxy_port) {
+            loopback::install(mtm, &config, port);
+        }
         let (web_view, window, delegate) =
             host_view(mtm, &config, size, store.proxy_ca().map(<[u8]>::to_vec));
         let slot = delegate.slot();
@@ -797,6 +803,7 @@ impl Engine for WkBackend {
                 frames: frames.clone(),
                 proxy_port,
                 loopback,
+                base_config,
             },
         );
         Ok(handle)
