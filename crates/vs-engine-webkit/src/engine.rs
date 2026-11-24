@@ -73,6 +73,11 @@ pub enum CursorOp {
     /// Press at `(x1, y1)`, drag along a humanized path to `(x2, y2)`,
     /// release.
     Drag { x1: f64, y1: f64, x2: f64, y2: f64 },
+    /// Move to `(x, y)`, then turn the wheel by `(dx, dy)` CSS px
+    /// (positive `dy` scrolls down, positive `dx` right), as a native
+    /// wheel event: the page sees a trusted `wheel` and scrolls the
+    /// element under the pointer.
+    Wheel { x: f64, y: f64, dx: f64, dy: f64 },
 }
 
 /// Input humanization mode. Wire form: `--mode={human,careful,robotic}`.

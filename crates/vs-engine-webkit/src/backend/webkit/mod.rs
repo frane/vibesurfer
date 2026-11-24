@@ -558,9 +558,10 @@ fn vs_humanize_seed_for_ref(r: vs_protocol::Ref) -> u64 {
 #[allow(clippy::cast_possible_truncation)]
 fn vs_humanize_seed_for_xy(op: CursorOp) -> u64 {
     let (a, b) = match op {
-        CursorOp::MoveTo { x, y } | CursorOp::HoverAt { x, y } | CursorOp::ClickAt { x, y } => {
-            (x, y)
-        }
+        CursorOp::MoveTo { x, y }
+        | CursorOp::HoverAt { x, y }
+        | CursorOp::ClickAt { x, y }
+        | CursorOp::Wheel { x, y, .. } => (x, y),
         CursorOp::Drag { x1, y1, .. } => (x1, y1),
     };
     let xi = a.to_bits();
@@ -1399,6 +1400,21 @@ impl Engine for WkBackend {
                 // React-Flow HTML5-backend targets observe the drop.
                 let html5_js = super::common::build_html5_drag_js(x1, y1, x2, y2);
                 let _ = eval_js_string(&web_view, &html5_js, std::time::Duration::from_secs(2));
+                landed
+            }
+            CursorOp::Wheel { x, y, dx, dy } => {
+                let landed = input::move_along_path(
+                    &web_view,
+                    &window,
+                    webview_height,
+                    start,
+                    vs_humanize::Point { x, y },
+                    humanize_mode,
+                    seed,
+                    false,
+                    rec,
+                )?;
+                input::wheel(&web_view, webview_height, landed, dx, dy)?;
                 landed
             }
         };

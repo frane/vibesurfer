@@ -155,6 +155,14 @@ tool("vs_type", "Type text into the FOCUSED element with trusted keystrokes (rea
             ("y", num_prop("Hover Y in CSS pixels.", true)),
             ("mode", str_prop("Input mode: human | careful | robotic. Default: human.", false)),
         ])),
+        tool("vs_wheel", "Move to (x, y) and turn the wheel by (dx, dy) CSS px: a trusted wheel event (positive dy scrolls down).", obj(&[
+            ("page", str_prop("Page id.", true)),
+            ("x", num_prop("Pointer X in CSS pixels.", true)),
+            ("y", num_prop("Pointer Y in CSS pixels.", true)),
+            ("dx", num_prop("Horizontal delta in CSS pixels.", true)),
+            ("dy", num_prop("Vertical delta in CSS pixels.", true)),
+            ("mode", str_prop("Input mode: human | careful | robotic. Default: human.", false)),
+        ])),
         tool("vs_drag", "Press at (x1, y1), drag along a humanized path to (x2, y2), release.", obj(&[
             ("page", str_prop("Page id.", true)),
             ("x1", num_prop("Drag start X.", true)),
@@ -415,6 +423,14 @@ pub fn build_cli(name: &str, args: &Value) -> Result<(Cli, CallOpts)> {
             page: req_str(args, "page")?,
             x: req_f64(args, "x")?,
             y: req_f64(args, "y")?,
+            mode: opt_str(args, "mode").unwrap_or_else(|| "human".into()),
+        },
+        "vs_wheel" => Command::Wheel {
+            page: req_str(args, "page")?,
+            x: req_f64(args, "x")?,
+            y: req_f64(args, "y")?,
+            dx: req_f64(args, "dx")?,
+            dy: req_f64(args, "dy")?,
             mode: opt_str(args, "mode").unwrap_or_else(|| "human".into()),
         },
         "vs_drag" => Command::Drag {

@@ -478,3 +478,49 @@ pub(super) fn type_text(
     }
     Ok(())
 }
+
+/// Trusted wheel turn of `(dx, dy)` CSS px at `at` (positive `dy`
+/// scrolls down). A pixel-unit `CGEvent` scroll, wrapped as an
+/// `NSEvent` and handed to the web view as `scrollWheel:`, so the page
+/// sees a trusted `wheel` with these deltas and scrolls the element
+/// under the point.
+///
+/// Our window is offscreen with no window number, so the event has no
+/// window either and its `locationInWindow` is its screen location.
+/// The host window sits at the screen origin, which makes screen and
+/// window coordinates the same; the `CGEvent` location is set so that
+/// AppKit's flip against the main display lands on `at`.
+pub(super) fn wheel(
+    web_view: &Retained<WKWebView>,
+    webview_height: f64,
+    at: vs_humanize::Point,
+    dx: f64,
+    dy: f64,
+) -> EngineResult<()> {
+    use objc2_core_graphics::{CGDisplayPixelsHigh, CGEvent, CGMainDisplayID, CGScrollEventUnit};
+    use objc2_foundation::NSPoint as CGPoint;
+    // Wheel 1 is vertical, wheel 2 horizontal, both positive towards
+    // the top-left.
+    let ev = CGEvent::new_scroll_wheel_event2(
+        None,
+        CGScrollEventUnit::Pixel,
+        2,
+        -(dy.round() as i32),
+        -(dx.round() as i32),
+        0,
+    )
+    .ok_or_else(|| EngineError::Other("CGEventCreateScrollWheelEvent2 returned NULL".into()))?;
+    let screen_h = CGDisplayPixelsHigh(CGMainDisplayID()) as f64;
+    CGEvent::set_location(
+        Some(&ev),
+        CGPoint {
+            x: at.x,
+            y: screen_h - (webview_height - at.y),
+        },
+    );
+    let ns = NSEvent::eventWithCGEvent(&ev)
+        .ok_or_else(|| EngineError::Other("NSEvent eventWithCGEvent: nil".into()))?;
+    web_view.scrollWheel(&ns);
+    let _ = run_loop_until(|| false, Duration::from_millis(16));
+    Ok(())
+}

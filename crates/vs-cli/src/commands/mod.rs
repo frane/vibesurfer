@@ -361,6 +361,20 @@ pub enum Command {
         #[arg(long, short = 'M', default_value = "human")]
         mode: String,
     },
+    /// Move to `(x, y)` and turn the wheel by `(dx, dy)` CSS px, a
+    /// trusted native wheel event (positive dy scrolls down).
+    #[command(visible_alias = "wh")]
+    Wheel {
+        page: String,
+        x: f64,
+        y: f64,
+        #[arg(allow_negative_numbers = true)]
+        dx: f64,
+        #[arg(allow_negative_numbers = true)]
+        dy: f64,
+        #[arg(long, short = 'M', default_value = "human")]
+        mode: String,
+    },
     /// Type text into the FOCUSED element with trusted per-key
     /// events (real keydown/beforeinput/input, isTrusted=true).
     /// Rich-text editors (DraftJS/ProseMirror/contenteditable) and
@@ -1110,6 +1124,24 @@ impl Command {
                     .arg(page.clone())
                     .arg(x.to_string())
                     .arg(y.to_string())
+                    .flag_value("session", s)
+                    .flag_value("mode", mode.clone())
+            }
+            Self::Wheel {
+                page,
+                x,
+                y,
+                dx,
+                dy,
+                mode,
+            } => {
+                let s = require_session(session_id)?;
+                Request::new("vs_wheel")
+                    .arg(page.clone())
+                    .arg(x.to_string())
+                    .arg(y.to_string())
+                    .arg(dx.to_string())
+                    .arg(dy.to_string())
                     .flag_value("session", s)
                     .flag_value("mode", mode.clone())
             }

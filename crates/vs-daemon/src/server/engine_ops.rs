@@ -321,6 +321,18 @@ pub(super) fn handle_cursor(daemon: &Daemon, req: &Request, kind: &str) -> Strin
                 })
             })
         }),
+        "wheel" => parse_f64(1, "x").and_then(|x| {
+            parse_f64(2, "y").and_then(|y| {
+                parse_f64(3, "dx").and_then(|dx| {
+                    parse_f64(4, "dy").map(|dy| vs_engine_webkit::engine::CursorOp::Wheel {
+                        x,
+                        y,
+                        dx,
+                        dy,
+                    })
+                })
+            })
+        }),
         _ => Err(format!("vs_{kind}: unknown kind")),
     };
     let op = match op_result {

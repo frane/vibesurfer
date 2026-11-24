@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Wheel fixture</title>
+<style>
+  body { margin: 0; height: 3000px; }
+  #box { position: absolute; left: 400px; top: 50px; width: 200px; height: 150px; overflow: auto; }
+  #box div { height: 1000px; }
+</style>
+<div id="box"><div>inner</div></div>
+<script>
+  window.__wheels = [];
+  addEventListener('wheel', (e) => {
+    window.__wheels.push({ trusted: e.isTrusted, dx: e.deltaX, dy: e.deltaY, mode: e.deltaMode, target: e.target.id || e.target.tagName });
+  }, { passive: true });
+</script>

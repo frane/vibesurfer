@@ -74,6 +74,10 @@ pub(crate) enum InputEvent {
     Press(Button),
     /// Release a mouse button at the pointer's current position.
     Release(Button),
+    /// Turn the wheel by `(dx, dy)` CSS px at the pointer (positive
+    /// `dy` scrolls down). `step` is what one wheel click scrolls on
+    /// each axis, for dispatchers that only have clicks.
+    Wheel { dx: f64, dy: f64, step: (f64, f64) },
 }
 
 /// A pluggable native-input dispatcher.
@@ -457,6 +461,39 @@ impl XtestDispatcher {
     }
 }
 
+impl XtestDispatcher {
+    /// A wheel turn as clicks of the X11 wheel buttons (4/5 vertical,
+    /// 6/7 horizontal): XTest has no smooth-scroll axis, so the turn is
+    /// rounded to whole clicks of `step` px, at least one for any
+    /// nonzero delta.
+    fn wheel_clicks(&self, dx: f64, dy: f64, step: (f64, f64)) -> EngineResult<()> {
+        let clicks = |d: f64, step: f64| -> u32 {
+            if d == 0.0 {
+                0
+            } else {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let n = (d.abs() / step.max(1.0)).round() as u32;
+                n.max(1)
+            }
+        };
+        let axes = [
+            (if dy > 0.0 { 5_u8 } else { 4 }, clicks(dy, step.1)),
+            (if dx > 0.0 { 7_u8 } else { 6 }, clicks(dx, step.0)),
+        ];
+        for (button, n) in axes {
+            for _ in 0..n {
+                for type_ in [XT_BUTTON_PRESS, XT_BUTTON_RELEASE] {
+                    self.conn
+                        .xtest_fake_input(type_, button, CURRENT_TIME, self.root, 0, 0, 0)
+                        .map_err(|e| EngineError::Other(format!("xtest wheel: {e}")))?
+                        .ignore_error();
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 impl InputDispatcher for XtestDispatcher {
     fn backend_name(&self) -> &'static str {
         "xtest"
@@ -466,6 +503,7 @@ impl InputDispatcher for XtestDispatcher {
             InputEvent::Move(p) => (XT_MOTION_NOTIFY, 0_u8, clamp_i16(p.x), clamp_i16(p.y)),
             InputEvent::Press(b) => (XT_BUTTON_PRESS, button_code(b), 0, 0),
             InputEvent::Release(b) => (XT_BUTTON_RELEASE, button_code(b), 0, 0),
+            InputEvent::Wheel { dx, dy, step } => return self.wheel_clicks(dx, dy, step),
         };
         // FakeInput is fire-and-forget: ignore the void cookie's
         // error reply; any server-side error surfaces on the next
@@ -866,6 +904,11 @@ enum LibeiCmd {
         pressed: bool,
         ack: mpsc::Sender<EngineResult<()>>,
     },
+    Axis {
+        dx: f64,
+        dy: f64,
+        ack: mpsc::Sender<EngineResult<()>>,
+    },
 }
 
 impl LibeiDispatcher {
@@ -948,6 +991,13 @@ impl LibeiDispatcher {
                                     .map_err(|e| EngineError::Other(format!("ei keysym: {e}")));
                                 let _ = ack.send(r);
                             }
+                            LibeiCmd::Axis { dx, dy, ack } => {
+                                let r = proxy
+                                    .notify_pointer_axis(&session, dx, dy, true)
+                                    .await
+                                    .map_err(|e| EngineError::Other(format!("ei axis: {e}")));
+                                let _ = ack.send(r);
+                            }
                             LibeiCmd::Button { code, pressed, ack } => {
                                 let state = if pressed {
                                     ashpd::desktop::remote_desktop::KeyState::Pressed
@@ -994,6 +1044,11 @@ impl InputDispatcher for LibeiDispatcher {
             InputEvent::Release(b) => LibeiCmd::Button {
                 code: linux_button_code(b),
                 pressed: false,
+                ack: ack_tx,
+            },
+            InputEvent::Wheel { dx, dy, .. } => LibeiCmd::Axis {
+                dx,
+                dy,
                 ack: ack_tx,
             },
         };

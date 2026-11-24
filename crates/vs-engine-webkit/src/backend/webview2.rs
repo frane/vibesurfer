@@ -39,8 +39,9 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2, ICoreWebView2CompositionController, ICoreWebView2Controller,
     ICoreWebView2ControllerOptions, ICoreWebView2Environment, ICoreWebView2Environment10,
     ICoreWebView2Environment3, COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
-    COREWEBVIEW2_MOUSE_EVENT_KIND, COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOWN,
-    COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP, COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE,
+    COREWEBVIEW2_MOUSE_EVENT_KIND, COREWEBVIEW2_MOUSE_EVENT_KIND_HORIZONTAL_WHEEL,
+    COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOWN, COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP,
+    COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE, COREWEBVIEW2_MOUSE_EVENT_KIND_WHEEL,
     COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE, COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC,
 };
 use webview2_com::{
@@ -1701,6 +1702,17 @@ impl Engine for Webview2Backend {
                 let _ = execute_script(&web_view, &html5_js);
                 landed
             }
+            CursorOp::Wheel { x, y, dx, dy } => {
+                let landed = wv2_move_along_path(
+                    &comp,
+                    start,
+                    vs_humanize::Point { x, y },
+                    humanize_mode,
+                    seed,
+                )?;
+                wv2_wheel(&comp, landed, dx, dy)?;
+                landed
+            }
         };
         p.last_mouse.set(landed);
         self.follow_new_window(page, matches!(op, CursorOp::ClickAt { .. }))
@@ -1740,6 +1752,7 @@ fn wv2_humanize_seed(op: CursorOp) -> u64 {
         CursorOp::MoveTo { x, y } | CursorOp::HoverAt { x, y } | CursorOp::ClickAt { x, y } => {
             (x, y, 0.0, 0.0)
         }
+        CursorOp::Wheel { x, y, dx, dy } => (x, y, dx, dy),
         CursorOp::Drag { x1, y1, x2, y2 } => (x1, y1, x2, y2),
     };
     let bits = |v: f64| v.to_bits();
@@ -1771,6 +1784,38 @@ fn wv2_send_mouse(
         )
         .map_err(|e| EngineError::Other(format!("SendMouseInput: {e}")))
     }
+}
+
+/// A trusted wheel turn of `(dx, dy)` CSS px at `point`. `mouseData`
+/// is in 120ths of a notch, positive away from the user (up) for the
+/// vertical wheel and to the right for the horizontal one; Chromium
+/// scrolls a notch as 100 px, so one CSS px is 1.2 units.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn wv2_wheel(
+    comp: &ICoreWebView2CompositionController,
+    point: vs_humanize::Point,
+    dx: f64,
+    dy: f64,
+) -> EngineResult<()> {
+    let units = |px: f64| (px * 1.2).round() as i32;
+    for (kind, data) in [
+        (COREWEBVIEW2_MOUSE_EVENT_KIND_WHEEL, -units(dy)),
+        (COREWEBVIEW2_MOUSE_EVENT_KIND_HORIZONTAL_WHEEL, units(dx)),
+    ] {
+        if data == 0 {
+            continue;
+        }
+        unsafe {
+            comp.SendMouseInput(
+                kind,
+                COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE,
+                data as u32,
+                point_at(point),
+            )
+            .map_err(|e| EngineError::Other(format!("SendMouseInput wheel: {e}")))?;
+        }
+    }
+    Ok(())
 }
 
 fn wv2_move_along_path(

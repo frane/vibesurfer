@@ -973,6 +973,27 @@ impl Engine for WpeBackend {
                 let _ = eval_js_string(&web_view, &html5_js, Duration::from_secs(2));
                 landed
             }
+            CursorOp::Wheel { x, y, dx, dy } => {
+                let landed = cursor_move_along_path(
+                    dispatcher,
+                    start,
+                    vs_humanize::Point { x, y },
+                    (origin_x, origin_y),
+                    humanize_mode,
+                    seed,
+                    false,
+                )?;
+                // WebKitGTK scrolls a wheel click by the visible size to
+                // the power of 2/3 on that axis (86 px of an 800 px
+                // high view).
+                let step = (
+                    f64::from(p.web_view.width().max(1)).powf(2.0 / 3.0),
+                    f64::from(p.web_view.height().max(1)).powf(2.0 / 3.0),
+                );
+                dispatcher.dispatch(super::wpe_input::InputEvent::Wheel { dx, dy, step })?;
+                dispatcher.flush()?;
+                landed
+            }
         };
         p.last_mouse.set(landed);
         deliver_input(dispatcher, &p.window);
@@ -1080,6 +1101,7 @@ fn humanize_seed(op: CursorOp) -> u64 {
         CursorOp::MoveTo { x, y } | CursorOp::HoverAt { x, y } | CursorOp::ClickAt { x, y } => {
             (x, y, 0.0, 0.0)
         }
+        CursorOp::Wheel { x, y, dx, dy } => (x, y, dx, dy),
         CursorOp::Drag { x1, y1, x2, y2 } => (x1, y1, x2, y2),
     };
     let bits = |v: f64| v.to_bits();

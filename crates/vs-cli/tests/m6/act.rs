@@ -898,3 +898,69 @@ fn cell_click_at_lands_after_viewport_resize() {
         );
     }
 }
+
+// A wheel turn is a native, trusted wheel event: it scrolls what is
+// under the pointer (an overflow box, or the page) and the page's
+// listener sees isTrusted with the turn's direction.
+#[test]
+fn cell_wheel_scrolls_what_is_under_the_pointer() {
+    let num = |s: &str| s.trim().parse::<f64>().unwrap_or(0.0);
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let (_s, page, _t) = open_fixture(&ctx, "/wheel.html");
+        let poll = |expr: &str| {
+            let mut v = String::new();
+            for _ in 0..40 {
+                settle(50);
+                v = eval_js(&ctx, &page, expr);
+                if num(&v) > 0.0 {
+                    break;
+                }
+            }
+            v
+        };
+
+        // Over the overflow box, the box scrolls and the page does not.
+        let r = ctx.vs(&["wheel", &page, "500", "120", "0", "200", "--mode=robotic"]);
+        assert_ok("wheel box", &r);
+        let boxed = poll("String(document.getElementById('box').scrollTop)");
+        let all = eval_js(&ctx, &page, "JSON.stringify(window.__wheels)");
+        assert!(num(&boxed) > 0.0, "box did not scroll: {boxed} {all}");
+        assert!(all.contains("\"trusted\":true"), "wheel event: {all}");
+        assert_eq!(
+            num(&eval_js(&ctx, &page, "String(window.scrollY)")),
+            0.0,
+            "the page scrolled with the box"
+        );
+
+        // Elsewhere the page scrolls.
+        let r = ctx.vs(&["wheel", &page, "100", "300", "0", "300", "--mode=robotic"]);
+        assert_ok("wheel page", &r);
+        let y = poll("String(window.scrollY)");
+        assert!(num(&y) > 0.0, "page did not scroll: scrollY={y}");
+        let dy = eval_js(
+            &ctx,
+            &page,
+            "String(window.__wheels.reduce((a, w) => a + w.dy, 0))",
+        );
+        assert!(num(&dy) > 0.0, "deltaY sum: {dy}");
+
+        // Upwards and sideways come out with their signs.
+        let r = ctx.vs(&[
+            "wheel",
+            &page,
+            "100",
+            "300",
+            "-40",
+            "-100",
+            "--mode=robotic",
+        ]);
+        assert_ok("wheel up", &r);
+        settle(200);
+        let all = eval_js(&ctx, &page, "JSON.stringify(window.__wheels)");
+        eprintln!("wheels: {all}");
+        let up = eval_js(&ctx, &page, "String(window.__wheels.some(w => w.dy < 0))");
+        let left = eval_js(&ctx, &page, "String(window.__wheels.some(w => w.dx < 0))");
+        assert_eq!((up.trim(), left.trim()), ("true", "true"), "{all}");
+    }
+}
