@@ -6,6 +6,13 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Several `vs` calls at once on a home with no daemon each spawned one, and a later daemon took over the socket of an earlier one, stranding the clients already connected to it (a cold parallel test run failed a third of its tests). `vs serve` now holds a lock next to the socket for its lifetime; a second one exits and leaves the first one's socket and PID file alone. Cell `cell_second_daemon_leaves_the_first_alone`.
+- `vs drop`: a handler that read a dropped string after an `await` could get an empty string when WebKit had garbage-collected the `DataTransfer` wrapper in between. The drop's data is now held with the wrapper.
+
+### Changed
+- Building from source needs Rust 1.89 (was 1.85).
+
 ## [0.2.20] - 2026-11-24
 
 ### Fixed

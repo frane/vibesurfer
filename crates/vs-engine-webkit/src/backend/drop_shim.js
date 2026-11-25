@@ -11,7 +11,12 @@
     const getData = P.getData;
     const types = Object.getOwnPropertyDescriptor(P, 'types');
     const files = Object.getOwnPropertyDescriptor(P, 'files');
-    const state = { pending: null, drops: new WeakMap() };
+    // A Map, not a WeakMap: WebKit may collect an unreferenced
+    // DataTransfer wrapper and hand out a new one on the next
+    // `event.dataTransfer`, which a WeakMap entry would not survive.
+    // Holding the wrapper keeps it the same object; the last few drops
+    // are kept.
+    const state = { pending: null, drops: new Map() };
     const toFileList = (specs) => {
       const dt = new DataTransfer();
       for (const f of specs) {
@@ -29,6 +34,7 @@
         extra: p.extra,
         files: native.length === 0 && p.files.length > 0 ? toFileList(p.files) : null,
       });
+      if (state.drops.size > 8) state.drops.delete(state.drops.keys().next().value);
     }, true);
     const has = Object.prototype.hasOwnProperty;
     P.getData = function (t) {

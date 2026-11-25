@@ -36,9 +36,17 @@ pub async fn serve(
     mut shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> std::io::Result<()> {
     let path = path.as_ref();
-    // On Unix, a stale socket file blocks bind. Best-effort cleanup.
+    // On Unix, a stale socket file blocks bind. Best-effort cleanup,
+    // but never of a live daemon's socket: removing it would strand
+    // that daemon's clients.
     #[cfg(unix)]
     if path.exists() {
+        if crate::transport::is_listening(path) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AddrInUse,
+                format!("a daemon is already listening on {}", path.display()),
+            ));
+        }
         let _ = std::fs::remove_file(path);
     }
     let name = crate::transport::path_to_name(path).map_err(|e| {

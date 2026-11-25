@@ -21,6 +21,43 @@ fn cell_session_open() {
     }
 }
 
+/// A second `vs serve` on a home whose daemon is up leaves it alone.
+/// Test runners start many `vs` at once on a fresh home; each one that
+/// found no daemon spawned one, and a later daemon replaced the socket
+/// of an earlier one, stranding the clients already on it.
+#[test]
+fn cell_second_daemon_leaves_the_first_alone() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        let r = ctx.vs(&["session-open"]);
+        assert_ok("session-open", &r);
+        let pid_file = ctx.home_path().join("daemon.pid");
+        let first_pid = std::fs::read_to_string(&pid_file).unwrap_or_default();
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_vs"))
+            .arg(format!("--home={}", ctx.home_path().display()))
+            .arg("serve")
+            .output()
+            .expect("run a second vs serve");
+        assert!(
+            out.status.success(),
+            "second daemon should step aside: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("already running"),
+            "stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            std::fs::read_to_string(&pid_file).unwrap_or_default(),
+            first_pid,
+            "the PID file still names the first daemon"
+        );
+        let r = ctx.vs(&["open", &ctx.url("/static.html")]);
+        assert_ok("open on the first daemon's session", &r);
+    }
+}
+
 // 2. vs_session_close
 #[test]
 fn cell_session_close() {

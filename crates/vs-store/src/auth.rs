@@ -242,7 +242,7 @@ fn decode_hex_key(s: &str) -> Result<MasterKey> {
         return Err(StoreError::Crypto("hex key shape"));
     }
     let mut buf = [0u8; KEY_LEN];
-    for (i, chunk) in s.as_bytes().chunks_exact(2).enumerate() {
+    for (i, chunk) in s.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         let pair = std::str::from_utf8(chunk).map_err(|_| StoreError::Crypto("hex key utf8"))?;
         buf[i] = u8::from_str_radix(pair, 16).map_err(|_| StoreError::Crypto("hex key digit"))?;
     }

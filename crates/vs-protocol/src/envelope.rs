@@ -53,7 +53,7 @@ impl FromStr for StateToken {
             return Err(ParseError::InvalidToken { raw: s.to_string() });
         }
         let mut bytes = [0u8; 8];
-        for (i, chunk) in s.as_bytes().chunks_exact(2).enumerate() {
+        for (i, chunk) in s.as_bytes().as_chunks::<2>().0.iter().enumerate() {
             // SAFETY-via-validation: chunk is guaranteed lowercase hex above.
             bytes[i] = u8::from_str_radix(std::str::from_utf8(chunk).expect("ascii"), 16)
                 .map_err(|_| ParseError::InvalidToken { raw: s.to_string() })?;

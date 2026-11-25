@@ -90,6 +90,43 @@ pub fn run_stop(paths: &DaemonPaths) -> Result<()> {
     ))
 }
 
+/// Hold the daemon's instance lock, a file next to the socket, for as
+/// long as the returned handle lives. `None` means another daemon holds
+/// it. Parallel callers (test runners start many `vs` at once) each
+/// auto-spawn a daemon; without the lock a second one replaced the
+/// first one's socket, and clients that had connected in between kept
+/// talking to a daemon nobody else could reach.
+fn claim_instance(paths: &DaemonPaths) -> Result<Option<std::fs::File>> {
+    let path = paths.socket().with_extension("lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("open {}", path.display()))?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(e)) => {
+            Err(e).with_context(|| format!("lock {}", path.display()))
+        }
+    }
+}
+
+/// [`claim_instance`] for `run`: the lock, or `None` after telling the
+/// caller a daemon is already up (an exit that is not an error: the
+/// spawning CLI connects to that one).
+fn instance_or_exit(paths: &DaemonPaths) -> Result<Option<std::fs::File>> {
+    let lock = claim_instance(paths)?;
+    if lock.is_none() {
+        eprintln!(
+            "a vibesurfer daemon is already running for {}",
+            paths.socket().display()
+        );
+    }
+    Ok(lock)
+}
+
 /// Resolve the daemon master key: OS keyring first, then the fallback
 /// file at `~/.vibesurfer/key` (32 raw bytes, 64 hex chars, or base64
 /// of 32 bytes). If neither exists, generate a fresh key and persist
@@ -277,6 +314,9 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     install_panic_hook();
     install_seh_handler();
     args.paths.ensure_root().context("ensure ~/.vibesurfer")?;
+    let Some(_instance) = instance_or_exit(&args.paths)? else {
+        return Ok(());
+    };
 
     let mtm = MainThreadMarker::new()
         .ok_or_else(|| anyhow::anyhow!("vs serve must be invoked from the OS main thread"))?;
@@ -454,6 +494,9 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     install_panic_hook();
     install_seh_handler();
     args.paths.ensure_root().context("ensure ~/.vibesurfer")?;
+    let Some(_instance) = instance_or_exit(&args.paths)? else {
+        return Ok(());
+    };
     if args.stop {
         return run_stop(&args.paths);
     }
@@ -598,6 +641,9 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     install_panic_hook();
     install_seh_handler();
     args.paths.ensure_root().context("ensure ~/.vibesurfer")?;
+    let Some(_instance) = instance_or_exit(&args.paths)? else {
+        return Ok(());
+    };
     if args.stop {
         return run_stop(&args.paths);
     }
@@ -879,3 +925,22 @@ fn install_seh_handler() {
 /// covers those.
 #[cfg(not(target_os = "windows"))]
 fn install_seh_handler() {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_second_daemon_does_not_get_the_instance() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = DaemonPaths::at(dir.path());
+        let first = claim_instance(&paths).unwrap();
+        assert!(first.is_some());
+        assert!(claim_instance(&paths).unwrap().is_none());
+        drop(first);
+        assert!(
+            claim_instance(&paths).unwrap().is_some(),
+            "free again once the first daemon exits"
+        );
+    }
+}
