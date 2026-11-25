@@ -233,7 +233,7 @@ Two of those exist for the humans next to the agents. `vs prompt-form` asks for 
 
 ## Build from source
 
-Requires Rust 1.85+. Platform-specific dependencies:
+Requires Rust 1.89+. Platform-specific dependencies:
 
 - **macOS** (15+): nothing extra, links against system WebKit.
 - **Linux**: `libwebkitgtk-6.0-dev`, `libgtk-4-dev`, `libsoup-3.0-dev`.

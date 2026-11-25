@@ -874,13 +874,24 @@ fn cell_dialogs_wait_for_an_answer() {
             let id = d.line.split(' ').next().unwrap_or("").to_string();
             let mut a = vec!["net", "dialog", &id];
             a.extend(answer.iter().copied());
+            let seen = start.elapsed();
             assert_ok("net dialog", &sv(&ctx, &s, &a));
             assert_ok("click", &click.join().unwrap());
-            assert_eq!(
-                eval(&ctx, &s, &page, "document.getElementById('o').textContent"),
-                want,
-                "{label} {answer:?}"
-            );
+            let got = eval(&ctx, &s, &page, "document.getElementById('o').textContent");
+            if got != want {
+                // Flaky on macOS 15 runners only: say what else happened.
+                let more: Vec<String> = poll(&ctx, &s, 0).into_iter().map(|e| e.line).collect();
+                let log =
+                    std::fs::read_to_string(ctx.home_path().join("daemon.log")).unwrap_or_default();
+                let tail: Vec<&str> = log.lines().rev().take(40).collect();
+                panic!(
+                    "{label} {answer:?}: got {got:?}, want {want:?}; dialog {} seen after {seen:?}, \
+                     whole case {:?}; later events {more:?}\n--- daemon.log tail ---\n{}",
+                    d.line,
+                    start.elapsed(),
+                    tail.into_iter().rev().collect::<Vec<_>>().join("\n")
+                );
+            }
         }
     }
 }
