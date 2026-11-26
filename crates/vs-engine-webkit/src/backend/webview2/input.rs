@@ -104,3 +104,21 @@ pub(super) fn wv2_press_release(
     std::thread::sleep(Duration::from_millis(30));
     Ok(())
 }
+
+/// How long the left button is held at a drag's start before the move,
+/// so the page sees a press, not a click.
+const DRAG_PRESS_SETTLE: Duration = Duration::from_millis(15);
+
+/// Press the left button at `at`, run `move_while_held` from there, and
+/// release where it lands.
+pub(super) fn wv2_drag(
+    comp: &ICoreWebView2CompositionController,
+    at: vs_humanize::Point,
+    move_while_held: impl FnOnce(vs_humanize::Point) -> EngineResult<vs_humanize::Point>,
+) -> EngineResult<vs_humanize::Point> {
+    wv2_send_mouse(comp, COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOWN, at)?;
+    std::thread::sleep(DRAG_PRESS_SETTLE);
+    let landed = move_while_held(at)?;
+    wv2_send_mouse(comp, COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP, landed)?;
+    Ok(landed)
+}

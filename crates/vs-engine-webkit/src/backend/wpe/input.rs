@@ -193,3 +193,124 @@ pub(super) fn cursor_press_release(
     let _ = run_loop_until(|| false, Duration::from_millis(up_ms));
     Ok(())
 }
+
+/// How long the left button is held at a drag's start before the move,
+/// so the page sees a press, not a click.
+const DRAG_PRESS_SETTLE: Duration = Duration::from_millis(15);
+
+/// Press the left button, run `move_while_held`, release, and flush.
+pub(super) fn drag_from(
+    dispatcher: &dyn crate::backend::wpe_input::InputDispatcher,
+    move_while_held: impl FnOnce() -> EngineResult<vs_humanize::Point>,
+) -> EngineResult<vs_humanize::Point> {
+    use crate::backend::wpe_input::{Button, InputEvent};
+    dispatcher.dispatch(InputEvent::Press(Button::Left))?;
+    std::thread::sleep(DRAG_PRESS_SETTLE);
+    let landed = move_while_held()?;
+    dispatcher.dispatch(InputEvent::Release(Button::Left))?;
+    dispatcher.flush()?;
+    Ok(landed)
+}
+
+/// Turn the wheel by `(dx, dy)` at the pointer. Under XTest that is one
+/// click WebKit's handler takes as the exact turn (see `wpe_wheel`),
+/// with the XTest step as the fallback when that hook is not in place;
+/// the portal's axis events are exact already.
+pub(super) fn wheel(
+    dispatcher: &dyn crate::backend::wpe_input::InputDispatcher,
+    web_view: &webkit6::WebView,
+    window: &gtk::Window,
+    dx: f64,
+    dy: f64,
+) -> EngineResult<()> {
+    use crate::backend::wpe_input::InputEvent;
+    let event = if dispatcher.backend_name() == "xtest" {
+        crate::backend::wpe_wheel::arm(dx, dy, (web_view.width(), web_view.height()));
+        InputEvent::Wheel {
+            dx: if dy == 0.0 { dx.signum() } else { 0.0 },
+            dy: dy.signum(),
+            step: (1.0, 1.0),
+        }
+    } else {
+        InputEvent::Wheel {
+            dx,
+            dy,
+            step: (1.0, 1.0),
+        }
+    };
+    dispatcher.dispatch(event)?;
+    dispatcher.flush()?;
+    deliver_input(dispatcher, window);
+    crate::backend::wpe_wheel::disarm();
+    Ok(())
+}
+
+/// How long the last key gets to become `beforeinput`/`input` before
+/// the caller reads the page back.
+const TYPING_SETTLE: Duration = Duration::from_millis(150);
+
+/// Type `text` into whatever holds keyboard focus, as real key events
+/// through the core keyboard, with the pointer first put back where the
+/// caller left it over page `page` (`cursor`, page coordinates; `tile`,
+/// the page window's home on the screen).
+pub(super) fn type_keys(
+    page: PageHandle,
+    cursor: vs_humanize::Point,
+    tile: (f64, f64),
+    text: &str,
+    mode: crate::engine::InputMode,
+) -> EngineResult<()> {
+    let dispatcher = crate::backend::wpe_input::dispatcher()?;
+    let origin = input_origin(dispatcher, page, tile);
+    // Pump GLib rather than sleep: this runs on the main thread,
+    // so a plain sleep would stop WebKit processing the very keys
+    // we are sending.
+    let settle = |d: Duration| {
+        let _ = run_loop_until(|| false, d);
+    };
+    // Put the pointer where we believe it already is before asking
+    // for focus. X hands keys to the focused window, and a
+    // headless session has no window manager to focus anything, so
+    // the pointer is what we have to go on. The caller has
+    // normally just clicked to place the caret, which means the
+    // right window is already under it.
+    #[allow(clippy::cast_possible_truncation)]
+    let at = crate::backend::wpe_input::ScreenPoint {
+        x: (origin.0 + cursor.x) as i32,
+        y: (origin.1 + cursor.y) as i32,
+    };
+    dispatcher.raise_window(&window_title(page));
+    // Keys go through the core keyboard (toolkits take them from it
+    // only), focused on this page's window by the core pointer.
+    dispatcher.use_core_pointer();
+    let _ = dispatcher.dispatch(crate::backend::wpe_input::InputEvent::Move(at));
+    let _ = dispatcher.flush();
+    dispatcher.focus_pointer_window();
+
+    let mut cadence = crate::backend::common::KeyCadence::new(mode.into(), text);
+
+    let typed = (|| -> EngineResult<()> {
+        for ch in text.chars() {
+            dispatcher.key_down(ch, &settle)?;
+            settle(Duration::from_millis(cadence.hold_ms()));
+            dispatcher.key_up(ch)?;
+            settle(Duration::from_millis(cadence.next_wait_ms().unwrap_or(1)));
+        }
+        Ok(())
+    })();
+
+    // Give the borrowed keycode back whether the run finished or
+    // failed halfway: a stray binding would change what the user's
+    // own keyboard does for the rest of the session.
+    let restored = dispatcher.end_typing();
+    typed?;
+    restored?;
+
+    let _ = run_loop_until(|| false, TYPING_SETTLE);
+    // The core pointer must not stay over this page (or end up over
+    // the next one placed here) once typing is done.
+    if let Some(size) = dispatcher.screen_size() {
+        park_core_pointer(dispatcher, size);
+    }
+    Ok(())
+}

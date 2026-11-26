@@ -17,8 +17,8 @@ use vs_protocol::{Ref, Tree};
 use super::cookies;
 use super::host::{eval_js_string, host_page};
 use super::input::{
-    click_with, cursor_move_along_path, cursor_press_release, deliver_input, input_origin,
-    park_core_pointer, window_title,
+    click_with, cursor_move_along_path, cursor_press_release, deliver_input, drag_from,
+    input_origin, type_keys, wheel, window_title,
 };
 use super::loading::{load_result, wait_for_load};
 use super::{run_loop_until, Opening, WpeBackend};
@@ -633,194 +633,56 @@ impl Engine for WpeBackend {
             let p = self.page_mut(page)?;
             (p.last_mouse.get(), p.origin.get())
         };
-        let dispatcher = crate::backend::wpe_input::dispatcher()?;
-        let origin = input_origin(dispatcher, page, tile);
-        // Pump GLib rather than sleep: this runs on the main thread,
-        // so a plain sleep would stop WebKit processing the very keys
-        // we are sending.
-        let settle = |d: Duration| {
-            let _ = run_loop_until(|| false, d);
-        };
-        // Put the pointer where we believe it already is before asking
-        // for focus. X hands keys to the focused window, and a
-        // headless session has no window manager to focus anything, so
-        // the pointer is what we have to go on. The caller has
-        // normally just clicked to place the caret, which means the
-        // right window is already under it.
-        #[allow(clippy::cast_possible_truncation)]
-        let at = crate::backend::wpe_input::ScreenPoint {
-            x: (origin.0 + cursor.x) as i32,
-            y: (origin.1 + cursor.y) as i32,
-        };
-        dispatcher.raise_window(&window_title(page));
-        // Keys go through the core keyboard (toolkits take them from it
-        // only), focused on this page's window by the core pointer.
-        dispatcher.use_core_pointer();
-        let _ = dispatcher.dispatch(crate::backend::wpe_input::InputEvent::Move(at));
-        let _ = dispatcher.flush();
-        dispatcher.focus_pointer_window();
-
-        let mut cadence = crate::backend::common::KeyCadence::new(mode.into(), text);
-
-        let typed = (|| -> EngineResult<()> {
-            for ch in text.chars() {
-                dispatcher.key_down(ch, &settle)?;
-                settle(Duration::from_millis(cadence.hold_ms()));
-                dispatcher.key_up(ch)?;
-                settle(Duration::from_millis(cadence.next_wait_ms().unwrap_or(1)));
-            }
-            Ok(())
-        })();
-
-        // Give the borrowed keycode back whether the run finished or
-        // failed halfway: a stray binding would change what the user's
-        // own keyboard does for the rest of the session.
-        let restored = dispatcher.end_typing();
-        typed?;
-        restored?;
-
-        // Let the last keyUp turn into beforeinput/input before the
-        // caller reads the page back.
-        let _ = run_loop_until(|| false, Duration::from_millis(150));
-        // The core pointer must not stay over this page (or end up over
-        // the next one placed here) once typing is done.
-        if let Some(size) = dispatcher.screen_size() {
-            park_core_pointer(dispatcher, size);
-        }
+        type_keys(page, cursor, tile, text, mode)?;
         self.follow_new_window(page, false)
     }
 
-    #[allow(clippy::too_many_lines)]
     fn cursor_op(&mut self, page: PageHandle, op: CursorOp, mode: InputMode) -> EngineResult<()> {
         self.forget_new_window(page)?;
         let p = self.page_mut(page)?;
         let dispatcher = crate::backend::wpe_input::dispatcher()?;
         let humanize_mode = vs_humanize::InputMode::from(mode);
-        // Screen origin of the hidden host window. v0.1.11 assumes
-        // (0, 0) — true under `xvfb` (CI) and any session without a
-        // window manager. With a WM, the WM may have translated the
-        // window elsewhere; a follow-up PR will query
-        // `GdkX11Surface::xid()` + `XTranslateCoordinates` to read the
-        // real origin. Until then, page-local CSS px == screen px,
-        // which is fine for CI and most headless setups.
-        // The web view fills the window, or is pinned to its top-left
-        // once sized (set_viewport): page coordinates are window
-        // coordinates either way.
-        let (origin_x, origin_y) = input_origin(dispatcher, page, p.origin.get());
+        // The web view fills its window, or is pinned to its top-left once
+        // sized (set_viewport), so page coordinates are window coordinates
+        // and `input_origin` gives the window's place on the screen.
+        let origin = input_origin(dispatcher, page, p.origin.get());
         // Every page's window is at the origin; put this one on top so
         // the input reaches it and not another page's.
         dispatcher.raise_window(&window_title(page));
         dispatcher.use_page_pointer(&window_title(page));
         let start = p.last_mouse.get();
         let seed = crate::backend::common::cursor_seed(op);
+        let move_to = |from, to, held| {
+            cursor_move_along_path(dispatcher, from, to, origin, humanize_mode, seed, held)
+        };
+        let point = |x, y| vs_humanize::Point { x, y };
         let landed = match op {
-            CursorOp::MoveTo { x, y } | CursorOp::HoverAt { x, y } => cursor_move_along_path(
-                dispatcher,
-                start,
-                vs_humanize::Point { x, y },
-                (origin_x, origin_y),
-                humanize_mode,
-                seed,
-                false,
-            )?,
+            CursorOp::MoveTo { x, y } | CursorOp::HoverAt { x, y } => {
+                move_to(start, point(x, y), false)?
+            }
             CursorOp::ClickAt { x, y } => {
-                let landed = cursor_move_along_path(
-                    dispatcher,
-                    start,
-                    vs_humanize::Point { x, y },
-                    (origin_x, origin_y),
-                    humanize_mode,
-                    seed,
-                    false,
-                )?;
-                cursor_press_release(dispatcher, landed, (origin_x, origin_y), humanize_mode)?;
+                let landed = move_to(start, point(x, y), false)?;
+                cursor_press_release(dispatcher, landed, origin, humanize_mode)?;
                 landed
             }
             CursorOp::Drag { x1, y1, x2, y2 } => {
-                let start_pt = vs_humanize::Point { x: x1, y: y1 };
-                let target = vs_humanize::Point { x: x2, y: y2 };
-                let pre = cursor_move_along_path(
-                    dispatcher,
-                    start,
-                    start_pt,
-                    (origin_x, origin_y),
-                    humanize_mode,
-                    seed,
-                    false,
-                )?;
-                dispatcher.dispatch(crate::backend::wpe_input::InputEvent::Press(
-                    crate::backend::wpe_input::Button::Left,
-                ))?;
-                std::thread::sleep(Duration::from_millis(15));
-                let landed = cursor_move_along_path(
-                    dispatcher,
-                    pre,
-                    target,
-                    (origin_x, origin_y),
-                    humanize_mode,
-                    seed,
-                    true,
-                )?;
-                dispatcher.dispatch(crate::backend::wpe_input::InputEvent::Release(
-                    crate::backend::wpe_input::Button::Left,
-                ))?;
-                dispatcher.flush()?;
+                let pressed_at = move_to(start, point(x1, y1), false)?;
+                let landed = drag_from(dispatcher, || move_to(pressed_at, point(x2, y2), true))?;
                 // After the OS-level drag, fire the HTML5 DragEvent
                 // chain in JS so react-dnd / React-Flow HTML5 targets
                 // observe the drop.
                 let html5_js = crate::backend::common::build_html5_drag_js(x1, y1, x2, y2);
-                let web_view = p.web_view.clone();
-                let _ = eval_js_string(&web_view, &html5_js, Duration::from_secs(2));
+                let _ = eval_js_string(&p.web_view, &html5_js, Duration::from_secs(2));
                 landed
             }
             CursorOp::Click { x, y, opts } => {
-                let landed = cursor_move_along_path(
-                    dispatcher,
-                    start,
-                    vs_humanize::Point { x, y },
-                    (origin_x, origin_y),
-                    humanize_mode,
-                    seed,
-                    false,
-                )?;
+                let landed = move_to(start, point(x, y), false)?;
                 click_with(dispatcher, opts)?;
                 landed
             }
             CursorOp::Wheel { x, y, dx, dy } => {
-                let landed = cursor_move_along_path(
-                    dispatcher,
-                    start,
-                    vs_humanize::Point { x, y },
-                    (origin_x, origin_y),
-                    humanize_mode,
-                    seed,
-                    false,
-                )?;
-                // One click that WebKit's handler takes as the exact
-                // turn (see wpe_wheel); the XTest step stays the
-                // fallback when that hook is not in place.
-                // The portal's axis events are exact already.
-                if dispatcher.backend_name() == "xtest" {
-                    crate::backend::wpe_wheel::arm(
-                        dx,
-                        dy,
-                        (p.web_view.width(), p.web_view.height()),
-                    );
-                    dispatcher.dispatch(crate::backend::wpe_input::InputEvent::Wheel {
-                        dx: if dy == 0.0 { dx.signum() } else { 0.0 },
-                        dy: dy.signum(),
-                        step: (1.0, 1.0),
-                    })?;
-                } else {
-                    dispatcher.dispatch(crate::backend::wpe_input::InputEvent::Wheel {
-                        dx,
-                        dy,
-                        step: (1.0, 1.0),
-                    })?;
-                }
-                dispatcher.flush()?;
-                deliver_input(dispatcher, &p.window);
-                crate::backend::wpe_wheel::disarm();
+                let landed = move_to(start, point(x, y), false)?;
+                wheel(dispatcher, &p.web_view, &p.window, dx, dy)?;
                 landed
             }
         };

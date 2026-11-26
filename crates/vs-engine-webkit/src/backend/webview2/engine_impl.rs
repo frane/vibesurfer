@@ -10,8 +10,7 @@ use vs_protocol::{Ref, Tree};
 
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2CompositionController, ICoreWebView2Environment, ICoreWebView2Environment3,
-    COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOWN,
-    COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP,
+    COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
 };
 use webview2_com::{
     pwstr_from_str, CallDevToolsProtocolMethodCompletedHandler, CapturePreviewCompletedHandler,
@@ -30,8 +29,8 @@ use crate::engine::{
 
 use super::cookies;
 use super::host::{host_view, isolated_controller_options, proxied_user_data_dir};
-use super::input::{point_at, wv2_move_along_path, wv2_press_release, wv2_send_mouse, wv2_wheel};
-use super::script::{add_init_script, call_cdp, cdp_click, cdp_key, execute_script};
+use super::input::{point_at, wv2_drag, wv2_move_along_path, wv2_press_release, wv2_wheel};
+use super::script::{add_init_script, call_cdp, cdp_click, cdp_key_events, execute_script};
 use super::{ViewOrigin, Webview2Backend};
 
 impl Engine for Webview2Backend {
@@ -715,31 +714,13 @@ impl Engine for Webview2Backend {
 
     fn type_text(&mut self, page: PageHandle, text: &str, mode: InputMode) -> EngineResult<()> {
         self.forget_new_window(page)?;
-        let p = self.page_mut(page)?;
-        let web_view = p.web_view.clone();
+        let web_view = self.page_mut(page)?.web_view.clone();
         let mut cadence = crate::backend::common::KeyCadence::new(mode.into(), text);
-
         for ch in text.chars() {
-            let spelling = cdp_key(ch);
-            let mut down = serde_json::json!({
-                "type": "keyDown",
-                "key": spelling.key,
-                "text": spelling.text,
-                "unmodifiedText": spelling.text,
-                "windowsVirtualKeyCode": spelling.virtual_key,
-            });
-            let mut up = serde_json::json!({
-                "type": "keyUp",
-                "key": spelling.key,
-                "windowsVirtualKeyCode": spelling.virtual_key,
-            });
-            if let Some(code) = spelling.code {
-                down["code"] = serde_json::Value::from(code);
-                up["code"] = serde_json::Value::from(code);
-            }
-            call_cdp(&web_view, "Input.dispatchKeyEvent", &down.to_string())?;
+            let (down, up) = cdp_key_events(ch);
+            call_cdp(&web_view, "Input.dispatchKeyEvent", &down)?;
             std::thread::sleep(Duration::from_millis(cadence.hold_ms()));
-            call_cdp(&web_view, "Input.dispatchKeyEvent", &up.to_string())?;
+            call_cdp(&web_view, "Input.dispatchKeyEvent", &up)?;
             if let Some(wait) = cadence.next_wait_ms() {
                 std::thread::sleep(Duration::from_millis(wait));
             }
@@ -754,61 +735,32 @@ impl Engine for Webview2Backend {
         let humanize_mode = vs_humanize::InputMode::from(mode);
         let start = p.last_mouse.get();
         let seed = crate::backend::common::cursor_seed(op);
+        let move_to = |from, to| wv2_move_along_path(&comp, from, to, humanize_mode, seed);
+        let point = |x, y| vs_humanize::Point { x, y };
         let landed = match op {
-            CursorOp::MoveTo { x, y } | CursorOp::HoverAt { x, y } => wv2_move_along_path(
-                &comp,
-                start,
-                vs_humanize::Point { x, y },
-                humanize_mode,
-                seed,
-            )?,
+            CursorOp::MoveTo { x, y } | CursorOp::HoverAt { x, y } => move_to(start, point(x, y))?,
             CursorOp::ClickAt { x, y } => {
-                let landed = wv2_move_along_path(
-                    &comp,
-                    start,
-                    vs_humanize::Point { x, y },
-                    humanize_mode,
-                    seed,
-                )?;
+                let landed = move_to(start, point(x, y))?;
                 wv2_press_release(&comp, landed)?;
                 landed
             }
             CursorOp::Drag { x1, y1, x2, y2 } => {
-                let start_pt = vs_humanize::Point { x: x1, y: y1 };
-                let target = vs_humanize::Point { x: x2, y: y2 };
-                let pre = wv2_move_along_path(&comp, start, start_pt, humanize_mode, seed)?;
-                wv2_send_mouse(&comp, COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOWN, pre)?;
-                std::thread::sleep(Duration::from_millis(15));
-                let landed = wv2_move_along_path(&comp, pre, target, humanize_mode, seed)?;
-                wv2_send_mouse(&comp, COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP, landed)?;
+                let pressed_at = move_to(start, point(x1, y1))?;
+                let landed = wv2_drag(&comp, pressed_at, |from| move_to(from, point(x2, y2)))?;
                 // After the OS-level drag, fire the HTML5 DragEvent
                 // chain in JS so react-dnd / React-Flow HTML5 targets
                 // observe the drop.
                 let html5_js = crate::backend::common::build_html5_drag_js(x1, y1, x2, y2);
-                let web_view = p.web_view.clone();
-                let _ = execute_script(&web_view, &html5_js);
+                let _ = execute_script(&p.web_view, &html5_js);
                 landed
             }
             CursorOp::Click { x, y, opts } => {
-                let landed = wv2_move_along_path(
-                    &comp,
-                    start,
-                    vs_humanize::Point { x, y },
-                    humanize_mode,
-                    seed,
-                )?;
-                let web_view = p.web_view.clone();
-                cdp_click(&web_view, landed, opts)?;
+                let landed = move_to(start, point(x, y))?;
+                cdp_click(&p.web_view, landed, opts)?;
                 landed
             }
             CursorOp::Wheel { x, y, dx, dy } => {
-                let landed = wv2_move_along_path(
-                    &comp,
-                    start,
-                    vs_humanize::Point { x, y },
-                    humanize_mode,
-                    seed,
-                )?;
+                let landed = move_to(start, point(x, y))?;
                 wv2_wheel(&comp, landed, dx, dy)?;
                 landed
             }

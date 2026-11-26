@@ -124,14 +124,14 @@ pub(super) fn cdp_click(
 /// `text`. A named key must not carry text, or the renderer inserts a
 /// character instead of acting on the key; Enter is the exception,
 /// where the text is what submits a form.
-pub(super) struct CdpKey {
-    pub(super) key: String,
-    pub(super) code: Option<&'static str>,
-    pub(super) virtual_key: u32,
-    pub(super) text: String,
+struct CdpKey {
+    key: String,
+    code: Option<&'static str>,
+    virtual_key: u32,
+    text: String,
 }
 
-pub(super) fn cdp_key(ch: char) -> CdpKey {
+fn cdp_key(ch: char) -> CdpKey {
     let named = match ch {
         '\n' | '\r' => Some(("Enter", "Enter", 13_u32, "\r")),
         '\t' => Some(("Tab", "Tab", 9, "")),
@@ -302,4 +302,26 @@ pub(super) fn install_inspector(web_view: &ICoreWebView2, slots: &InspectorSlots
     }));
     let mut token: i64 = 0;
     unsafe { web_view.add_WebMessageReceived(&handler, &raw mut token) }.is_ok()
+}
+
+/// `Input.dispatchKeyEvent` parameters (keyDown, keyUp) typing `ch`.
+pub(super) fn cdp_key_events(ch: char) -> (String, String) {
+    let spelling = cdp_key(ch);
+    let mut down = serde_json::json!({
+        "type": "keyDown",
+        "key": spelling.key,
+        "text": spelling.text,
+        "unmodifiedText": spelling.text,
+        "windowsVirtualKeyCode": spelling.virtual_key,
+    });
+    let mut up = serde_json::json!({
+        "type": "keyUp",
+        "key": spelling.key,
+        "windowsVirtualKeyCode": spelling.virtual_key,
+    });
+    if let Some(code) = spelling.code {
+        down["code"] = serde_json::Value::from(code);
+        up["code"] = serde_json::Value::from(code);
+    }
+    (down.to_string(), up.to_string())
 }
