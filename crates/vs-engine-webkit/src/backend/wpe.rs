@@ -462,7 +462,11 @@ impl Engine for WpeBackend {
         // document already loaded.
         self.add_init_script(page, super::common::WEBAUTHN_JS)?;
         let web_view = self.page_mut(page)?.web_view.clone();
-        eval_js_string(&web_view, super::common::WEBAUTHN_JS, Duration::from_secs(5))?;
+        eval_js_string(
+            &web_view,
+            super::common::WEBAUTHN_JS,
+            Duration::from_secs(5),
+        )?;
         Ok(())
     }
 

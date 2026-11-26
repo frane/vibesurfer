@@ -9,6 +9,7 @@
   <a href="https://www.npmjs.com/package/vibesurfer"><img alt="npm" src="https://img.shields.io/npm/v/vibesurfer?style=flat-square&label=npm"></a>
   <a href="https://crates.io/crates/vibesurfer"><img alt="crates.io" src="https://img.shields.io/crates/v/vibesurfer?style=flat-square"></a>
   <a href="https://github.com/frane/vibesurfer/blob/main/LICENSE"><img alt="license" src="https://img.shields.io/badge/license-Apache_2.0-blue?style=flat-square"></a>
+  <a href="https://glama.ai/mcp/servers/frane/vibesurfer"><img alt="Glama MCP server" src="https://img.shields.io/badge/MCP-Glama-blue?style=flat-square"></a>
 </p>
 
 <p align="center">
