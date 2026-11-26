@@ -188,12 +188,27 @@ pub struct CliOut {
 
 /// Run the `vs` CLI with the given args against the daemon at `home`.
 pub fn vs(home: &Path, args: &[&str]) -> CliOut {
-    let out = Command::new(VS_BIN)
-        .arg(format!("--home={}", home.display()))
-        .arg("--no-spawn")
-        .args(args)
-        .output()
-        .expect("run vs");
+    // macOS has no pipe2: std makes a child's pipes with pipe() and marks
+    // them close-on-exec after. A fork on another thread in between hands
+    // that child our stdout's write end, and output() waits for it to exit.
+    // A `vs act` blocked on a dialog then holds a `vs net poll` open until
+    // the dialog times out. Spawn one at a time; wait concurrently.
+    static SPAWN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let child = {
+        let _one = SPAWN
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Command::new(VS_BIN)
+            .arg(format!("--home={}", home.display()))
+            .arg("--no-spawn")
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("run vs")
+    };
+    let out = child.wait_with_output().expect("run vs");
     let mut stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     // If the call failed and the daemon dropped the connection,
     // append the daemon's own log so the test failure message
