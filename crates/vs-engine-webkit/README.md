@@ -62,7 +62,7 @@ More in [docs/usage.md](https://github.com/frane/vibesurfer/blob/main/docs/usage
 
 ## testsurfer
 
-[testsurfer](https://github.com/frane/testsurfer) runs your existing `@playwright/test` suites on vibesurfer: 11 MB to install instead of about 300 MB.
+[testsurfer](https://github.com/frane/testsurfer) runs your existing `@playwright/test` suites on vibesurfer: about 10 MB to install instead of about 300 MB.
 
 ## Docs
 
