@@ -94,3 +94,14 @@ and similar dance moves; they're worse than just running serially.
 
 End-to-end, the suite finishes in well under a minute on every
 platform. Sequential is fine.
+
+## Recording the demo gif
+
+The gif at the top of the README is a real Claude Code session driving vibesurfer. `docs/demo/record-claude.sh` records a fresh one:
+
+```
+brew install asciinema agg
+docs/demo/record-claude.sh         # writes docs/demo-claude.gif
+```
+
+The script checks for a TTY, isolates the demo home, and limits Claude to Bash so the agent has to use the real `vs` binary. Model output varies, so every render differs; the committed gif keeps clones and CI from re-rendering.

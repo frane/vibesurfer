@@ -500,11 +500,24 @@ impl Engine for WpeBackend {
         page: PageHandle,
         target: ActTarget,
         action: Action,
-        _mode: InputMode,
+        mode: InputMode,
     ) -> EngineResult<()> {
         self.forget_new_window(page)?;
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
+        // A click on a ref is a native one (isTrusted), as on macOS,
+        // where the input path is available; else the JS path below.
+        if let (ActTarget::Ref(r), Action::Click) = (&target, &action) {
+            if super::wpe_input::dispatcher().is_ok() {
+                let at = super::common::ref_click_point(
+                    |js, budget| eval_js_string(&web_view, js, budget),
+                    *r,
+                )?;
+                if let Some((x, y)) = at {
+                    return self.cursor_op(page, CursorOp::ClickAt { x, y }, mode);
+                }
+            }
+        }
         super::common::run_act(
             move |js, budget| eval_js_string(&web_view, js, budget),
             &target,

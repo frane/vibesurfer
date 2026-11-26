@@ -4,7 +4,7 @@ Honest list of behaviors that aren't yet what they should be. Each entry has a s
 
 ## Trusted input coverage
 
-- Ref-based `vs act click` dispatches trusted native input on macOS only. On Linux (WebKitGTK) and Windows (WebView2) it still routes through injected JS (`isTrusted = false`); the coordinate cursor primitives (`vs click-at`, `vs hover-at`, `vs move-to`, `vs drag`) are the trusted path on those engines (since v0.1.11).
+- Ref-based `vs act click` is trusted native input on every engine since 0.2.21. On Linux without a working input path (pure Wayland, no portal consent) it falls back to injected JS (`isTrusted = false`).
 - Pure-Wayland Linux without Xwayland returns `ENGINE_UNSUPPORTED` for the cursor primitives; the libei path landed in v0.1.12 but requires the compositor's RemoteDesktop portal consent.
 
 ## Layout on the stub

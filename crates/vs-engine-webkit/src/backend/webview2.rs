@@ -1280,11 +1280,19 @@ impl Engine for Webview2Backend {
         page: PageHandle,
         target: ActTarget,
         action: Action,
-        _mode: InputMode,
+        mode: InputMode,
     ) -> EngineResult<()> {
         self.forget_new_window(page)?;
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
+        // A click on a ref is a native one (isTrusted), as on macOS.
+        if let (ActTarget::Ref(r), Action::Click) = (&target, &action) {
+            let at =
+                super::common::ref_click_point(|js, _budget| execute_script(&web_view, js), *r)?;
+            if let Some((x, y)) = at {
+                return self.cursor_op(page, CursorOp::ClickAt { x, y }, mode);
+            }
+        }
         super::common::run_act(
             move |js, _budget| execute_script(&web_view, js),
             &target,

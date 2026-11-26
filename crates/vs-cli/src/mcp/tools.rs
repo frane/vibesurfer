@@ -138,7 +138,7 @@ fn base_tools() -> Vec<Value> {
             ("y", num_prop("Target Y in CSS pixels.", true)),
             ("mode", str_prop("Input mode: human | careful | robotic. Default: human.", false)),
         ])),
-        tool("vs_click_at", "Click at exact coordinates. Trusted (isTrusted=true) on macOS; the Bezier lead-in from the last cursor position simulates real user motion. Reaches what the tree cannot: canvas, WebGL, map tiles, PDF viewers, cross-origin iframes, closed shadow roots (captchas). Loop vs_capture -> act -> vs_capture; the tree often will not change, so verify visually. Keep the viewport fixed between capture and click. A new-window link or form loads in this page.", obj(&[
+        tool("vs_click_at", "Click at exact coordinates. Trusted (isTrusted=true) on every engine; the Bezier lead-in from the last cursor position simulates real user motion. Reaches what the tree cannot: canvas, WebGL, map tiles, PDF viewers, cross-origin iframes, closed shadow roots (captchas). Loop vs_capture -> act -> vs_capture; the tree often will not change, so verify visually. Keep the viewport fixed between capture and click. A new-window link or form loads in this page.", obj(&[
             ("page", str_prop("Page id.", true)),
             ("x", num_prop("Click X in CSS pixels.", true)),
             ("y", num_prop("Click Y in CSS pixels.", true)),

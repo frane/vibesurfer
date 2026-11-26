@@ -155,8 +155,8 @@ pub enum Command {
         group: Option<String>,
         /// Cursor motion for a ref click: careful (default, fast,
         /// trusted single move), human (slow humanized path for
-        /// detector-scored flows), robotic (teleport). Only the
-        /// macOS native ref-click path uses this.
+        /// detector-scored flows), robotic (teleport). Used by the
+        /// native ref click.
         #[arg(long, short = 'M', default_value = "careful")]
         mode: String,
     },
@@ -348,7 +348,7 @@ pub enum Command {
         #[arg(long, short = 'M', default_value = "human")]
         mode: String,
     },
-    /// Click at `(x, y)`. Trusted on macOS (`isTrusted = true`). A
+    /// Click at `(x, y)`. Trusted (`isTrusted = true`). A
     /// new-window link or form loads in this page.
     #[command(visible_alias = "ca")]
     ClickAt {

@@ -348,13 +348,10 @@ fn cell_act_flushes_raf_teardown() {
     }
 }
 
-// Trust-bit regression — pinned to macOS for now (Linux + Windows
-// keep the JS-driven act path until their native event-injection
-// lands). The fixture's `submit` button records `event.isTrusted`
-// on click; if anyone reverts the WkBackend's NSEvent dispatch back
-// to `el.click()`, the assertion flips to `false` and the test
-// fails before users hit captcha walls.
-#[cfg(target_os = "macos")]
+// Trust-bit regression on every engine: a ref click goes through the
+// native input path (NSEvent, XTest or the portal, WebView2 composition
+// input). The fixture's button records `event.isTrusted`; a fallback to
+// `el.click()` flips it to `false` before users hit captcha walls.
 #[test]
 fn cell_act_click_is_trusted() {
     for _ in each_available_backend() {
@@ -380,7 +377,7 @@ fn cell_act_click_is_trusted() {
         assert_eq!(
             trusted.trim(),
             "true",
-            "vs act click must produce isTrusted=true on macOS; got {trusted:?}",
+            "vs act click must produce isTrusted=true; got {trusted:?}",
         );
     }
 }

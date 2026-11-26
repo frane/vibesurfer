@@ -431,6 +431,36 @@ pub(crate) fn build_html5_drag_js(x1: f64, y1: f64, x2: f64, y2: f64) -> String 
     )
 }
 
+/// Where a native click on ref `r` lands: the center of its box in
+/// top-level viewport CSS px, after scrolling it into view. `None` when
+/// the ref is gone or the box is empty (a hidden duplicate): the JS act
+/// path dispatches on the element whatever its geometry, so callers
+/// fall back to it. macOS has its own (`webkit::input::ref_rect`), which
+/// its NSEvent click takes as a rect.
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn ref_click_point<F>(eval: F, r: Ref) -> EngineResult<Option<(f64, f64)>>
+where
+    F: Fn(&str, Duration) -> EngineResult<String>,
+{
+    let js = format!(
+        r#"(function() {{
+            var el = (window.__vsFindRef ? window.__vsFindRef({r}) : null) || document.querySelector('[data-vs-ref="{r}"]');
+            if (!el) return 'null';
+            try {{ el.scrollIntoView({{behavior: 'instant', block: 'center', inline: 'center'}}); }}
+            catch (e) {{ el.scrollIntoView(); }}
+            var b = window.__vsTopRect ? window.__vsTopRect(el) : el.getBoundingClientRect();
+            return JSON.stringify([b.x, b.y, b.width, b.height]);
+        }})()"#,
+        r = r.0,
+    );
+    let result = eval(&js, Duration::from_secs(5))?;
+    let unwrapped = serde_json::from_str::<String>(&result).unwrap_or(result);
+    let Ok([left, top, width, height]) = serde_json::from_str::<[f64; 4]>(&unwrapped) else {
+        return Ok(None);
+    };
+    Ok((width > 0.5 && height > 0.5).then(|| (left + width / 2.0, top + height / 2.0)))
+}
+
 pub(crate) fn run_act<F>(eval: F, target: &ActTarget, action: &Action) -> EngineResult<()>
 where
     F: Fn(&str, Duration) -> EngineResult<String>,

@@ -11,6 +11,10 @@ All notable changes to vibesurfer are recorded here. The format follows
 ### Added
 - MCP tools `vs_net` (poll, route, continue, fulfill, abort, fetch, body, dialog), `vs_inspect` (eval, response, dom, console and the rest, `frame` for subframes) and `vs_init_script`, and `zoom` on `vs_viewport`. An MCP agent could open an intercept or popups session but had no way to use it. A unit test now fails when a CLI command has no MCP tool.
 
+### Changed
+- Linux and Windows: `vs act click` on a ref is a native click (`isTrusted = true`), as on macOS, through the same input path as `vs click-at`. It was a JS `click()`, which trust-checking pages and widgets ignore. Linux without a working input path (pure Wayland, no portal consent) keeps the JS click. Cell `cell_act_click_is_trusted` now runs on every engine.
+- The README is short; install, usage and stealth detail moved to `docs/install.md`, `docs/usage.md` and `docs/stealth.md`.
+
 ### Fixed
 - `vs net dialog` on a dialog that was no longer open (already answered, or dismissed after 10 s) reported success though the page never got the answer. It is now `NOT_FOUND`.
 - Several `vs` calls at once on a home with no daemon each spawned one, and a later daemon took over the socket of an earlier one, stranding the clients already connected to it (a cold parallel test run failed a third of its tests). `vs serve` now holds a lock next to the socket for its lifetime; a second one exits and leaves the first one's socket and PID file alone. Cell `cell_second_daemon_leaves_the_first_alone`.
