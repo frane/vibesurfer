@@ -400,7 +400,6 @@ pub(super) fn type_text(
     web_view: &Retained<WKWebView>,
     text: &str,
     mode: vs_humanize::InputMode,
-    seed: u64,
     rec: Option<(&super::record::RecSink, MainThreadMarker)>,
     cursor: vs_humanize::Point,
 ) -> EngineResult<()> {
@@ -425,12 +424,7 @@ pub(super) fn type_text(
         .ok_or_else(|| EngineError::Other(format!("keyEventWithType returned nil for {ch:?}")))
     };
 
-    let base_delay = match mode {
-        vs_humanize::InputMode::Robotic => 0u64,
-        vs_humanize::InputMode::Careful => 120,
-        vs_humanize::InputMode::Human => 45,
-    };
-    let mut jitter = seed | 1;
+    let mut cadence = crate::backend::common::KeyCadence::new(mode, text);
     for (i, ch) in text.chars().enumerate() {
         let s = ch.to_string();
         let down = make_key(NSEventType::KeyDown, &s)?;
@@ -438,26 +432,11 @@ pub(super) fn type_text(
         web_view.keyDown(&down);
         // Between down and up, and between chars, drain the run loop
         // so WebKit processes the insertion before the next event.
-        let hold = if base_delay == 0 { 1 } else { base_delay / 3 };
-        let _ = run_loop_until(|| false, Duration::from_millis(hold.max(1)));
+        let hold = cadence.hold_ms();
+        let _ = run_loop_until(|| false, Duration::from_millis(hold));
         web_view.keyUp(&up);
-        if base_delay > 0 {
-            // xorshift jitter in ±40% of base, Human only.
-            jitter ^= jitter << 13;
-            jitter ^= jitter >> 7;
-            jitter ^= jitter << 17;
-            let span = if matches!(mode, vs_humanize::InputMode::Human) {
-                base_delay * 4 / 10
-            } else {
-                0
-            };
-            let extra = if span == 0 {
-                0
-            } else {
-                jitter % (span * 2 + 1)
-            };
-            let wait = base_delay.saturating_sub(span).saturating_add(extra);
-            let _ = run_loop_until(|| false, Duration::from_millis(wait.max(1)));
+        if let Some(wait) = cadence.next_wait_ms() {
+            let _ = run_loop_until(|| false, Duration::from_millis(wait));
             if let Some((sink, mtm)) = rec {
                 sink.frame(web_view, mtm, cursor.x, cursor.y, 0.0, (hold + wait) as u32);
             }

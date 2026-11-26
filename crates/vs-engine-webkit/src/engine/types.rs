@@ -162,6 +162,16 @@ pub enum InputMode {
     Robotic,
 }
 
+impl From<InputMode> for vs_humanize::InputMode {
+    fn from(mode: InputMode) -> Self {
+        match mode {
+            InputMode::Human => Self::Human,
+            InputMode::Careful => Self::Careful,
+            InputMode::Robotic => Self::Robotic,
+        }
+    }
+}
+
 impl InputMode {
     #[must_use]
     pub fn parse(s: &str) -> Option<Self> {

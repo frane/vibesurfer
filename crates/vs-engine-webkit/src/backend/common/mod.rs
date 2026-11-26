@@ -13,6 +13,7 @@
 mod act;
 mod auth;
 mod download;
+mod input;
 mod inspect;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -24,6 +25,9 @@ pub(crate) use act::ref_click_point;
 pub(crate) use act::{build_html5_drag_js, run_act, run_layout, run_wait};
 pub(crate) use auth::{run_load_storage_only, run_save_storage_only};
 pub(crate) use download::{run_download, run_download_list};
+#[cfg(not(target_os = "macos"))]
+pub(crate) use input::cursor_seed;
+pub(crate) use input::KeyCadence;
 pub(crate) use inspect::{
     cookie_to_storage_entry, diff_cookies, run_dom, run_eval, run_performance, run_script_source,
     run_scripts, run_storage,

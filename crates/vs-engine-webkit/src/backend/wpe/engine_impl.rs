@@ -17,8 +17,8 @@ use vs_protocol::{Ref, Tree};
 use super::cookies;
 use super::host::{eval_js_string, host_page};
 use super::input::{
-    click_with, cursor_move_along_path, cursor_press_release, deliver_input, humanize_seed,
-    input_origin, park_core_pointer, window_title,
+    click_with, cursor_move_along_path, cursor_press_release, deliver_input, input_origin,
+    park_core_pointer, window_title,
 };
 use super::loading::{load_result, wait_for_load};
 use super::{run_loop_until, Opening, WpeBackend};
@@ -660,38 +660,14 @@ impl Engine for WpeBackend {
         let _ = dispatcher.flush();
         dispatcher.focus_pointer_window();
 
-        let (base_delay, span) = match mode {
-            InputMode::Robotic => (0_u64, 0_u64),
-            InputMode::Careful => (120, 0),
-            // ±40% of base, so repeated typing is not metronomic.
-            InputMode::Human => (45, 18),
-        };
-        let mut jitter = text
-            .chars()
-            .map(|c| c as u64)
-            .fold(0x9e37_79b9_u64, |a, c| a.wrapping_mul(31).wrapping_add(c))
-            | 1;
+        let mut cadence = crate::backend::common::KeyCadence::new(mode.into(), text);
 
         let typed = (|| -> EngineResult<()> {
             for ch in text.chars() {
-                let hold = if base_delay == 0 { 1 } else { base_delay / 3 };
                 dispatcher.key_down(ch, &settle)?;
-                settle(Duration::from_millis(hold.max(1)));
+                settle(Duration::from_millis(cadence.hold_ms()));
                 dispatcher.key_up(ch)?;
-                if base_delay > 0 {
-                    jitter ^= jitter << 13;
-                    jitter ^= jitter >> 7;
-                    jitter ^= jitter << 17;
-                    let extra = if span == 0 {
-                        0
-                    } else {
-                        jitter % (span * 2 + 1)
-                    };
-                    let wait = base_delay.saturating_sub(span).saturating_add(extra);
-                    settle(Duration::from_millis(wait.max(1)));
-                } else {
-                    settle(Duration::from_millis(1));
-                }
+                settle(Duration::from_millis(cadence.next_wait_ms().unwrap_or(1)));
             }
             Ok(())
         })();
@@ -719,11 +695,7 @@ impl Engine for WpeBackend {
         self.forget_new_window(page)?;
         let p = self.page_mut(page)?;
         let dispatcher = crate::backend::wpe_input::dispatcher()?;
-        let humanize_mode = match mode {
-            InputMode::Human => vs_humanize::InputMode::Human,
-            InputMode::Careful => vs_humanize::InputMode::Careful,
-            InputMode::Robotic => vs_humanize::InputMode::Robotic,
-        };
+        let humanize_mode = vs_humanize::InputMode::from(mode);
         // Screen origin of the hidden host window. v0.1.11 assumes
         // (0, 0) — true under `xvfb` (CI) and any session without a
         // window manager. With a WM, the WM may have translated the
@@ -740,7 +712,7 @@ impl Engine for WpeBackend {
         dispatcher.raise_window(&window_title(page));
         dispatcher.use_page_pointer(&window_title(page));
         let start = p.last_mouse.get();
-        let seed = humanize_seed(op);
+        let seed = crate::backend::common::cursor_seed(op);
         let landed = match op {
             CursorOp::MoveTo { x, y } | CursorOp::HoverAt { x, y } => cursor_move_along_path(
                 dispatcher,

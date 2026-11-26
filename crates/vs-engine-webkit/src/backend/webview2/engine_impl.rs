@@ -30,9 +30,7 @@ use crate::engine::{
 
 use super::cookies;
 use super::host::{host_view, isolated_controller_options, proxied_user_data_dir};
-use super::input::{
-    point_at, wv2_humanize_seed, wv2_move_along_path, wv2_press_release, wv2_send_mouse, wv2_wheel,
-};
+use super::input::{point_at, wv2_move_along_path, wv2_press_release, wv2_send_mouse, wv2_wheel};
 use super::script::{add_init_script, call_cdp, cdp_click, cdp_key, execute_script};
 use super::{ViewOrigin, Webview2Backend};
 
@@ -719,16 +717,7 @@ impl Engine for Webview2Backend {
         self.forget_new_window(page)?;
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
-        let (base_delay, span) = match mode {
-            InputMode::Robotic => (0_u64, 0_u64),
-            InputMode::Careful => (120, 0),
-            InputMode::Human => (45, 18),
-        };
-        let mut jitter = text
-            .chars()
-            .map(|c| c as u64)
-            .fold(0x9e37_79b9_u64, |a, c| a.wrapping_mul(31).wrapping_add(c))
-            | 1;
+        let mut cadence = crate::backend::common::KeyCadence::new(mode.into(), text);
 
         for ch in text.chars() {
             let spelling = cdp_key(ch);
@@ -749,20 +738,10 @@ impl Engine for Webview2Backend {
                 up["code"] = serde_json::Value::from(code);
             }
             call_cdp(&web_view, "Input.dispatchKeyEvent", &down.to_string())?;
-            let hold = if base_delay == 0 { 1 } else { base_delay / 3 };
-            std::thread::sleep(Duration::from_millis(hold.max(1)));
+            std::thread::sleep(Duration::from_millis(cadence.hold_ms()));
             call_cdp(&web_view, "Input.dispatchKeyEvent", &up.to_string())?;
-            if base_delay > 0 {
-                jitter ^= jitter << 13;
-                jitter ^= jitter >> 7;
-                jitter ^= jitter << 17;
-                let extra = if span == 0 {
-                    0
-                } else {
-                    jitter % (span * 2 + 1)
-                };
-                let wait = base_delay.saturating_sub(span).saturating_add(extra);
-                std::thread::sleep(Duration::from_millis(wait.max(1)));
+            if let Some(wait) = cadence.next_wait_ms() {
+                std::thread::sleep(Duration::from_millis(wait));
             }
         }
         self.follow_new_window(page, false)
@@ -772,13 +751,9 @@ impl Engine for Webview2Backend {
         self.forget_new_window(page)?;
         let p = self.page_mut(page)?;
         let comp = p.comp_controller.clone();
-        let humanize_mode = match mode {
-            InputMode::Human => vs_humanize::InputMode::Human,
-            InputMode::Careful => vs_humanize::InputMode::Careful,
-            InputMode::Robotic => vs_humanize::InputMode::Robotic,
-        };
+        let humanize_mode = vs_humanize::InputMode::from(mode);
         let start = p.last_mouse.get();
-        let seed = wv2_humanize_seed(op);
+        let seed = crate::backend::common::cursor_seed(op);
         let landed = match op {
             CursorOp::MoveTo { x, y } | CursorOp::HoverAt { x, y } => wv2_move_along_path(
                 &comp,

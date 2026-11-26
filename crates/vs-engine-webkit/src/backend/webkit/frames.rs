@@ -15,8 +15,7 @@ use objc2::runtime::ProtocolObject;
 use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_foundation::{NSObject, NSObjectProtocol, NSString};
 use objc2_web_kit::{
-    WKFrameInfo, WKScriptMessage, WKScriptMessageHandler, WKUserContentController, WKUserScript,
-    WKUserScriptInjectionTime, WKWebView,
+    WKFrameInfo, WKScriptMessage, WKScriptMessageHandler, WKUserContentController, WKWebView,
 };
 
 /// Subframes that reported in: URL and frame info, oldest first.
@@ -64,16 +63,7 @@ define_class!(
 
 /// Install the reporting script and its handler on `ucc`.
 pub(super) fn install(mtm: MainThreadMarker, ucc: &WKUserContentController, list: &FrameList) {
-    let source = NSString::from_str(SCRIPT);
-    let script = unsafe {
-        WKUserScript::initWithSource_injectionTime_forMainFrameOnly(
-            WKUserScript::alloc(mtm),
-            &source,
-            WKUserScriptInjectionTime::AtDocumentStart,
-            false,
-        )
-    };
-    unsafe { ucc.addUserScript(&script) };
+    super::add_document_start_script(mtm, ucc, SCRIPT);
     let handler = FrameMsgHandler::alloc(mtm).set_ivars(list.clone());
     let handler: Retained<FrameMsgHandler> = unsafe { msg_send![super(handler), init] };
     let proto: &ProtocolObject<dyn WKScriptMessageHandler> = ProtocolObject::from_ref(&*handler);

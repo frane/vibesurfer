@@ -43,14 +43,18 @@ use std::time::Duration;
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2::MainThreadMarker;
+use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{NSBackingStoreType, NSWindow, NSWindowStyleMask};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use objc2_web_kit::{
-    WKNavigationDelegate, WKUIDelegate, WKUserContentController, WKWebView, WKWebViewConfiguration,
+    WKNavigationDelegate, WKUIDelegate, WKUserContentController, WKUserScript,
+    WKUserScriptInjectionTime, WKWebView, WKWebViewConfiguration,
 };
 
-use crate::engine::{CursorOp, DataStore, Engine, EngineError, EngineResult, PageHandle};
+use crate::engine::{
+    CursorOp, DataStore, Engine, EngineError, EngineResult, InputMode, PageHandle,
+};
+use vs_protocol::Ref;
 
 use eval::{eval_js_string, run_loop_until};
 use nav_delegate::{wait_for_navigation, NavDelegate, NavSlot, NavState};
@@ -349,6 +353,42 @@ fn abandon_view_keep_ucc(web_view: &WKWebView, window: &NSWindow) {
     }
 }
 
+/// Add `source` as a document-start script in every frame (not only
+/// the main frame) of the pages using `ucc`.
+pub(super) fn add_document_start_script(
+    mtm: MainThreadMarker,
+    ucc: &WKUserContentController,
+    source: &str,
+) {
+    let source = NSString::from_str(source);
+    let script = unsafe {
+        WKUserScript::initWithSource_injectionTime_forMainFrameOnly(
+            WKUserScript::alloc(mtm),
+            &source,
+            WKUserScriptInjectionTime::AtDocumentStart,
+            false,
+        )
+    };
+    unsafe { ucc.addUserScript(&script) };
+}
+
+/// One run-loop turn given to WebKit after a page is torn down.
+const REAP_SLICE: Duration = Duration::from_millis(25);
+/// Turns after a failed `open`: enough for WebKit to exit that page's
+/// web-content process, which would otherwise starve the next open.
+const FAILED_OPEN_REAP_TURNS: u32 = 8;
+/// Turns on shutdown, for every page's process (~90 MB each) to exit
+/// instead of being orphaned to launchd.
+const SHUTDOWN_REAP_TURNS: u32 = 20;
+
+/// Spin the run loop for `turns` slices so WebKit can finish tearing
+/// down web-content processes.
+fn pump_for_reap(turns: u32) {
+    for _ in 0..turns {
+        let _ = run_loop_until(|| false, REAP_SLICE);
+    }
+}
+
 /// Create a web view of `size` for `config` in an offscreen host
 /// window, with a Safari user agent and its navigation/UI delegate.
 /// `ca` is the intercept proxy's CA to trust, for proxied pages.
@@ -430,9 +470,7 @@ impl Drop for WkBackend {
         for h in handles {
             let _ = self.close(h);
         }
-        for _ in 0..20 {
-            let _ = run_loop_until(|| false, Duration::from_millis(25));
-        }
+        pump_for_reap(SHUTDOWN_REAP_TURNS);
     }
 }
 
@@ -535,14 +573,62 @@ const RAF_SHIM_JS: &str = r"
 })();
 ";
 
+/// Run the `requestAnimationFrame` callbacks a page queued while its
+/// frame clock was paused (see [`RAF_SHIM_JS`]), so rAF-deferred
+/// teardown (Radix, Floating UI) runs after an action. A no-op where rAF
+/// already fired or the shim is absent. The expression returns a string
+/// because `eval_js_string` reads the result as an `NSString`; a bare
+/// number would be mis-cast and abort.
+fn flush_raf(web_view: &WKWebView) {
+    let _ = eval_js_string(
+        web_view,
+        "String(window.__vsFlushRAF ? window.__vsFlushRAF() : 0)",
+        RAF_FLUSH_BUDGET,
+    );
+}
+
+/// How long a rAF flush may run after an action.
+const RAF_FLUSH_BUDGET: Duration = Duration::from_secs(2);
+
 impl WkBackend {
-    /// Load a new-window navigation the page asked for during the last
-    /// input primitive, in this page, and wait for it like `goto`.
+    /// Click ref `r` with native NSEvent input, so the page sees
+    /// `isTrusted` events (bot checks key off it). `mode` comes from the
+    /// wire: careful is a single-shot trusted move, human is opt-in for
+    /// detector-scored flows, robotic teleports.
     ///
-    /// A `target="_blank"` link or form, or `window.open()`, has no
-    /// second window to go to headless. The UI delegate parks the
-    /// request (`NavDelegate::create_web_view`); without this the click
-    /// returned ok and nothing happened. No parked request: no-op.
+    /// Returns `false` without clicking for a zero-size target (a hidden
+    /// input, or an off-screen duplicate a site keeps in the DOM, as
+    /// x.com's login does): native coordinates would land at the box
+    /// origin and hit something else, while the JS path dispatches on the
+    /// element regardless of geometry.
+    fn click_ref_natively(
+        &mut self,
+        page: PageHandle,
+        r: Ref,
+        mode: InputMode,
+    ) -> EngineResult<bool> {
+        let p = self.page_mut(page)?;
+        let rect = input::ref_rect(&p.web_view, r)?.ok_or_else(|| EngineError::NotFound {
+            kind: "ref",
+            id: r.0.to_string(),
+        })?;
+        if rect.width <= 0.5 || rect.height <= 0.5 {
+            return Ok(false);
+        }
+        let height = p.web_view.frame().size.height;
+        let landed = input::click_at_rect(
+            &p.web_view,
+            &p.window,
+            rect,
+            height,
+            p.last_mouse.get(),
+            vs_humanize::InputMode::from(mode),
+            vs_humanize_seed_for_ref(r),
+        )?;
+        p.last_mouse.set(landed);
+        Ok(true)
+    }
+
     /// Drop a new-window request parked before this input primitive
     /// started (a popup a page fired on its own), so the primitive only
     /// follows what it caused.
@@ -553,6 +639,13 @@ impl WkBackend {
         Ok(())
     }
 
+    /// Load a new-window navigation the page asked for during the last
+    /// input primitive, in this page, and wait for it like `goto`.
+    ///
+    /// A `target="_blank"` link or form, or `window.open()`, has no
+    /// second window to go to headless. The UI delegate parks the
+    /// request (`NavDelegate::create_web_view`); without this the click
+    /// returned ok and nothing happened. No parked request: no-op.
     ///
     /// WebKit can ask for the new window after the click has returned,
     /// so after a click (`settle`) pump for up to `NEW_WINDOW_SETTLE`

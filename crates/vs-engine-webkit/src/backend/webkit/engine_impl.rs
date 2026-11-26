@@ -6,9 +6,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use objc2::rc::Retained;
-use objc2::MainThreadOnly;
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSURLRequest, NSURL};
-use objc2_web_kit::{WKUserScript, WKUserScriptInjectionTime, WKWebView, WKWebViewConfiguration};
+use objc2_web_kit::WKWebViewConfiguration;
 use vs_protocol::{Ref, Tree};
 
 use crate::engine::{
@@ -20,12 +19,18 @@ use crate::engine::{
 use super::eval::{eval_js_string, run_loop_until};
 use super::nav_delegate::wait_for_navigation;
 use super::{
-    abandon_view, abandon_view_keep_ucc, capture, cookie_store, drop, enable_media_devices, eval,
-    frames, host_view, input, inspector_handler, loopback, record, vs_humanize_seed_for_ref,
-    vs_humanize_seed_for_xy, WkBackend, WkPage, NO_NATIVE_DRAG_JS, RAF_SHIM_JS,
+    abandon_view, abandon_view_keep_ucc, add_document_start_script, capture, cookie_store, drop,
+    enable_media_devices, eval, flush_raf, frames, host_view, input, inspector_handler, loopback,
+    pump_for_reap, record, vs_humanize_seed_for_xy, WkBackend, WkPage, FAILED_OPEN_REAP_TURNS,
+    NO_NATIVE_DRAG_JS, RAF_SHIM_JS,
 };
 
 use crate::backend::common::{parse_snapshot, SNAPSHOT_DOM_WALKER_JS as SNAPSHOT_JS, WEBAUTHN_JS};
+
+/// A new page's window in points: a natural MacBook-class 1440x900, the
+/// logical size pages render at. Retina still doubles the pixel density
+/// for screenshots; recordings capture at this size.
+const DEFAULT_WINDOW_SIZE: (f64, f64) = (1440.0, 900.0);
 
 impl Engine for WkBackend {
     fn open(&mut self, url: &str, store: &DataStore) -> EngineResult<PageHandle> {
@@ -40,66 +45,23 @@ impl Engine for WkBackend {
         let proxy_port = store.proxy_port();
         let loopback = proxy_port.is_some()
             && self.wants_loopback(url, Retained::as_ptr(&data_store) as usize);
-        // Expose `navigator.mediaDevices`. WKWebView gates the whole
-        // MediaDevices surface behind a preference that is off by
-        // default, so the object was simply absent — even on https with
-        // `isSecureContext: true`, where every real browser has it.
-        // Anything feature-detecting camera/mic support saw a browser
-        // that cannot exist.
-        //
-        // The toggle has no public API, so it goes through KVC on
-        // WKPreferences. Unknown keys raise an Obj-C exception rather
-        // than returning an error, and the set of keys drifts between
-        // OS releases, so each one is attempted inside a catch and a
-        // failure is logged and ignored — a missing preference must not
-        // stop the browser from starting.
         enable_media_devices(&config);
 
         let ucc = unsafe { config.userContentController() };
         // No native drags, in every frame (see NO_NATIVE_DRAG_JS).
-        unsafe {
-            let src = NSString::from_str(NO_NATIVE_DRAG_JS);
-            let shim = WKUserScript::initWithSource_injectionTime_forMainFrameOnly(
-                WKUserScript::alloc(mtm),
-                &src,
-                WKUserScriptInjectionTime::AtDocumentStart,
-                false,
-            );
-            ucc.addUserScript(&shim);
-        }
+        add_document_start_script(mtm, &ucc, NO_NATIVE_DRAG_JS);
         // Inject the rAF-flush shim at document-start so `act` can drive
         // pending requestAnimationFrame callbacks even though a headless
         // macOS page has its frame clock paused (see RAF_SHIM_JS).
-        unsafe {
-            let src = NSString::from_str(RAF_SHIM_JS);
-            let shim = WKUserScript::initWithSource_injectionTime_forMainFrameOnly(
-                WKUserScript::alloc(mtm),
-                &src,
-                WKUserScriptInjectionTime::AtDocumentStart,
-                false,
-            );
-            ucc.addUserScript(&shim);
-        }
+        add_document_start_script(mtm, &ucc, RAF_SHIM_JS);
         // Download capture, in every frame (`forMainFrameOnly: false`):
         // a viewer that saves a blob usually lives in an iframe, and
         // WKWebView has no download delegate to catch it.
-        unsafe {
-            let src = NSString::from_str(crate::backend::common::DOWNLOAD_SHIM_JS);
-            let shim = WKUserScript::initWithSource_injectionTime_forMainFrameOnly(
-                WKUserScript::alloc(mtm),
-                &src,
-                WKUserScriptInjectionTime::AtDocumentStart,
-                false,
-            );
-            ucc.addUserScript(&shim);
-        }
+        add_document_start_script(mtm, &ucc, crate::backend::common::DOWNLOAD_SHIM_JS);
         let inspector_installed = inspector_handler::install(mtm, &ucc, &inspector);
         let frames = frames::FrameList::default();
         frames::install(mtm, &ucc, &frames);
-        // Default browser window: a natural 1440x900 (MacBook-class),
-        // the logical size pages render at. Retina still doubles the
-        // pixel density for screenshots; recordings capture at this size.
-        let size = NSSize::new(1440.0, 900.0);
+        let size = NSSize::new(DEFAULT_WINDOW_SIZE.0, DEFAULT_WINDOW_SIZE.1);
         // The configuration before any loopback handler: a rebuilt view
         // starts from a copy of it (see `rebuild_view`).
         let base_config: Retained<WKWebViewConfiguration> =
@@ -125,9 +87,7 @@ impl Engine for WkBackend {
             // same way `close` does, then give WebKit a few turns to
             // actually exit the process.
             abandon_view(&web_view, &window, &ucc);
-            for _ in 0..8 {
-                let _ = run_loop_until(|| false, Duration::from_millis(25));
-            }
+            pump_for_reap(FAILED_OPEN_REAP_TURNS);
             return Err(e);
         }
 
@@ -207,16 +167,7 @@ impl Engine for WkBackend {
         let web_view = p.web_view.clone();
         // Persist across navigations: add the shim as a document-start
         // user script on the live UCC (applies to subsequent loads).
-        unsafe {
-            let src = NSString::from_str(WEBAUTHN_JS);
-            let shim = WKUserScript::initWithSource_injectionTime_forMainFrameOnly(
-                WKUserScript::alloc(mtm),
-                &src,
-                WKUserScriptInjectionTime::AtDocumentStart,
-                false,
-            );
-            p.ucc.addUserScript(&shim);
-        }
+        add_document_start_script(mtm, &p.ucc, WEBAUTHN_JS);
         // Apply to the document already loaded, too.
         eval_js_string(&web_view, WEBAUTHN_JS, Duration::from_secs(5))?;
         Ok(())
@@ -225,16 +176,7 @@ impl Engine for WkBackend {
     fn add_init_script(&mut self, page: PageHandle, source: &str) -> EngineResult<()> {
         let mtm = self.mtm;
         let p = self.page_mut(page)?;
-        unsafe {
-            let src = NSString::from_str(source);
-            let script = WKUserScript::initWithSource_injectionTime_forMainFrameOnly(
-                WKUserScript::alloc(mtm),
-                &src,
-                WKUserScriptInjectionTime::AtDocumentStart,
-                false,
-            );
-            p.ucc.addUserScript(&script);
-        }
+        add_document_start_script(mtm, &p.ucc, source);
         Ok(())
     }
 
@@ -288,82 +230,22 @@ impl Engine for WkBackend {
         mode: InputMode,
     ) -> EngineResult<()> {
         self.forget_new_window(page)?;
-        let p = self.page_mut(page)?;
-
-        let web_view = p.web_view.clone();
-        let web_view_flush = p.web_view.clone();
-        let window = p.window.clone();
-
-        // After the action settles, drain any rAF callbacks the page
-        // queued (e.g. Radix/Floating-UI teardown) — on a headless macOS
-        // page the frame clock is paused, so without this the teardown
-        // never runs and the page can wedge. No-op where rAF already
-        // fired or the shim isn't present.
-        // NB: eval_js_string treats the JS result as an NSString, so the
-        // flush expression must evaluate to a string (a bare number
-        // result would be mis-cast and abort).
-        let flush = move |wv: &Retained<WKWebView>| {
-            let _ = eval_js_string(
-                wv,
-                "String(window.__vsFlushRAF ? window.__vsFlushRAF() : 0)",
-                Duration::from_secs(2),
-            );
-        };
-
-        // Route plain `click` on a `Ref` target through native NSEvent
-        // dispatch — produces JS events with `event.isTrusted = true`,
-        // which anti-bot fingerprinters key off. Other actions
-        // (`fill`, `scroll`, `key`, `submit`, `hover`, `focus`) keep
-        // the JS-driven path: they're either text-content mutations
-        // or they don't usually hit a trust check.
+        let web_view = self.page_mut(page)?.web_view.clone();
+        // A plain click on a ref is native input (isTrusted). Other
+        // actions (fill, scroll, key, submit, hover, focus) stay on the
+        // JS path: they mutate content or rarely meet a trust check.
         if let (ActTarget::Ref(r), Action::Click) = (&target, &action) {
-            let r = *r;
-            let rect = input::ref_rect(&web_view, r)?.ok_or_else(|| EngineError::NotFound {
-                kind: "ref",
-                id: r.0.to_string(),
-            })?;
-            // Zero-size targets (hidden inputs, off-screen duplicates a
-            // site keeps in the DOM — x.com login does this) cannot be
-            // hit natively: the synthesized coordinates land at the
-            // box origin and hit-test something else, so the click
-            // ACKs and does nothing. The JS event path dispatches on
-            // the element regardless of geometry, so fall through to
-            // it instead of no-opping.
-            if rect.width > 0.5 && rect.height > 0.5 {
-                let frame = web_view.frame();
-                let start = p.last_mouse.get();
-                // Mode comes from the wire (-M/--mode). Ref-click
-                // defaults to careful, a single-shot trusted move:
-                // fast and still isTrusted. human is opt-in for
-                // detector-scored flows, robotic teleports.
-                let mode = match mode {
-                    InputMode::Human => vs_humanize::InputMode::Human,
-                    InputMode::Careful => vs_humanize::InputMode::Careful,
-                    InputMode::Robotic => vs_humanize::InputMode::Robotic,
-                };
-
-                let seed = vs_humanize_seed_for_ref(r);
-                let landed = input::click_at_rect(
-                    &web_view,
-                    &window,
-                    rect,
-                    frame.size.height,
-                    start,
-                    mode,
-                    seed,
-                )?;
-                p.last_mouse.set(landed);
-                flush(&web_view_flush);
+            if self.click_ref_natively(page, *r, mode)? {
+                flush_raf(&web_view);
                 return self.follow_new_window(page, true);
             }
         }
-
         let result = crate::backend::common::run_act(
-            move |js, budget| eval_js_string(&web_view, js, budget),
+            |js, budget| eval_js_string(&web_view, js, budget),
             &target,
             &action,
         );
-        flush(&web_view_flush);
+        flush_raf(&web_view);
         result?;
         self.follow_new_window(page, crate::backend::common::may_open_window(&action))
     }
@@ -733,27 +615,12 @@ impl Engine for WkBackend {
         self.forget_new_window(page)?;
         let p = self.page_mut(page)?;
         let web_view = p.web_view.clone();
-        let web_view_flush = p.web_view.clone();
         let cursor = p.last_mouse.get();
-        // Vary cadence per call so repeated typing is not identical.
-        let seed = text
-            .chars()
-            .map(|c| c as u64)
-            .fold(0x9e37_79b9_u64, |a, c| a.wrapping_mul(31).wrapping_add(c));
-        let humanize_mode = match mode {
-            InputMode::Human => vs_humanize::InputMode::Human,
-            InputMode::Careful => vs_humanize::InputMode::Careful,
-            InputMode::Robotic => vs_humanize::InputMode::Robotic,
-        };
+        let humanize_mode = vs_humanize::InputMode::from(mode);
         let rec = self.recording.get(&page).map(|s| (s, mtm));
-        input::type_text(&web_view, text, humanize_mode, seed, rec, cursor)?;
-        // Drain rAF-deferred work (headless macOS pauses the frame
-        // clock) so React state settles before the next primitive.
-        let _ = eval_js_string(
-            &web_view_flush,
-            "String(window.__vsFlushRAF ? window.__vsFlushRAF() : 0)",
-            Duration::from_secs(2),
-        );
+        input::type_text(&web_view, text, humanize_mode, rec, cursor)?;
+        // Settle rAF-deferred React state before the next primitive.
+        flush_raf(&web_view);
         self.follow_new_window(page, false)
     }
 
@@ -769,11 +636,7 @@ impl Engine for WkBackend {
                 p.last_mouse.get(),
             )
         };
-        let humanize_mode = match mode {
-            InputMode::Human => vs_humanize::InputMode::Human,
-            InputMode::Careful => vs_humanize::InputMode::Careful,
-            InputMode::Robotic => vs_humanize::InputMode::Robotic,
-        };
+        let humanize_mode = vs_humanize::InputMode::from(mode);
         let seed = vs_humanize_seed_for_xy(op);
         let rec = self.recording.get(&page).map(|s| (s, mtm));
         let landed = match op {

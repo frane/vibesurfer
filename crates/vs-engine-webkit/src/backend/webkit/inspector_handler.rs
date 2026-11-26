@@ -14,10 +14,7 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_foundation::{NSObject, NSObjectProtocol, NSString};
-use objc2_web_kit::{
-    WKScriptMessage, WKScriptMessageHandler, WKUserContentController, WKUserScript,
-    WKUserScriptInjectionTime,
-};
+use objc2_web_kit::{WKScriptMessage, WKScriptMessageHandler, WKUserContentController};
 
 use crate::backend::inspector_bridge::{
     self, InspectorSlots, NetworkIngestSlot, CONSOLE_HANDLER, NETWORK_HANDLER,
@@ -107,16 +104,7 @@ pub(super) fn install(
     if std::env::var_os("VS_DISABLE_INSPECTOR").is_some() {
         return false;
     }
-    let source = NSString::from_str(inspector_bridge::SCRIPT);
-    let user_script = unsafe {
-        WKUserScript::initWithSource_injectionTime_forMainFrameOnly(
-            WKUserScript::alloc(mtm),
-            &source,
-            WKUserScriptInjectionTime::AtDocumentStart,
-            false,
-        )
-    };
-    unsafe { ucc.addUserScript(&user_script) };
+    super::add_document_start_script(mtm, ucc, inspector_bridge::SCRIPT);
 
     let console_h = InspectorMsgHandler::new(mtm, slots.clone(), Channel::Console);
     let network_h = InspectorMsgHandler::new(mtm, slots.clone(), Channel::Network);

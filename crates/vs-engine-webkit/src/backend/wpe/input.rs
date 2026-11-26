@@ -8,10 +8,8 @@ use gtk4 as gtk;
 use webkit6::prelude::*;
 
 use super::run_loop_until;
-use crate::engine::{CursorOp, EngineResult, PageHandle};
+use crate::engine::{EngineResult, PageHandle};
 
-/// Deterministic seed for the humanize Bezier path so the same
-/// `cursor_op` invocation produces the same trajectory on every run.
 /// Press and release `opts.button` `opts.count` times at the pointer,
 /// with the modifier keys held around the clicks. Clicks this close
 /// together are one double (or triple) click to GTK.
@@ -47,24 +45,6 @@ pub(super) fn click_with(
         dispatcher.modifier(k, false)?;
     }
     dispatcher.flush()
-}
-
-pub(super) fn humanize_seed(op: CursorOp) -> u64 {
-    // Hash the op's coordinates into a u64. Trivial mixer; replays
-    // need determinism, not cryptographic spread.
-    let (a, b, c, d) = match op {
-        CursorOp::MoveTo { x, y } | CursorOp::HoverAt { x, y } | CursorOp::ClickAt { x, y } => {
-            (x, y, 0.0, 0.0)
-        }
-        CursorOp::Wheel { x, y, dx, dy } => (x, y, dx, dy),
-        CursorOp::Click { x, y, .. } => (x, y, 0.0, 0.0),
-        CursorOp::Drag { x1, y1, x2, y2 } => (x1, y1, x2, y2),
-    };
-    let bits = |v: f64| v.to_bits();
-    bits(a).wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        ^ bits(b).wrapping_mul(0xBF58_476D_1CE4_E5B9)
-        ^ bits(c).wrapping_mul(0x94D0_49BB_1331_11EB)
-        ^ bits(d)
 }
 
 /// The X window title of a page's host window. XTest input goes by

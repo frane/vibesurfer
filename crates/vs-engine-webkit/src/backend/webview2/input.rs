@@ -11,23 +11,7 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
 };
 use windows::Win32::Foundation::POINT;
 
-use crate::engine::{CursorOp, EngineError, EngineResult};
-
-pub(super) fn wv2_humanize_seed(op: CursorOp) -> u64 {
-    let (a, b, c, d) = match op {
-        CursorOp::MoveTo { x, y } | CursorOp::HoverAt { x, y } | CursorOp::ClickAt { x, y } => {
-            (x, y, 0.0, 0.0)
-        }
-        CursorOp::Wheel { x, y, dx, dy } => (x, y, dx, dy),
-        CursorOp::Click { x, y, .. } => (x, y, 0.0, 0.0),
-        CursorOp::Drag { x1, y1, x2, y2 } => (x1, y1, x2, y2),
-    };
-    let bits = |v: f64| v.to_bits();
-    bits(a).wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        ^ bits(b).wrapping_mul(0xBF58_476D_1CE4_E5B9)
-        ^ bits(c).wrapping_mul(0x94D0_49BB_1331_11EB)
-        ^ bits(d)
-}
+use crate::engine::{EngineError, EngineResult};
 
 #[allow(clippy::cast_possible_truncation)]
 pub(super) fn point_at(p: vs_humanize::Point) -> POINT {
