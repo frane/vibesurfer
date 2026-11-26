@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use crate::support::{assert_err, assert_ok, body_first, each_available_backend, vs, TestContext};
 
-use super::{eval, eventually, poll, purl, sv, Ev};
+use super::harness::{eval, eventually, poll, purl, sv, Ev};
 
 // `--popups`: a window.open() becomes its own page in the session, with
 // `window.opener`, and the opener stays where it was. The `page` event
