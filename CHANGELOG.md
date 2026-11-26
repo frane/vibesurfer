@@ -10,6 +10,7 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ### Added
 - MCP tools `vs_net` (poll, route, continue, fulfill, abort, fetch, body, dialog), `vs_inspect` (eval, response, dom, console and the rest, `frame` for subframes) and `vs_init_script`, and `zoom` on `vs_viewport`. An MCP agent could open an intercept or popups session but had no way to use it. A unit test now fails when a CLI command has no MCP tool.
+- `server.json` and the npm package's `mcpName`, for the official MCP registry.
 
 ### Changed
 - Linux and Windows: `vs act click` on a ref is a native click (`isTrusted = true`), as on macOS, through the same input path as `vs click-at`. It was a JS `click()`, which trust-checking pages and widgets ignore. Linux without a working input path (pure Wayland, no portal consent) keeps the JS click. Cell `cell_act_click_is_trusted` now runs on every engine.
