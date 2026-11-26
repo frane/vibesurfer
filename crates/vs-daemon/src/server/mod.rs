@@ -9,6 +9,8 @@
 
 mod engine_ops;
 mod helpers;
+mod human_ops;
+mod inspect_ops;
 mod lifecycle;
 mod net_ops;
 mod page_ops;
@@ -178,7 +180,7 @@ pub fn dispatch(daemon: &Daemon, req: &Request) -> String {
         "vs_viewport" => engine_ops::handle_viewport(daemon, req),
         "vs_layout" => engine_ops::handle_layout(daemon, req),
         "vs_auth" => engine_ops::handle_auth(daemon, req),
-        "vs_inspect" => engine_ops::handle_inspect(daemon, req),
+        "vs_inspect" => inspect_ops::handle_inspect(daemon, req),
         "vs_move_to" => engine_ops::handle_cursor(daemon, req, "move_to"),
         "vs_click_at" => engine_ops::handle_cursor(daemon, req, "click_at"),
         "vs_hover_at" => engine_ops::handle_cursor(daemon, req, "hover_at"),
@@ -188,17 +190,17 @@ pub fn dispatch(daemon: &Daemon, req: &Request) -> String {
         "vs_debug_crash" => engine_ops::handle_debug_crash(daemon, req),
         "vs_drag" => engine_ops::handle_cursor(daemon, req, "drag"),
         "vs_type" => engine_ops::handle_type(daemon, req),
-        "vs_prompt_input_queue" => engine_ops::handle_prompt_input_queue(daemon, req),
-        "vs_prompt_form" => engine_ops::handle_prompt_form(daemon, req),
-        "vs_prompt_form_wait" => engine_ops::handle_prompt_form_wait(daemon, req),
-        "vs_pending_url" => engine_ops::handle_pending_url(daemon, req),
-        "vs_watch" => engine_ops::handle_watch(daemon, req),
-        "vs_record" => engine_ops::handle_record(daemon, req),
-        "vs_frame" => engine_ops::handle_frame(daemon, req),
-        "vs_pending_list" => engine_ops::handle_pending_list(daemon, req),
-        "vs_pending_fulfill" => engine_ops::handle_pending_fulfill(daemon, req),
-        "vs_pending_cancel" => engine_ops::handle_pending_cancel(daemon, req),
-        "vs_pending_peek" => engine_ops::handle_pending_peek(daemon, req),
+        "vs_prompt_input_queue" => human_ops::handle_prompt_input_queue(daemon, req),
+        "vs_prompt_form" => human_ops::handle_prompt_form(daemon, req),
+        "vs_prompt_form_wait" => human_ops::handle_prompt_form_wait(daemon, req),
+        "vs_pending_url" => human_ops::handle_pending_url(daemon, req),
+        "vs_watch" => human_ops::handle_watch(daemon, req),
+        "vs_record" => human_ops::handle_record(daemon, req),
+        "vs_frame" => human_ops::handle_frame(daemon, req),
+        "vs_pending_list" => human_ops::handle_pending_list(daemon, req),
+        "vs_pending_fulfill" => human_ops::handle_pending_fulfill(daemon, req),
+        "vs_pending_cancel" => human_ops::handle_pending_cancel(daemon, req),
+        "vs_pending_peek" => human_ops::handle_pending_peek(daemon, req),
         "vs_net_poll" => net_ops::handle_poll(daemon, req),
         "vs_net_route" => net_ops::handle_route(daemon, req),
         "vs_net_continue" => net_ops::handle_continue(daemon, req),
