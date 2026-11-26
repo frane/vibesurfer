@@ -457,11 +457,13 @@ impl Engine for WpeBackend {
         Ok(())
     }
 
-    fn enable_webauthn(&mut self, _page: PageHandle) -> EngineResult<()> {
-        Err(EngineError::NotImplemented {
-            engine: "wpe",
-            primitive: "enable_webauthn",
-        })
+    fn enable_webauthn(&mut self, page: PageHandle) -> EngineResult<()> {
+        // Document-start script for later loads, as on macOS, then the
+        // document already loaded.
+        self.add_init_script(page, super::common::WEBAUTHN_JS)?;
+        let web_view = self.page_mut(page)?.web_view.clone();
+        eval_js_string(&web_view, super::common::WEBAUTHN_JS, Duration::from_secs(5))?;
+        Ok(())
     }
 
     fn close(&mut self, page: PageHandle) -> EngineResult<()> {

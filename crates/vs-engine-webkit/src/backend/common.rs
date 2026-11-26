@@ -184,6 +184,11 @@ pub(crate) const IDB_LOAD_BODY_JS: &str = include_str!("idb_load.js");
 /// and parse the result with [`parse_snapshot`].
 pub(crate) const SNAPSHOT_DOM_WALKER_JS: &str = include_str!("snapshot_dom_walker.js");
 
+/// Virtual WebAuthn authenticator shim. Every backend adds it as a
+/// document-start script (all frames) and evaluates it once on the
+/// document already loaded.
+pub(crate) const WEBAUTHN_JS: &str = include_str!("webauthn_virtual.js");
+
 /// Download-capture shim. Injected at document-start into every frame
 /// on every backend, and re-evaluated on demand by [`run_download`] for
 /// documents that predate the injection. See the file header for why

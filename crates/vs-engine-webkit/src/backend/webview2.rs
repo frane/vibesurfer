@@ -1253,11 +1253,13 @@ impl Engine for Webview2Backend {
         Ok(())
     }
 
-    fn enable_webauthn(&mut self, _page: PageHandle) -> EngineResult<()> {
-        Err(EngineError::NotImplemented {
-            engine: "webview2",
-            primitive: "enable_webauthn",
-        })
+    fn enable_webauthn(&mut self, page: PageHandle) -> EngineResult<()> {
+        // Document-start script for later loads, as on macOS, then the
+        // document already loaded.
+        let web_view = self.page_mut(page)?.web_view.clone();
+        add_init_script(&web_view, super::common::WEBAUTHN_JS)?;
+        execute_script(&web_view, super::common::WEBAUTHN_JS)?;
+        Ok(())
     }
 
     fn close(&mut self, page: PageHandle) -> EngineResult<()> {

@@ -6,6 +6,9 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- `vs auth webauthn` works on Linux and Windows. It returned `ENGINE_UNSUPPORTED` there; the virtual authenticator is now added as a document-start script on every engine, and its test runs on all three.
+
 ## [0.2.21] - 2026-11-26
 
 ### Added

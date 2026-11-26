@@ -512,10 +512,7 @@ impl Drop for WkBackend {
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use super::common::{parse_snapshot, SNAPSHOT_DOM_WALKER_JS as SNAPSHOT_JS};
-
-/// Virtual WebAuthn authenticator shim (see `webauthn_virtual.js`).
-const WEBAUTHN_JS: &str = include_str!("../webauthn_virtual.js");
+use super::common::{parse_snapshot, SNAPSHOT_DOM_WALKER_JS as SNAPSHOT_JS, WEBAUTHN_JS};
 
 // =============================================================================
 // Engine impl
