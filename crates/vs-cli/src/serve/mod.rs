@@ -70,7 +70,9 @@ pub fn run_stop(paths: &DaemonPaths) -> Result<()> {
     #[cfg(windows)]
     {
         use ::windows::Win32::Foundation::CloseHandle;
-        use ::windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+        use ::windows::Win32::System::Threading::{
+            OpenProcess, TerminateProcess, PROCESS_TERMINATE,
+        };
         let pid_u32 =
             u32::try_from(pid).with_context(|| format!("PID {pid} out of range for a DWORD"))?;
         unsafe {
