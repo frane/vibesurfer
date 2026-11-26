@@ -156,8 +156,8 @@ unsafe extern "system" fn check_dialogs(_: HWND, _: u32, _: usize, _: u32) {
         let mut out = Vec::new();
         let mut i = 0;
         while i < d.len() {
-            let answer = d[i].feed.take_answer(d[i].id);
-            if answer.is_some() || d[i].started.elapsed() >= DIALOG_TIMEOUT {
+            let expired = d[i].started.elapsed() >= DIALOG_TIMEOUT;
+            if let Some(answer) = d[i].feed.settle(d[i].id, expired) {
                 out.push((d.remove(i), answer));
             } else {
                 i += 1;

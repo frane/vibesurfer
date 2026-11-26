@@ -15,7 +15,7 @@
   "interface": {
     "displayName": "vibesurfer",
     "shortDescription": "Agent-native headless browser.",
-    "longDescription": "Real WebKit/WebKitGTK/WebView2 engines under a Unix-socket wire protocol. 20 primitives, state-token concurrency, tree deltas, audit-by-construction, AES-256-GCM auth blobs. Requires the `vs` binary on PATH.",
+    "longDescription": "Real WebKit/WebKitGTK/WebView2 engines under a Unix-socket wire protocol. State-token concurrency, tree deltas, audit-by-construction, AES-256-GCM auth blobs. Requires the `vs` binary on PATH.",
     "category": "Browser",
     "websiteURL": "https://github.com/frane/vibesurfer"
   }

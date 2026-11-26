@@ -77,10 +77,9 @@ pub(super) fn await_answer(
         if done.get() {
             return;
         }
-        let answer = feed.take_answer(id);
-        if answer.is_none() && started.elapsed() < DIALOG_TIMEOUT {
+        let Some(answer) = feed.settle(id, started.elapsed() >= DIALOG_TIMEOUT) else {
             return;
-        }
+        };
         done.set(true);
         closed();
         // SAFETY: the timer passes itself; it is valid for the call.

@@ -984,27 +984,47 @@ pub const DIALOG_TIMEOUT: Duration = Duration::from_secs(10);
 pub struct PopupFeed {
     events: std::sync::Mutex<Vec<PopupEvent>>,
     raised: std::sync::atomic::AtomicU64,
-    answers: std::sync::Mutex<std::collections::HashMap<u64, DialogAnswer>>,
+    /// Open dialogs, each with its answer once given. One lock, so an
+    /// answer either lands before its dialog closes or is refused.
+    open: std::sync::Mutex<std::collections::HashMap<u64, Option<DialogAnswer>>>,
     last_dialog: std::sync::atomic::AtomicU64,
 }
 
 impl PopupFeed {
-    /// A fresh dialog id.
+    /// A fresh dialog id, open until [`Self::settle`] closes it.
     pub fn next_dialog_id(&self) -> u64 {
-        self.last_dialog
+        let id = self
+            .last_dialog
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-            + 1
+            + 1;
+        self.open.lock().expect("poisoned").insert(id, None);
+        id
     }
 
-    /// Answer dialog `id`. The engine applies it on its next check
-    /// (within a few milliseconds), from any thread.
-    pub fn answer(&self, id: u64, answer: DialogAnswer) {
-        self.answers.lock().expect("poisoned").insert(id, answer);
+    /// Answer dialog `id`, from any thread; the engine applies it on its
+    /// next check (within a few milliseconds). False when `id` is not
+    /// open: unknown, already answered, or dismissed for timing out.
+    pub fn answer(&self, id: u64, answer: DialogAnswer) -> bool {
+        match self.open.lock().expect("poisoned").get_mut(&id) {
+            Some(slot @ None) => {
+                *slot = Some(answer);
+                true
+            }
+            _ => false,
+        }
     }
 
-    /// The answer for `id`, once given.
-    pub fn take_answer(&self, id: u64) -> Option<DialogAnswer> {
-        self.answers.lock().expect("poisoned").remove(&id)
+    /// The engine's check on dialog `id`. `None` while it waits; once it
+    /// has an answer, or `expired` with none (then `Some(None)`: dismiss),
+    /// the dialog closes and later answers are refused.
+    pub fn settle(&self, id: u64, expired: bool) -> Option<Option<DialogAnswer>> {
+        let mut open = self.open.lock().expect("poisoned");
+        match open.get(&id) {
+            Some(Some(_)) => open.remove(&id),
+            Some(None) if expired => open.remove(&id),
+            Some(None) => None,
+            None => Some(None),
+        }
     }
 
     pub fn push(&self, e: PopupEvent) {
@@ -1029,7 +1049,26 @@ pub use vs_protocol::Role as NodeRole;
 
 #[cfg(test)]
 mod tests {
-    use super::DEFAULT_USER_AGENT;
+    use super::{DialogAnswer, PopupFeed, DEFAULT_USER_AGENT};
+
+    #[test]
+    fn a_dialog_takes_one_answer_while_open() {
+        let feed = PopupFeed::default();
+        let yes = || DialogAnswer {
+            accept: true,
+            text: None,
+        };
+        assert!(!feed.answer(7, yes()), "unknown id");
+        let id = feed.next_dialog_id();
+        assert_eq!(feed.settle(id, false), None, "waits for an answer");
+        assert!(feed.answer(id, yes()));
+        assert!(!feed.answer(id, yes()), "second answer");
+        assert_eq!(feed.settle(id, false), Some(Some(yes())));
+        assert!(!feed.answer(id, yes()), "closed");
+        let late = feed.next_dialog_id();
+        assert_eq!(feed.settle(late, true), Some(None), "dismissed on expiry");
+        assert!(!feed.answer(late, yes()), "answer after the dismiss");
+    }
 
     /// Pins the UA contract: must look like a current shipping
     /// Safari, including the `Version/X` and `Safari/Y` suffixes.

@@ -620,7 +620,7 @@ pub enum Command {
     },
     /// Run the MCP (Model Context Protocol) server over stdio.
 
-    /// Speaks JSON-RPC 2.0; each of the 19 vibesurfer primitives is
+    /// Speaks JSON-RPC 2.0; each agent-facing command is
     /// exposed as one MCP tool. Wire to Claude Desktop / Claude Code
     /// by configuring `vs mcp` as the server command.
     Mcp,
@@ -657,15 +657,15 @@ pub enum FlowSub {
 #[derive(Debug, clap::Args)]
 pub struct NetOverrides {
     #[arg(long)]
-    url: Option<String>,
+    pub(crate) url: Option<String>,
     #[arg(long)]
-    method: Option<String>,
+    pub(crate) method: Option<String>,
     /// `name: value`; repeat for more. Replaces all request headers.
     #[arg(long = "header", value_name = "NAME: VALUE")]
-    headers: Vec<String>,
+    pub(crate) headers: Vec<String>,
     /// Request body, base64.
     #[arg(long = "body-b64", value_name = "B64")]
-    body_b64: Option<String>,
+    pub(crate) body_b64: Option<String>,
 }
 
 impl NetOverrides {

@@ -173,13 +173,19 @@ pub(super) fn handle_dialog(daemon: &Daemon, req: &Request) -> String {
             Some("dismiss") => false,
             _ => return Err(bad("vs_net_dialog: <id> accept|dismiss")),
         };
-        if daemon.answer_dialog(id, accept, flag_value(req, "text")) {
-            Ok(ok(""))
-        } else {
-            Err(format_error(
+        match daemon.answer_dialog(id, accept, flag_value(req, "text")) {
+            Some(true) => Ok(ok("")),
+            Some(false) => Err(format_error(
+                ErrorCode::NotFound,
+                vec![format!(
+                    "dialog {id} is not open: unknown, already answered, or dismissed after {} s",
+                    vs_engine_webkit::engine::DIALOG_TIMEOUT.as_secs()
+                )],
+            )),
+            None => Err(format_error(
                 ErrorCode::EngineUnsupported,
                 vec!["vs_net_dialog".into()],
-            ))
+            )),
         }
     };
     run().unwrap_or_else(|e| e)

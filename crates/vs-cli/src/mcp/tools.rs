@@ -1,5 +1,5 @@
 #![allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
-//! MCP tool definitions for the 19 vibesurfer primitives.
+//! MCP tool definitions: one tool per agent-facing `vs` command.
 //!
 //! Two responsibilities:
 //! 1. [`list`] — emits the JSON Schema array for `tools/list`.
@@ -172,6 +172,36 @@ tool("vs_type", "Type text into the FOCUSED element with trusted keystrokes (rea
             ("files", json!({ "type": "array", "items": { "type": "string" }, "description": "File paths." })),
             ("data", json!({ "type": "object", "additionalProperties": { "type": "string" }, "description": "MIME type to string, e.g. {\"text/plain\": \"hi\"}." })),
         ])),
+        tool("vs_inspect", "Engine state of a page. kind: console | network | request <seq> | eval <expr> | storage <scope> | scripts | script <seq> | dom | performance | response | cookie-events. Kind-specific positionals go in args.", obj(&[
+            ("page", str_prop("Page id.", true)),
+            ("kind", str_prop("What to inspect (see description).", true)),
+            ("args", json!({ "type": "array", "items": { "type": "string" }, "maxItems": 3, "description": "Positionals after kind, e.g. [\"document.title\"] for eval." })),
+            ("frame", str_prop("eval only: the subframe with this URL, or #N (Nth subframe, newest first). Cross-origin too.", false)),
+            ("since", str_prop("Only entries after this sequence number.", false)),
+            ("level", str_prop("console only: minimum level.", false)),
+            ("status", str_prop("network only: status filter.", false)),
+            ("max", str_prop("Most entries to return.", false)),
+            ("full", bool_prop("Do not truncate values.", false)),
+            ("unsafe_log", bool_prop("Write the unredacted expression to the audit log.", false)),
+        ])),
+        tool("vs_init_script", "Run JavaScript at document start in every later document of the page, before its own scripts (like Playwright's addInitScript). The current document is not touched.", obj(&[
+            ("page", str_prop("Page id.", true)),
+            ("source", str_prop("JavaScript source.", true)),
+        ])),
+        tool("vs_net", "Requests and dialogs of an intercept/popups session. op: poll (print and clear events: req/res/fin/fail/sw/dialog/page/close/crash lines) | route (state on|off: hold every request until answered) | continue | fulfill | abort | fetch (perform a held request, keep it held) | body (a kept response body, base64) | dialog (action accept|dismiss, text for a prompt; unanswered dialogs dismiss after 10 s).", obj(&[
+            ("op", str_prop("poll | route | continue | fulfill | abort | fetch | body | dialog.", true)),
+            ("id", uint_prop("Request or dialog id from poll. All ops but poll and route.", false)),
+            ("wait_ms", uint_prop("poll: block up to this long (max 30000) for the first event.", false)),
+            ("state", str_prop("route: on | off.", false)),
+            ("action", str_prop("dialog: accept | dismiss.", false)),
+            ("text", str_prop("dialog: the prompt's answer. Default: its default value.", false)),
+            ("url", str_prop("continue/fetch: send to this URL instead.", false)),
+            ("method", str_prop("continue/fetch: use this method.", false)),
+            ("headers", json!({ "type": "array", "items": { "type": "string" }, "description": "continue/fetch/fulfill: \"name: value\" lines; replaces all headers." })),
+            ("body_b64", str_prop("continue/fetch/fulfill: body, base64.", false)),
+            ("status", uint_prop("fulfill: status code (default 200).", false)),
+            ("error", str_prop("abort: error name in the fail line (default failed).", false)),
+        ])),
         tool("vs_wheel", "Move to (x, y) and turn the wheel by (dx, dy) CSS px: a trusted wheel event (positive dy scrolls down).", obj(&[
             ("page", str_prop("Page id.", true)),
             ("x", num_prop("Pointer X in CSS pixels.", true)),
@@ -242,6 +272,7 @@ tool("vs_type", "Type text into the FOCUSED element with trusted keystrokes (rea
             ("page", str_prop("Page id.", true)),
             ("spec", str_prop("Preset name or WxH.", true)),
             ("dpr", uint_prop("Device-pixel ratio (default 2).", false)),
+            ("zoom", num_prop("Page zoom: the page lays out width/zoom CSS px wide. With spec \"keep\" only the zoom changes.", false)),
         ])),
         tool("vs_layout", "Compute layout boxes (getBoundingClientRect) for one or more refs.", obj(&[
             ("page", str_prop("Page id.", true)),
@@ -455,6 +486,25 @@ pub fn build_cli(name: &str, args: &Value) -> Result<(Cli, CallOpts)> {
             op: req_str(args, "op")?,
             data: opt_str(args, "json"),
         },
+        "vs_inspect" => Command::Inspect {
+            page: req_str(args, "page")?,
+            kind: req_str(args, "kind")?,
+            rest: str_list(args, "args"),
+            since: opt_str(args, "since"),
+            level: opt_str(args, "level"),
+            status: opt_str(args, "status"),
+            max: opt_str(args, "max"),
+            full: opt_bool(args, "full").unwrap_or(false),
+            frame: opt_str(args, "frame"),
+            unsafe_log: opt_bool(args, "unsafe_log").unwrap_or(false),
+        },
+        "vs_init_script" => Command::InitScript {
+            page: req_str(args, "page")?,
+            source: req_str(args, "source")?,
+        },
+        "vs_net" => Command::Net {
+            sub: net_sub(args)?,
+        },
         "vs_drop" => Command::Drop {
             page: req_str(args, "page")?,
             x: req_f64(args, "x")?,
@@ -583,6 +633,59 @@ pub fn build_cli(name: &str, args: &Value) -> Result<(Cli, CallOpts)> {
         },
         opts,
     ))
+}
+
+/// `vs_net` arguments as the matching `vs net` subcommand.
+fn net_sub(args: &Value) -> Result<crate::commands::NetSub> {
+    use crate::commands::{NetOverrides, NetSub};
+    let id = || opt_u64(args, "id").ok_or_else(|| anyhow!("vs_net: this op needs id"));
+    let o = || NetOverrides {
+        url: opt_str(args, "url"),
+        method: opt_str(args, "method"),
+        headers: str_list(args, "headers"),
+        body_b64: opt_str(args, "body_b64"),
+    };
+    Ok(match req_str(args, "op")?.as_str() {
+        "poll" => NetSub::Poll {
+            wait_ms: opt_u64(args, "wait_ms").unwrap_or(0),
+        },
+        "route" => NetSub::Route {
+            state: req_str(args, "state")?,
+        },
+        "continue" => NetSub::Continue { id: id()?, o: o() },
+        "fetch" => NetSub::Fetch { id: id()?, o: o() },
+        "fulfill" => NetSub::Fulfill {
+            id: id()?,
+            status: opt_u64(args, "status")
+                .and_then(|s| u16::try_from(s).ok())
+                .unwrap_or(200),
+            headers: str_list(args, "headers"),
+            body_b64: opt_str(args, "body_b64"),
+        },
+        "abort" => NetSub::Abort {
+            id: id()?,
+            error: opt_str(args, "error"),
+        },
+        "body" => NetSub::Body { id: id()? },
+        "dialog" => NetSub::Dialog {
+            id: id()?,
+            action: req_str(args, "action")?,
+            text: opt_str(args, "text"),
+        },
+        other => return Err(anyhow!("vs_net: unknown op {other}")),
+    })
+}
+
+/// A string array argument; missing or mistyped is empty.
+fn str_list(args: &Value, key: &str) -> Vec<String> {
+    args.get(key)
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 // =============================================================================
@@ -744,5 +847,74 @@ mod tests {
                 "{name}: parent `required` array missing",
             );
         }
+    }
+
+    /// Every listed tool has a builder: a call with no arguments fails on
+    /// a missing argument, never as an unknown tool.
+    #[test]
+    fn every_listed_tool_builds() {
+        for tool in list(false) {
+            let name = tool["name"].as_str().unwrap_or("?");
+            if let Err(e) = build_cli(name, &json!({})) {
+                assert!(!e.to_string().contains("unknown tool"), "{name}: {e}");
+            }
+        }
+    }
+
+    /// Every CLI command an agent can use is an MCP tool too. A new
+    /// subcommand fails this until it gets one or a reason below.
+    #[test]
+    fn every_cli_command_is_a_tool() {
+        use clap::CommandFactory as _;
+        // Not tools: the human side of a prompt (pending fulfill/cancel
+        // read the local tty; vs_pending_url is the agent half), daemon
+        // plumbing, and flow, which batches CLI calls that MCP makes one
+        // tool call each. prompt-scan over MCP is vs_watch plus
+        // vs_prompt_confirm.
+        let not_tools = [
+            "pending",
+            "socket",
+            "serve",
+            "mcp",
+            "flow",
+            "prompt-scan",
+            "help",
+        ];
+        // One tool for a command with subcommands.
+        let renamed = [("record", "vs_record_start")];
+        let tools: Vec<String> = list(false)
+            .iter()
+            .filter_map(|t| t["name"].as_str().map(str::to_string))
+            .collect();
+        for sub in crate::commands::Cli::command().get_subcommands() {
+            let cli = sub.get_name();
+            if not_tools.contains(&cli) || sub.is_hide_set() {
+                continue;
+            }
+            let want = renamed.iter().find(|(c, _)| *c == cli).map_or_else(
+                || format!("vs_{}", cli.replace('-', "_")),
+                |(_, t)| (*t).to_string(),
+            );
+            assert!(tools.contains(&want), "`vs {cli}` has no MCP tool {want}");
+        }
+    }
+
+    #[test]
+    fn net_dialog_answers_a_prompt() {
+        let (cli, _) = build_cli(
+            "vs_net",
+            &json!({"op": "dialog", "id": 3, "action": "accept", "text": "Ada"}),
+        )
+        .unwrap();
+        let Command::Net {
+            sub: crate::commands::NetSub::Dialog { id, action, text },
+        } = cli.command
+        else {
+            panic!("not a dialog: {:?}", cli.command);
+        };
+        assert_eq!(
+            (id, action.as_str(), text.as_deref()),
+            (3, "accept", Some("Ada"))
+        );
     }
 }

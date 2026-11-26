@@ -8,7 +8,11 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [0.2.21] - 2026-11-26
 
+### Added
+- MCP tools `vs_net` (poll, route, continue, fulfill, abort, fetch, body, dialog), `vs_inspect` (eval, response, dom, console and the rest, `frame` for subframes) and `vs_init_script`, and `zoom` on `vs_viewport`. An MCP agent could open an intercept or popups session but had no way to use it. A unit test now fails when a CLI command has no MCP tool.
+
 ### Fixed
+- `vs net dialog` on a dialog that was no longer open (already answered, or dismissed after 10 s) reported success though the page never got the answer. It is now `NOT_FOUND`.
 - Several `vs` calls at once on a home with no daemon each spawned one, and a later daemon took over the socket of an earlier one, stranding the clients already connected to it (a cold parallel test run failed a third of its tests). `vs serve` now holds a lock next to the socket for its lifetime; a second one exits and leaves the first one's socket and PID file alone. Cell `cell_second_daemon_leaves_the_first_alone`.
 - `vs drop`: a handler that read a dropped string after an `await` could get an empty string when WebKit had garbage-collected the `DataTransfer` wrapper in between. The drop's data is now held with the wrapper.
 

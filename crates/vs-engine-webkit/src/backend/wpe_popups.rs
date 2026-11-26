@@ -94,10 +94,9 @@ pub(super) fn hold_dialog(feed: &Arc<PopupFeed>, page: PageHandle, dialog: &Scri
     let feed = feed.clone();
     let started = Instant::now();
     glib::timeout_add_local(POLL, move || {
-        let answer = feed.take_answer(id);
-        if answer.is_none() && started.elapsed() < DIALOG_TIMEOUT {
+        let Some(answer) = feed.settle(id, started.elapsed() >= DIALOG_TIMEOUT) else {
             return glib::ControlFlow::Continue;
-        }
+        };
         if let Some(a) = answer {
             match dialog.dialog_type() {
                 ScriptDialogType::Confirm | ScriptDialogType::BeforeUnloadConfirm => {

@@ -176,24 +176,27 @@ impl Daemon {
                 b64(&d.message),
                 b64(&d.default)
             )),
-            _ => feed.answer(
-                d.id,
-                DialogAnswer {
-                    accept: false,
-                    text: None,
-                },
-            ),
+            _ => {
+                feed.answer(
+                    d.id,
+                    DialogAnswer {
+                        accept: false,
+                        text: None,
+                    },
+                );
+            }
         }
     }
 
-    /// Answer dialog `id` (see `report_dialog`). False when the engine
-    /// has no dialogs to answer.
-    pub(crate) fn answer_dialog(&self, id: u64, accept: bool, text: Option<String>) -> bool {
-        let Some(feed) = self.feed() else {
-            return false;
-        };
-        feed.answer(id, DialogAnswer { accept, text });
-        true
+    /// Answer dialog `id` (see `report_dialog`). `None` when the engine
+    /// has no dialogs to answer; `Some(false)` when `id` is not open.
+    pub(crate) fn answer_dialog(
+        &self,
+        id: u64,
+        accept: bool,
+        text: Option<String>,
+    ) -> Option<bool> {
+        Some(self.feed()?.answer(id, DialogAnswer { accept, text }))
     }
 
     fn forget_closed(&self, handle: PageHandle) {

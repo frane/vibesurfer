@@ -1,7 +1,7 @@
 //! `vs mcp` — full MCP (Model Context Protocol) server for vibesurfer.
 //!
-//! Speaks JSON-RPC 2.0 over stdio. Each of the 19 vibesurfer
-//! primitives is exposed as one MCP tool whose name matches the wire
+//! Speaks JSON-RPC 2.0 over stdio. Each agent-facing `vs` command
+//! is exposed as one MCP tool whose name matches the wire
 //! primitive (`vs_open`, `vs_view`, etc.). Tool dispatch delegates to
 //! [`crate::commands::run`] — the same code path the CLI uses — so
 //! there is no parallel engine logic, no shim, no drift.

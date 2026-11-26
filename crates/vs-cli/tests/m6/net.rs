@@ -877,9 +877,12 @@ fn cell_dialogs_wait_for_an_answer() {
             let seen = start.elapsed();
             assert_ok("net dialog", &sv(&ctx, &s, &a));
             assert_ok("click", &click.join().unwrap());
+            // A closed dialog refuses a second answer instead of
+            // reporting success the page never saw.
+            assert_eq!(assert_err(&sv(&ctx, &s, &a)), "NOT_FOUND", "answer twice");
             let got = eval(&ctx, &s, &page, "document.getElementById('o').textContent");
             if got != want {
-                // Flaky on macOS 15 runners only: say what else happened.
+                // Say what else happened, for a failure seen only on CI.
                 let more: Vec<String> = poll(&ctx, &s, 0).into_iter().map(|e| e.line).collect();
                 let log =
                     std::fs::read_to_string(ctx.home_path().join("daemon.log")).unwrap_or_default();

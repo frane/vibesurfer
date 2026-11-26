@@ -2,7 +2,7 @@
 name: vibesurfer
 version: 0.2.21
 binary: vs
-description: Agent-native headless browser. 26 primitives over a Unix-socket wire protocol. Real WKWebView (macOS), WebKitGTK 6 (Linux), or WebView2 (Windows) — all three engines verified per-commit by a real-browser integration suite. Optimistic concurrency via state tokens; tree-delta wire format; durable session/page/auth state in SQLite.
+description: Agent-native headless browser. A CLI and an MCP server over one local-socket wire protocol. Real WKWebView (macOS), WebKitGTK 6 (Linux), or WebView2 (Windows) — all three engines verified per-commit by a real-browser integration suite. Optimistic concurrency via state tokens; tree-delta wire format; durable session/page/auth state in SQLite.
 ---
 
 # vibesurfer (binary: `vs`)
@@ -28,9 +28,9 @@ Frequent flags also have short forms: `-S` (`--session`), `-j` (`--json`), `-F` 
 - Anything where you'd be parsing the rendered HTML by string matching — `vs_view` already gives you a typed accessibility tree with stable refs.
 - Headless screenshots of fixed URLs with no interaction (overkill — though you can; see `vs capture`).
 
-## The 26 primitives
+## Primitives
 
-Wire form is `vs_<name>` (over the socket); CLI subcommand is `<name>` with hyphens. Each call returns a state envelope (`@<token>` success, `! CODE` error, `? warning` lines before the envelope).
+Wire form is `vs_<name>` (over the socket); CLI subcommand is `<name>` with hyphens. Every command an agent uses is also an MCP tool of the same `vs_<name>` (`vs net <op>` is `vs_net` with `op`; `vs record start|stop` is `vs_record_start`/`vs_record_stop`). `vs flow` is CLI only: over MCP each step is its own call. Each call returns a state envelope (`@<token>` success, `! CODE` error, `? warning` lines before the envelope).
 
 ### Lifecycle (1–4)
 
@@ -41,6 +41,7 @@ Wire form is `vs_<name>` (over the socket); CLI subcommand is `<name>` with hyph
 | 3 | `vs open <URL>` | Open a page in the session. |
 | - | `vs goto <PAGE> <URL>` (`g`) | Navigate an existing page in place. Reuses the web view, so it skips browser spin-up and is much faster than open for successive navigations. Refs are fresh afterward. `--html FILE` loads that document under URL without fetching it. |
 | - | `vs flow run <FILE>` | Run a declarative flow: a JSON array of steps, each an array of `vs` args. Runs in one session; `$page` expands to the last opened/navigated page, `$token` to its current token (fetched as needed). Stops at the first failing step. |
+| - | `vs init-script <PAGE> <SOURCE\|@FILE>` | Run JavaScript at document start in every later document of the page, before its own scripts (Playwright's `addInitScript`). The current document is not touched. |
 | 4 | `vs close <PAGE>` | Close a page. |
 
 ### Read (5–6, 13–14)
@@ -134,7 +135,7 @@ A password field masks to `***` in the tree whatever its value, so empty → fil
 
 The response body is `path` / `size` / `mime` / `url` rows — bytes never cross the wire. A failed read (401, revoked blob, over the 64 MiB cap) comes back as an error saying why, not as silence. Files are named from `Content-Disposition` or the `download` attribute, sanitized to a single path component; a repeat download gets a `-1`, `-2`, … suffix rather than overwriting. `--dest` overrides the name (relative paths stay inside the downloads dir).
 
-**Request interception (`--intercept` sessions).** Every request the pages make (documents, iframes, scripts, images, fetch) passes a per-session proxy. `vs net poll [--wait-ms=N]` prints and clears events: `req <id> <METHOD> <url> type=<t> nav=<0|1> [frame=main|sub]`, `res <id> <status> <url> <reason>`, `fin <id> size=<n>`, `fail <id> <error>`; `req`/`res` lines are followed by `h <name>: <value>` lines, a request body by `body <base64>`. `vs net route on` holds each request until `vs net continue <id> [--url U] [--method M] [--header 'k: v']... [--body-b64 B]`, `fulfill <id> [--status N] [--header ...] [--body-b64 B]`, `abort <id> [--error NAME]`; 30 s without an answer continues it. `vs net fetch <id>` performs a held request and prints the response without delivering it. `vs net body <id>` prints a kept response body (newest 16 MiB). `--header` replaces all headers. https is intercepted too (the daemon's CA, `~/.vibesurfer/intercept-ca.pem`, is trusted by intercept pages only); a fulfilled request never touches upstream. macOS WebKit never proxies `127.0.0.1`/`localhost`, so address local servers as `<name>.localhost`. With `--popups`, poll also prints `page <opener> <page> <url>` (before the popup's first request), `close <page>`, and `dialog <page> <id> <kind> <msg-b64> <default-b64>`; answer with `vs net dialog <id> accept|dismiss [--text T]` (10 s, then dismissed).
+**Request interception (`--intercept` sessions).** Every request the pages make (documents, iframes, scripts, images, fetch) passes a per-session proxy. `vs net poll [--wait-ms=N]` prints and clears events: `req <id> <METHOD> <url> type=<t> nav=<0|1> [frame=main|sub]`, `res <id> <status> <url> <reason>`, `fin <id> size=<n>`, `fail <id> <error>`, `sw <base64 JSON>` (a response a service worker built or took from its cache), `crash <page>` (the page's web content process died); `req`/`res` lines are followed by `h <name>: <value>` lines, a request body by `body <base64>`. `vs net route on` holds each request until `vs net continue <id> [--url U] [--method M] [--header 'k: v']... [--body-b64 B]`, `fulfill <id> [--status N] [--header ...] [--body-b64 B]`, `abort <id> [--error NAME]`; 30 s without an answer continues it. `vs net fetch <id>` performs a held request and prints the response without delivering it. `vs net body <id>` prints a kept response body (newest 16 MiB). `--header` replaces all headers. https is intercepted too (the daemon's CA, `~/.vibesurfer/intercept-ca.pem`, is trusted by intercept pages only); a fulfilled request never touches upstream. macOS WebKit never proxies `127.0.0.1`/`localhost`, so address local servers as `<name>.localhost`. With `--popups`, poll also prints `page <opener> <page> <url>` (before the popup's first request), `close <page>`, and `dialog <page> <id> <kind> <msg-b64> <default-b64>`; answer with `vs net dialog <id> accept|dismiss [--text T]` (10 s, then dismissed). Answering a dialog that is no longer open (already answered, or dismissed) is `! NOT_FOUND`: the page did not get that answer.
 
 An `<iframe>` shows up in the tree as an `ifr` node whose label is its resolved `src`. A same-origin frame's content is its children (v0.2.15+), with refs you act on as usual. A cross-origin frame stays a leaf: its URL is what you feed `vs download`.
 

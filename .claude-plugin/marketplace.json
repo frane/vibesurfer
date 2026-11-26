@@ -9,7 +9,7 @@
     {
       "name": "vibesurfer",
       "source": "./plugin",
-      "description": "Headless real browser (WKWebView/WebKitGTK/WebView2) driven over a Unix-socket wire protocol. 20 primitives, state-token concurrency, tree deltas, audit-by-construction. Requires the `vs` binary on PATH (install via `brew tap frane/tap && brew install vibesurfer` or the curl one-liner from the README).",
+      "description": "Headless real browser (WKWebView/WebKitGTK/WebView2) driven over a Unix-socket wire protocol. State-token concurrency, tree deltas, audit-by-construction. Requires the `vs` binary on PATH (install via `brew tap frane/tap && brew install vibesurfer` or the curl one-liner from the README).",
       "category": "browser",
       "tags": ["browser", "headless", "webkit", "stateful", "mcp", "automation"]
     }
