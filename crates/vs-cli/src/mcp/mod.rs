@@ -10,6 +10,7 @@
 //! it via their MCP server config).
 
 mod content;
+mod schema;
 mod tools;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -149,7 +150,7 @@ async fn handle_request(req: &Value) -> Option<Value> {
         }
         "initialized" | "notifications/initialized" => return None,
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({ "tools": tools::list(UI_CLIENT.load(Ordering::Relaxed)) })),
+        "tools/list" => Ok(json!({ "tools": schema::list(UI_CLIENT.load(Ordering::Relaxed)) })),
         "tools/call" => call_tool(&params).await,
         "resources/list" => Ok(resources_list()),
         "resources/read" => resources_read(&params),
@@ -220,7 +221,7 @@ fn panel_meta() -> Value {
 fn resources_list() -> Value {
     json!({
         "resources": [{
-            "uri": tools::LIVE_PANEL_URI,
+            "uri": schema::LIVE_PANEL_URI,
             "name": "vibesurfer_live_panel",
             "mimeType": "text/html;profile=mcp-app",
             "_meta": panel_meta(),
@@ -230,7 +231,7 @@ fn resources_list() -> Value {
 
 fn resources_read(params: &Value) -> Result<Value, McpError> {
     let uri = params.get("uri").and_then(Value::as_str).unwrap_or("");
-    if uri != tools::LIVE_PANEL_URI {
+    if uri != schema::LIVE_PANEL_URI {
         return Err(McpError {
             code: -32602,
             message: format!("unknown resource: {uri}"),
@@ -238,7 +239,7 @@ fn resources_read(params: &Value) -> Result<Value, McpError> {
     }
     Ok(json!({
         "contents": [{
-            "uri": tools::LIVE_PANEL_URI,
+            "uri": schema::LIVE_PANEL_URI,
             "mimeType": "text/html;profile=mcp-app",
             "text": LIVE_PANEL_HTML,
             "_meta": panel_meta(),
