@@ -411,17 +411,16 @@ impl Daemon {
             .list_actions(filter)?)
     }
 
-    /// order; per-primitive failures (parse errors, unknown sessions,
-    /// stale tokens, etc.) produce inline error envelopes but do not
-    /// abort the rest of the sequence.
+    /// Run a sequence of primitives in order. Per-primitive failures
+    /// (parse errors, unknown sessions, stale tokens) produce inline
+    /// error envelopes but do not abort the rest of the sequence.
     ///
     /// Audit rows are written per primitive — a sequence does not
     /// become one audit row.
     ///
     /// Today every wire frame parses to exactly one [`Primitive`]
     /// (i.e. one [`Request`](vs_protocol::Request)), so the inbound
-    /// vec has length 1. Composite-flag primitives (PRs 2–6 of
-    /// M5.5) and the v2 wire pipeline syntax (ADR 0007) both feed
+    /// vec has length 1.
     #[must_use]
     pub fn dispatch(
         &self,

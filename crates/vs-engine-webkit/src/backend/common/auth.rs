@@ -3,49 +3,9 @@
 
 use std::time::Duration;
 
-use crate::engine::{AuthBlob, EngineError, EngineResult};
+use crate::engine::{EngineError, EngineResult};
 
-use super::{
-    AUTH_LOAD_BODY_JS, AUTH_SAVE_JS, IDB_LOAD_BODY_JS, IDB_SAVE_JS, STORAGE_LOAD_BODY_JS,
-    STORAGE_SAVE_JS,
-};
-
-/// Run `save_auth`: eval the snapshot JS, capture the JSON blob.
-#[allow(dead_code)]
-pub(crate) fn run_save_auth<F>(eval: F) -> EngineResult<AuthBlob>
-where
-    F: Fn(&str, Duration) -> EngineResult<String>,
-{
-    let json = eval(AUTH_SAVE_JS, Duration::from_secs(5))?;
-    let payload = serde_json::from_str::<String>(&json).unwrap_or(json);
-    Ok(AuthBlob {
-        bytes: payload.into_bytes(),
-    })
-}
-
-/// Run `load_auth`: rebuild the IIFE with the payload baked in, eval,
-/// expect the literal `"ok"`.
-#[allow(dead_code)]
-pub(crate) fn run_load_auth<F>(eval: F, blob: &AuthBlob) -> EngineResult<()>
-where
-    F: Fn(&str, Duration) -> EngineResult<String>,
-{
-    let payload = std::str::from_utf8(&blob.bytes)
-        .map_err(|e| EngineError::Other(format!("auth blob not utf8: {e}")))?;
-    let payload_lit = serde_json::to_string(payload)
-        .map_err(|e| EngineError::Other(format!("auth blob json-encode: {e}")))?;
-    let body = AUTH_LOAD_BODY_JS;
-    let js = format!("(function() {{ const blob = JSON.parse({payload_lit}); {body} }})()");
-    let result = eval(&js, Duration::from_secs(5))?;
-    let unwrapped = serde_json::from_str::<String>(&result).unwrap_or(result);
-    if unwrapped == "ok" {
-        Ok(())
-    } else {
-        Err(EngineError::Other(format!(
-            "load_auth: unexpected: {unwrapped}"
-        )))
-    }
-}
+use super::{IDB_LOAD_BODY_JS, IDB_SAVE_JS, STORAGE_LOAD_BODY_JS, STORAGE_SAVE_JS};
 
 /// Captured storage state from `STORAGE_SAVE_JS`. Cookies live in a
 /// separate host-side payload because `document.cookie` can't see

@@ -218,7 +218,7 @@ static DISPATCHER: OnceLock<Option<Box<dyn InputDispatcher + 'static>>> = OnceLo
 
 /// Resolve (and cache) the dispatcher. Returns `Err(Unsupported)` if
 /// neither backend is available — the caller is the `cursor_op` impl
-/// in `wpe.rs`, which propagates the error as `ENGINE_UNSUPPORTED` on
+/// in `wpe`, which propagates the error as `ENGINE_UNSUPPORTED` on
 /// the wire.
 pub(crate) fn dispatcher() -> EngineResult<&'static (dyn InputDispatcher + 'static)> {
     let cell = DISPATCHER.get_or_init(detect);
@@ -229,17 +229,6 @@ pub(crate) fn dispatcher() -> EngineResult<&'static (dyn InputDispatcher + 'stat
             primitive: "cursor_op",
         }),
     }
-}
-
-/// Public-side helper used by `wpe.rs::WpeBackend::capabilities()`:
-/// returns the backend name (`"xtest"` / `"libei"`) if input dispatch
-/// is available, or `None` if it isn't.
-#[allow(dead_code)]
-pub(crate) fn active_backend_name() -> Option<&'static str> {
-    DISPATCHER
-        .get_or_init(detect)
-        .as_deref()
-        .map(InputDispatcher::backend_name)
 }
 
 /// The X keysym that produces `ch`.

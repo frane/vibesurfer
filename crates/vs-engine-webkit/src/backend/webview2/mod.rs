@@ -14,16 +14,12 @@
 //!
 //! # Status
 //!
-//! Full-surface implementation, written from the WebView2 docs +
-//! `webview2-com` sample. **Not verified on macOS** — this file is
-//! `cfg(target_os = "windows")` and only compiles when targeting
-//! Windows with the WebView2 SDK + Runtime installed. The CI matrix
-//! at `.github/workflows/m6.yml` runs the full M6 suite on
-//! `windows-latest`; the maintainer manually verifies the run before
-//! flipping the Windows column to `yes` in `REALITY_CHECK.md`.
+//! Implements every primitive on [`Engine`]. The `engine-tests` workflow
+//! runs the real-browser cell suite on it on `windows-latest`. Built only
+//! for Windows.
 //!
 //! Capability flags follow the same per-page-bool + aggregate pattern
-//! Mac (`webkit/mod.rs`) and Linux (`wpe.rs`) use: `inspector_*`
+//! Mac (`webkit/mod.rs`) and Linux (`wpe/mod.rs`) use: `inspector_*`
 //! goes `true` only when the install path actually succeeded.
 
 mod capture;
@@ -62,7 +58,6 @@ use script::execute_script;
 // Per-page state
 // =============================================================================
 
-#[allow(dead_code)]
 struct W2Page {
     /// CompositionController is the v0.1.11 input-injection path:
     /// `SendMouseInput` only exists on this variant (the regular
@@ -74,6 +69,9 @@ struct W2Page {
     /// guarantees both interfaces are implemented by the same object.
     controller: ICoreWebView2Controller,
     web_view: ICoreWebView2,
+    /// The page's message-only host window. Never read: `close` does not
+    /// destroy it yet, so a closed page leaves the window behind.
+    #[allow(dead_code)]
     parent_hwnd: HWND,
     /// DirectComposition device — owns the visual tree the WebView2
     /// renders into. `Commit` was called once at setup; we hold the

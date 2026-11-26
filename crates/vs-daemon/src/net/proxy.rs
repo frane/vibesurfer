@@ -277,7 +277,7 @@ fn exchange(
 }
 
 /// The header the macOS loopback scheme handler (`vs-engine-webkit`'s
-/// `loopback.rs`) marks its requests with. It reports a closed
+/// `webkit::loopback`) marks its requests with. It reports a closed
 /// connection as a network error itself, so an abort is a plain close
 /// for it, without the head CFNetwork needs. Taken off before anything
 /// else sees the request.

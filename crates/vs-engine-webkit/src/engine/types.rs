@@ -31,7 +31,7 @@ pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKi
 
 /// Windows runs WebView2, which *is* Chromium. There is no honest
 /// Safari string for it, and the engine's own default already names
-/// the right browser and OS — see `webview2.rs`, which no longer
+/// the right browser and OS — see `webview2`, which no longer
 /// overrides it. This constant exists only so the shared code
 /// compiles; nothing applies it on Windows.
 #[cfg(target_os = "windows")]

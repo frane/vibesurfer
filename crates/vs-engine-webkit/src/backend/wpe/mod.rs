@@ -10,15 +10,9 @@
 //!
 //! # Status
 //!
-//! Real WebKitGTK-backed implementation of every primitive on the
-//! [`Engine`] trait: open / close / snapshot / act / wait / layout /
-//! set_viewport / save_auth / load_auth — plus inspector capture
-//! (console + network) wired through the `UserContentManager` script-
-//! message bridge. `capture` is the only outstanding piece (a TODO in
-//! a follow-up that calls `WebView::snapshot`).
-//!
-//! Verified on Linux CI with `libwebkitgtk-6.0-dev` + `libgtk-4-dev`
-//! installed; this file is not built on macOS.
+//! Implements every primitive on [`Engine`]. The `engine-tests` workflow
+//! runs the real-browser cell suite on it under Xvfb, with
+//! `libwebkitgtk-6.0-dev` and `libgtk-4-dev` installed. Not built on macOS.
 
 mod cookies;
 mod engine_impl;

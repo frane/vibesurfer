@@ -10,7 +10,7 @@
 //! the host's own interface addresses go direct whatever the config
 //! says (match domains, `prohibit_direct` and the legacy proxy
 //! dictionary do not change that). Pages served from loopback get a
-//! scheme-handler web view instead; see `loopback.rs`.
+//! scheme-handler web view instead; see `loopback`.
 
 use std::ffi::{c_char, CString};
 

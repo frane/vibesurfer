@@ -322,42 +322,28 @@ fn obj(props: &[(&str, Value)]) -> Value {
     })
 }
 
-fn str_prop(desc: &str, required: bool) -> Value {
-    let mut v = json!({ "type": "string", "description": desc });
+/// A property schema with its description, marked for [`obj`] to hoist
+/// into the parent's `required` list when `required`.
+fn prop(mut v: Value, desc: &str, required: bool) -> Value {
+    v["description"] = desc.into();
     if required {
-        v.as_object_mut()
-            .unwrap()
-            .insert("required".into(), Value::Bool(true));
+        v["required"] = Value::Bool(true);
     }
     v
+}
+
+fn str_prop(desc: &str, required: bool) -> Value {
+    prop(json!({ "type": "string" }), desc, required)
 }
 
 fn uint_prop(desc: &str, required: bool) -> Value {
-    let mut v = json!({ "type": "integer", "minimum": 0, "description": desc });
-    if required {
-        v.as_object_mut()
-            .unwrap()
-            .insert("required".into(), Value::Bool(true));
-    }
-    v
+    prop(json!({ "type": "integer", "minimum": 0 }), desc, required)
 }
 
 fn num_prop(desc: &str, required: bool) -> Value {
-    let mut v = json!({ "type": "number", "description": desc });
-    if required {
-        v.as_object_mut()
-            .unwrap()
-            .insert("required".into(), Value::Bool(true));
-    }
-    v
+    prop(json!({ "type": "number" }), desc, required)
 }
 
 fn bool_prop(desc: &str, required: bool) -> Value {
-    let mut v = json!({ "type": "boolean", "description": desc });
-    if required {
-        v.as_object_mut()
-            .unwrap()
-            .insert("required".into(), Value::Bool(true));
-    }
-    v
+    prop(json!({ "type": "boolean" }), desc, required)
 }

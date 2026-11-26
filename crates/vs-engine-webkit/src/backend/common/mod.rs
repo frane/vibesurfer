@@ -174,17 +174,6 @@ window.addEventListener('dragstart', function (e) {
 }, true);
 ";
 
-/// JS that snapshots cookies + localStorage + sessionStorage as a JSON
-/// blob. Used by `save_auth` on every backend.
-#[allow(dead_code)] // used by wpe + webview2; WkBackend moved to host-side cookie store
-pub(crate) const AUTH_SAVE_JS: &str = include_str!("../auth_save.js");
-
-/// JS that restores the JSON blob produced by [`AUTH_SAVE_JS`]. The
-/// caller wraps this in an IIFE that defines `blob` from
-/// `JSON.parse(<payload>)`.
-#[allow(dead_code)]
-pub(crate) const AUTH_LOAD_BODY_JS: &str = include_str!("../auth_load_body.js");
-
 /// JS that snapshots only localStorage + sessionStorage. The cookie
 /// portion is handled by the host-side cookie store API (which sees
 /// HttpOnly cookies; `document.cookie` does not).

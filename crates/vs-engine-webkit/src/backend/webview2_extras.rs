@@ -1,5 +1,5 @@
 //! WebView2 parts of popups, dialogs and per-frame evaluation, kept out
-//! of `webview2.rs`'s page bring-up. The model matches the WebKit
+//! of the `webview2` page bring-up. The model matches the WebKit
 //! backends: pages with real popups (`Engine::set_popups`) report new
 //! windows, `window.close()` and JavaScript dialogs on the thread-safe
 //! [`PopupFeed`]; a dialog is held (a deferral) until a client answers
