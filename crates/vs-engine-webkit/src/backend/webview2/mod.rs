@@ -27,9 +27,12 @@ mod cookies;
 mod engine_impl;
 mod host;
 mod input;
+mod launch;
+mod navigation;
 mod script;
 #[cfg(test)]
 mod tests;
+pub(in crate::backend) mod wait;
 
 use std::collections::HashMap;
 use std::path::PathBuf;

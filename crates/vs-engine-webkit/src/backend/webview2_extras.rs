@@ -22,16 +22,16 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_SCRIPT_DIALOG_KIND_PROMPT,
 };
 use webview2_com::{
-    pwstr_from_str, take_pwstr, ExecuteScriptCompletedHandler, FrameDestroyedEventHandler,
+    take_pwstr, ExecuteScriptCompletedHandler, FrameDestroyedEventHandler,
     FrameNavigationStartingEventHandler,
 };
-use windows::core::{Interface, PWSTR};
+use windows::core::{Interface, HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
 
-use crate::engine::{
-    Dialog, EngineError, EngineResult, PageHandle, PopupEvent, PopupFeed, DIALOG_TIMEOUT,
-};
+use crate::engine::{Dialog, EngineResult, PageHandle, PopupEvent, PopupFeed, DIALOG_TIMEOUT};
+
+use super::webview2::wait::{failed, run_async, CALL_BUDGET};
 
 /// A page another page opened, not yet adopted by the backend.
 pub(super) struct Born<P> {
@@ -169,8 +169,8 @@ unsafe extern "system" fn check_dialogs(_: HWND, _: u32, _: usize, _: u32) {
         if let Some(a) = answer.filter(|a| a.accept) {
             if p.kind == COREWEBVIEW2_SCRIPT_DIALOG_KIND_PROMPT {
                 let text = a.text.unwrap_or(p.default);
-                let w = pwstr_from_str(&text);
-                let _ = unsafe { p.args.SetResultText(windows::core::PCWSTR(w.0)) };
+                let w = HSTRING::from(text);
+                let _ = unsafe { p.args.SetResultText(PCWSTR(w.as_ptr())) };
             }
             let _ = unsafe { p.args.Accept() };
         }
@@ -260,22 +260,20 @@ pub(super) fn find_frame(frames: &Frames, frame: &str) -> Option<ICoreWebView2Fr
 /// `ExecuteScript` in one frame; the JSON-encoded result, as for the
 /// main frame.
 pub(super) fn execute_in_frame(frame: &ICoreWebView2Frame2, js: &str) -> EngineResult<String> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let js = js.to_string();
-    let target = frame.clone();
-    ExecuteScriptCompletedHandler::wait_for_async_operation(
-        Box::new(move |handler| {
-            let w = pwstr_from_str(&js);
-            unsafe { target.ExecuteScript(windows::core::PCWSTR(w.0), &handler) }
-                .map_err(webview2_com::Error::WindowsError)
-        }),
-        Box::new(move |error_code, result_json| {
-            error_code?;
-            let _ = tx.send(result_json);
-            Ok(())
-        }),
+    let js = HSTRING::from(js);
+    run_async(
+        "ExecuteScript in frame",
+        CALL_BUDGET,
+        |tx| {
+            ExecuteScriptCompletedHandler::create(Box::new(move |error, json| {
+                let _ = tx.send(
+                    error
+                        .map(|()| json)
+                        .map_err(|e| failed("ExecuteScript in frame", &e)),
+                );
+                Ok(())
+            }))
+        },
+        |h| unsafe { frame.ExecuteScript(PCWSTR(js.as_ptr()), h) },
     )
-    .map_err(|e| EngineError::Other(format!("ExecuteScript in frame: {e:?}")))?;
-    rx.recv()
-        .map_err(|_| EngineError::Other("ExecuteScript in frame: channel closed".into()))
 }

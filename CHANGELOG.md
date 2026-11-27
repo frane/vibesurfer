@@ -9,6 +9,8 @@ All notable changes to vibesurfer are recorded here. The format follows
 ### Fixed
 - `vs auth webauthn` works on Linux and Windows. It returned `ENGINE_UNSUPPORTED` there; the virtual authenticator is now added as a document-start script on every engine, and its test runs on all three.
 - Windows: closing a page destroys its hidden host window. Every closed page, and every page that failed to open, left one behind for the daemon's lifetime. Each page now owns its window. Unit test `closing_pages_leaves_no_host_window`, run by the Windows engine-tests job.
+- Windows: no WebView2 call waits forever any more. `open`, `goto`, scripts, DevTools calls, cookies and captures waited for their completion with no deadline, so one that never came (a server that accepts and never answers was enough) stopped the daemon's main thread and every later call queued behind it. Navigation now has the 15 s budget macOS and Linux use (`VS_NAV_BUDGET_MS`), with a page that has started loading counted as open, as on macOS; starting the browser has 45 s, other calls 30 s. Unit test `open_on_a_server_that_never_answers_times_out`.
+- Windows: every script run leaked a copy of its source (the `view` snapshot script each time), and so did each `goto` URL and prompt answer. Strings passed to WebView2 are now freed.
 
 ## [0.2.21] - 2026-11-26
 

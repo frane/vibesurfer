@@ -3,18 +3,18 @@
 //! `document.cookie` can't see or write `HttpOnly` cookies, the cookie
 //! manager can, so auth save and load go through here on every backend.
 
-use std::sync::mpsc;
-
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2, ICoreWebView2Cookie, ICoreWebView2CookieList, ICoreWebView2CookieManager,
     ICoreWebView2_2, COREWEBVIEW2_COOKIE_SAME_SITE_KIND_LAX,
     COREWEBVIEW2_COOKIE_SAME_SITE_KIND_NONE, COREWEBVIEW2_COOKIE_SAME_SITE_KIND_STRICT,
 };
-use webview2_com::{pwstr_from_str, take_pwstr, GetCookiesCompletedHandler};
+use webview2_com::{take_pwstr, GetCookiesCompletedHandler};
 use windows::core::{Interface, BOOL, HSTRING, PCWSTR, PWSTR};
 
 use crate::backend::auth::CookieData;
 use crate::engine::{EngineError, EngineResult};
+
+use super::wait::{failed, run_async, CALL_BUDGET};
 
 fn cookie_manager(web_view: &ICoreWebView2) -> EngineResult<ICoreWebView2CookieManager> {
     // CookieManager is on ICoreWebView2_2, not the base ICoreWebView2.
@@ -27,33 +27,32 @@ fn cookie_manager(web_view: &ICoreWebView2) -> EngineResult<ICoreWebView2CookieM
 
 pub(super) fn get_all_cookies(web_view: &ICoreWebView2) -> EngineResult<Vec<CookieData>> {
     let manager = cookie_manager(web_view)?;
-    let (tx, rx) = mpsc::channel();
-    let empty: HSTRING = HSTRING::new();
-    let manager_for_init = manager.clone();
-    GetCookiesCompletedHandler::wait_for_async_operation(
-        Box::new(move |handler| {
-            unsafe { manager_for_init.GetCookies(PCWSTR(empty.as_ptr()), &handler) }
-                .map_err(webview2_com::Error::WindowsError)
-        }),
-        Box::new(move |hr, list| {
-            hr?;
-            let mut out: Vec<CookieData> = Vec::new();
-            if let Some(list) = list {
-                if let Ok(count) = read_count(&list) {
-                    for i in 0..count {
-                        if let Ok(c) = unsafe { list.GetValueAtIndex(i) } {
-                            out.push(serialize(&c));
+    let every = HSTRING::new();
+    run_async(
+        "GetCookies",
+        CALL_BUDGET,
+        |tx| {
+            GetCookiesCompletedHandler::create(Box::new(move |error, list| {
+                let cookies = error.map(|()| {
+                    let mut out: Vec<CookieData> = Vec::new();
+                    if let Some(list) = list {
+                        if let Ok(count) = read_count(&list) {
+                            for i in 0..count {
+                                if let Ok(c) = unsafe { list.GetValueAtIndex(i) } {
+                                    out.push(serialize(&c));
+                                }
+                            }
                         }
                     }
-                }
-            }
-            let _ = tx.send(out);
-            Ok(())
-        }),
+                    out
+                });
+                let _ = tx.send(cookies.map_err(|e| failed("GetCookies", &e)));
+                Ok(())
+            }))
+        },
+        // An empty URI lists every cookie of the profile.
+        |h| unsafe { manager.GetCookies(PCWSTR(every.as_ptr()), h) },
     )
-    .map_err(|e| EngineError::Other(format!("GetCookies: {e:?}")))?;
-    rx.recv()
-        .map_err(|_| EngineError::Other("GetCookies: channel closed".into()))
 }
 
 /// Delete every cookie of the web view's profile.
@@ -69,21 +68,21 @@ pub(super) fn set_cookies(web_view: &ICoreWebView2, cookies: &[CookieData]) -> E
         if c.name.is_empty() || c.domain.is_empty() {
             continue;
         }
-        let name = pwstr_from_str(&c.name);
-        let value = pwstr_from_str(&c.value);
-        let domain = pwstr_from_str(&c.domain);
+        let name = HSTRING::from(c.name.as_str());
+        let value = HSTRING::from(c.value.as_str());
+        let domain = HSTRING::from(c.domain.as_str());
         let path_str = if c.path.is_empty() {
             "/"
         } else {
             c.path.as_str()
         };
-        let path = pwstr_from_str(path_str);
+        let path = HSTRING::from(path_str);
         let cookie: ICoreWebView2Cookie = unsafe {
             manager.CreateCookie(
-                PCWSTR(name.0),
-                PCWSTR(value.0),
-                PCWSTR(domain.0),
-                PCWSTR(path.0),
+                PCWSTR(name.as_ptr()),
+                PCWSTR(value.as_ptr()),
+                PCWSTR(domain.as_ptr()),
+                PCWSTR(path.as_ptr()),
             )
         }
         .map_err(|e| EngineError::Other(format!("CreateCookie: {e}")))?;
@@ -107,12 +106,6 @@ pub(super) fn set_cookies(web_view: &ICoreWebView2, cookies: &[CookieData]) -> E
         }
         unsafe { manager.AddOrUpdateCookie(&cookie) }
             .map_err(|e| EngineError::Other(format!("AddOrUpdateCookie: {e}")))?;
-        // Free the PWSTR buffers we passed in (LocalAlloc'd by
-        // pwstr_from_str; take_pwstr frees on drop).
-        let _ = take_pwstr(name);
-        let _ = take_pwstr(value);
-        let _ = take_pwstr(domain);
-        let _ = take_pwstr(path);
     }
     Ok(())
 }

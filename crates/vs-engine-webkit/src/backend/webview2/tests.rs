@@ -5,8 +5,13 @@ use windows::core::{HSTRING, PCWSTR};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{FindWindowExW, IsWindow, HWND_MESSAGE};
 
+use std::net::TcpListener;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
+
+use super::wait::pump_until;
 use super::{new_host_hwnd, Webview2Backend};
-use crate::engine::{DataStore, Engine};
+use crate::engine::{DataStore, Engine, EngineError};
 
 /// Message-only windows of the class every page's host window uses.
 fn host_windows() -> usize {
@@ -49,5 +54,46 @@ fn closing_pages_leaves_no_host_window() {
         host_windows(),
         before,
         "closed pages left host windows behind"
+    );
+}
+
+#[test]
+fn a_completion_that_never_comes_times_out() {
+    let (_tx, rx) = mpsc::channel::<()>();
+    let started = Instant::now();
+    let got = pump_until(&rx, Duration::from_millis(300), "test", "never sent");
+    assert!(matches!(got, Err(EngineError::Timeout { .. })), "{got:?}");
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+/// A server that accepts and never answers: the navigation neither
+/// commits nor completes. `open` used to wait for it forever, and every
+/// later call to the daemon queued behind it.
+#[test]
+fn open_on_a_server_that_never_answers_times_out() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let url = format!("http://{}/", listener.local_addr().expect("addr"));
+    // Keep accepted connections open without answering.
+    std::thread::spawn(move || {
+        let held: Vec<_> = listener.incoming().collect();
+        drop(held);
+    });
+    std::env::set_var("VS_NAV_BUDGET_MS", "2000");
+    let mut engine = Webview2Backend::new();
+    let windows_before = host_windows();
+    let started = Instant::now();
+    let got = engine.open(&url, &DataStore::Shared);
+    std::env::remove_var("VS_NAV_BUDGET_MS");
+    assert!(
+        matches!(got, Err(EngineError::Timeout { .. })),
+        "{:?}",
+        got.map(|_| ())
+    );
+    // The browser process start is not charged to the 2 s budget.
+    assert!(started.elapsed() < Duration::from_secs(60));
+    assert_eq!(
+        host_windows(),
+        windows_before,
+        "the failed page left its window"
     );
 }

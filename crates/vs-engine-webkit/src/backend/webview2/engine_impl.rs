@@ -3,22 +3,14 @@
 //! WebView2 helpers in the sibling modules.
 
 use std::path::PathBuf;
-use std::sync::mpsc;
 use std::time::Duration;
 
 use vs_protocol::{Ref, Tree};
 
-use webview2_com::Microsoft::Web::WebView2::Win32::{
-    ICoreWebView2CompositionController, ICoreWebView2Environment, ICoreWebView2Environment3,
-    COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
-};
-use webview2_com::{
-    pwstr_from_str, CallDevToolsProtocolMethodCompletedHandler, CapturePreviewCompletedHandler,
-    CreateCoreWebView2CompositionControllerCompletedHandler,
-    CreateCoreWebView2EnvironmentCompletedHandler, NavigationCompletedEventHandler,
-};
-use windows::core::{Interface, HSTRING};
-use windows::Win32::Foundation::{E_POINTER, RECT};
+use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG;
+use webview2_com::{CallDevToolsProtocolMethodCompletedHandler, CapturePreviewCompletedHandler};
+use windows::core::w;
+use windows::Win32::Foundation::RECT;
 
 use crate::backend::common::SNAPSHOT_DOM_WALKER_JS as SNAPSHOT_JS;
 use crate::engine::{
@@ -28,157 +20,28 @@ use crate::engine::{
 };
 
 use super::cookies;
-use super::host::{host_view, isolated_controller_options, proxied_user_data_dir};
+use super::host::host_view;
 use super::input::{point_at, wv2_drag, wv2_move_along_path, wv2_press_release, wv2_wheel};
+use super::launch::{create_controller, create_environment};
+use super::navigation::navigate_and_wait;
 use super::script::{add_init_script, call_cdp, cdp_click, cdp_key_events, execute_script};
+use super::wait::{failed, run_async, CALL_BUDGET};
 use super::{ViewOrigin, Webview2Backend};
 
 impl Engine for Webview2Backend {
-    // The COM bring-up (environment → composition controller →
-    // DirectComposition device/target/visual → settings → navigate)
-    // is one linear sequence; splitting it would just scatter the
-    // handle plumbing.
-    #[allow(clippy::too_many_lines)]
     fn open(&mut self, url: &str, store: &DataStore) -> EngineResult<PageHandle> {
+        // Environment, then a composition controller on the page's own
+        // window, then the view's wiring (`host_view`), then the load.
         let host = super::new_host_hwnd()?;
-        let parent = host.hwnd();
-
-        // 1. Environment. A proxied session needs its own browser
-        //    process: proxy flags are browser arguments, and every
-        //    environment on one user data folder must pass the same
-        //    ones. So it gets a per-session folder under the temp dir.
-        //    `<-loopback>` stops Chromium's implicit loopback bypass,
-        //    so local test servers are proxied too.
-        let proxied = match store {
-            DataStore::Proxied {
-                key,
-                port,
-                spki_pins,
-                ..
-            } => Some((proxied_user_data_dir(key), *port, spki_pins.clone())),
-            _ => None,
-        };
-        let environment: ICoreWebView2Environment = {
-            let (tx, rx) = mpsc::channel();
-            CreateCoreWebView2EnvironmentCompletedHandler::wait_for_async_operation(
-                Box::new(move |handler| unsafe {
-                    match proxied {
-                        None => {
-                            webview2_com::Microsoft::Web::WebView2::Win32::CreateCoreWebView2Environment(
-                                &handler,
-                            )
-                        }
-                        Some((dir, port, pins)) => {
-                            // The proxy answers TLS with leaves from the
-                            // daemon's CA. Chromium accepts a chain with
-                            // any of these public keys despite the
-                            // unknown root; the flag applies to this
-                            // session's browser process only. Edge's own
-                            // background traffic (component updates,
-                            // telemetry) would otherwise reach the proxy
-                            // and the session's event stream as if the
-                            // page had made it.
-                            let options = webview2_com::CoreWebView2EnvironmentOptions::default();
-                            options.set_additional_browser_arguments(format!(
-                                "--proxy-server=http://127.0.0.1:{port} --proxy-bypass-list=<-loopback> --ignore-certificate-errors-spki-list={pins} --disable-background-networking --disable-component-update --disable-domain-reliability"
-                            ));
-                            let options: webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2EnvironmentOptions =
-                                options.into();
-                            webview2_com::Microsoft::Web::WebView2::Win32::CreateCoreWebView2EnvironmentWithOptions(
-                                windows::core::PCWSTR::null(),
-                                &HSTRING::from(dir.as_os_str()),
-                                &options,
-                                &handler,
-                            )
-                        }
-                    }
-                    .map_err(webview2_com::Error::WindowsError)
-                }),
-                Box::new(move |error_code, environment| {
-                    error_code?;
-                    tx.send(environment.ok_or_else(|| windows::core::Error::from(E_POINTER)))
-                        .map_err(|_| windows::core::Error::from(E_POINTER))?;
-                    Ok(())
-                }),
-            )
-            .map_err(|e| EngineError::Other(format!("CreateEnvironment: {e:?}")))?;
-            rx.recv()
-                .map_err(|_| EngineError::Other("Environment channel closed".into()))?
-                .map_err(|e| EngineError::Other(format!("Environment: {e}")))?
-        };
-
-        // 2. CompositionController bound to the host HWND. The regular
-        //    `CreateCoreWebView2Controller` returns an
-        //    `ICoreWebView2Controller` that has no input-injection API;
-        //    `CompositionController` is the variant Microsoft documents
-        //    for hosted-rendering / off-screen scenarios where the
-        //    embedder wants to drive `SendMouseInput`. Both interfaces
-        //    are implemented by the same COM object — we keep both
-        //    handles, casting at creation, so the rest of the file
-        //    keeps its `controller.SetBounds` / `controller.CoreWebView2`
-        //    pattern unchanged.
-        let env3: ICoreWebView2Environment3 = environment
-            .cast::<ICoreWebView2Environment3>()
-            .map_err(|e| EngineError::Other(format!("cast Environment3: {e}")))?;
-        //
-        //    An isolated session's pages open in an InPrivate profile
-        //    named after the session: pages of the session share it,
-        //    nothing else does, and WebView2 deletes its data once the
-        //    last page using it closes.
-        let iso_options = match store.key() {
-            None => None,
-            Some(key) => Some(isolated_controller_options(&environment, key)?),
-        };
-        let comp_controller: ICoreWebView2CompositionController = {
-            let (tx, rx) = mpsc::channel();
-            let env = env3.clone();
-            CreateCoreWebView2CompositionControllerCompletedHandler::wait_for_async_operation(
-                Box::new(move |handler| unsafe {
-                    match iso_options {
-                        None => env.CreateCoreWebView2CompositionController(parent, &handler),
-                        Some((env10, options)) => env10
-                            .CreateCoreWebView2CompositionControllerWithOptions(
-                                parent, &options, &handler,
-                            ),
-                    }
-                    .map_err(webview2_com::Error::WindowsError)
-                }),
-                Box::new(move |error_code, controller| {
-                    error_code?;
-                    tx.send(controller.ok_or_else(|| windows::core::Error::from(E_POINTER)))
-                        .map_err(|_| windows::core::Error::from(E_POINTER))?;
-                    Ok(())
-                }),
-            )
-            .map_err(|e| EngineError::Other(format!("CreateCompositionController: {e:?}")))?;
-            rx.recv()
-                .map_err(|_| EngineError::Other("Controller channel closed".into()))?
-                .map_err(|e| EngineError::Other(format!("Controller: {e}")))?
-        };
+        let environment = create_environment(store)?;
+        let controller = create_controller(&environment, store, host.hwnd())?;
         let origin = ViewOrigin {
-            environment: environment.clone(),
+            environment,
             profile_key: store.key().map(str::to_string),
             proxied: matches!(store, DataStore::Proxied { .. }),
         };
-        let page = host_view(&origin, host, comp_controller, &self.popups)?;
-        let web_view = page.web_view.clone();
-
-        // 4. Navigate + wait for NavigationCompleted.
-        let (tx, rx) = mpsc::channel();
-        let handler = NavigationCompletedEventHandler::create(Box::new(move |_sender, _args| {
-            let _ = tx.send(());
-            Ok(())
-        }));
-        let mut token: i64 = 0;
-        unsafe { web_view.add_NavigationCompleted(&handler, &raw mut token) }
-            .map_err(|e| EngineError::Other(format!("add_NavigationCompleted: {e}")))?;
-        let url_pwstr = pwstr_from_str(url);
-        unsafe { web_view.Navigate(windows::core::PCWSTR(url_pwstr.0)) }
-            .map_err(|e| EngineError::Other(format!("Navigate: {e}")))?;
-        webview2_com::wait_with_pump(rx)
-            .map_err(|e| EngineError::Other(format!("wait_with_pump: {e:?}")))?;
-        unsafe { web_view.remove_NavigationCompleted(token) }
-            .map_err(|e| EngineError::Other(format!("remove_NavigationCompleted: {e}")))?;
+        let page = host_view(&origin, host, controller, &self.popups)?;
+        navigate_and_wait(&page.web_view, url, "open")?;
 
         let handle = self.alloc_handle();
         page.me.set(Some(handle));
@@ -187,31 +50,10 @@ impl Engine for Webview2Backend {
     }
 
     fn navigate(&mut self, page: PageHandle, url: &str) -> EngineResult<()> {
-        // Step 4 of `open`, against a WebView that already exists. The
-        // document-start scripts survive the navigation, so this only
-        // has to navigate and wait for the completion event.
+        // The document-start scripts survive the navigation, so this
+        // only has to navigate and wait.
         let web_view = self.page_mut(page)?.web_view.clone();
-        let (tx, rx) = mpsc::channel();
-        let handler = NavigationCompletedEventHandler::create(Box::new(move |_sender, _args| {
-            let _ = tx.send(());
-            Ok(())
-        }));
-        let mut token: i64 = 0;
-        unsafe { web_view.add_NavigationCompleted(&handler, &raw mut token) }
-            .map_err(|e| EngineError::Other(format!("add_NavigationCompleted: {e}")))?;
-        let url_pwstr = pwstr_from_str(url);
-        let navigated = unsafe { web_view.Navigate(windows::core::PCWSTR(url_pwstr.0)) }
-            .map_err(|e| EngineError::Other(format!("Navigate: {e}")));
-        let waited = navigated.and_then(|()| {
-            webview2_com::wait_with_pump(rx)
-                .map_err(|e| EngineError::Other(format!("wait_with_pump: {e:?}")))
-        });
-        // Unsubscribe whether or not the navigation worked, so a
-        // failed goto does not leave a handler on the page firing into
-        // a dropped channel for every later navigation.
-        unsafe { web_view.remove_NavigationCompleted(token) }
-            .map_err(|e| EngineError::Other(format!("remove_NavigationCompleted: {e}")))?;
-        waited
+        navigate_and_wait(&web_view, url, "navigate")
     }
 
     fn add_init_script(&mut self, page: PageHandle, source: &str) -> EngineResult<()> {
@@ -320,27 +162,19 @@ impl Engine for Webview2Backend {
         }
         .map_err(|e| EngineError::Other(format!("CreateStreamOnHGlobal: {e}")))?;
 
-        let (tx, rx) = mpsc::channel();
-        let stream_for_handler = stream.clone();
-        CapturePreviewCompletedHandler::wait_for_async_operation(
-            Box::new(move |handler| unsafe {
-                web_view
-                    .CapturePreview(
-                        COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
-                        &stream_for_handler,
-                        &handler,
-                    )
-                    .map_err(webview2_com::Error::WindowsError)
-            }),
-            Box::new(move |error_code| {
-                error_code?;
-                let _ = tx.send(());
-                Ok(())
-            }),
-        )
-        .map_err(|e| EngineError::Other(format!("CapturePreview: {e:?}")))?;
-        rx.recv()
-            .map_err(|_| EngineError::Other("CapturePreview channel closed".into()))?;
+        run_async(
+            "CapturePreview",
+            CALL_BUDGET,
+            |tx| {
+                CapturePreviewCompletedHandler::create(Box::new(move |error| {
+                    let _ = tx.send(error.map_err(|e| failed("CapturePreview", &e)));
+                    Ok(())
+                }))
+            },
+            |h| unsafe {
+                web_view.CapturePreview(COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, &stream, h)
+            },
+        )?;
 
         // Read the IStream into bytes and write to disk.
         unsafe {
@@ -439,16 +273,8 @@ impl Engine for Webview2Backend {
         // for the reply would pump messages forever. ProcessFailed
         // reports the crash.
         let done = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(|_, _| Ok(())));
-        let m = pwstr_from_str("Page.crash");
-        let p = pwstr_from_str("{}");
-        unsafe {
-            web_view.CallDevToolsProtocolMethod(
-                windows::core::PCWSTR(m.0),
-                windows::core::PCWSTR(p.0),
-                &done,
-            )
-        }
-        .map_err(|e| EngineError::Other(format!("Page.crash: {e}")))?;
+        unsafe { web_view.CallDevToolsProtocolMethod(w!("Page.crash"), w!("{}"), &done) }
+            .map_err(|e| EngineError::Other(format!("Page.crash: {e}")))?;
         Ok(())
     }
 

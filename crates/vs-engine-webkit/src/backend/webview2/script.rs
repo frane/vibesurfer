@@ -2,44 +2,40 @@
 //! calls (clicks and keys), document-start scripts and the inspector
 //! message bridge.
 
-use std::sync::mpsc;
-
 use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2;
 use webview2_com::{
-    pwstr_from_str, take_pwstr, AddScriptToExecuteOnDocumentCreatedCompletedHandler,
+    take_pwstr, AddScriptToExecuteOnDocumentCreatedCompletedHandler,
     CallDevToolsProtocolMethodCompletedHandler, ExecuteScriptCompletedHandler,
     WebMessageReceivedEventHandler,
 };
-use windows::core::PWSTR;
+use windows::core::{HSTRING, PCWSTR, PWSTR};
 
 use crate::backend::inspector_bridge::{
     self, InspectorSlots, NetworkIngestSlot, CONSOLE_HANDLER, NETWORK_HANDLER,
 };
 use crate::engine::{EngineError, EngineResult};
 
-/// Synchronously call `webview.ExecuteScript(js)` and return the
-/// JSON-encoded result. Pumps the Win32 message loop while waiting.
+use super::wait::{failed, run_async, CALL_BUDGET};
+
+/// Call `webview.ExecuteScript(js)` and return the JSON-encoded
+/// result, pumping messages while it runs (see [`run_async`]).
 pub(super) fn execute_script(web_view: &ICoreWebView2, js: &str) -> EngineResult<String> {
-    let (tx, rx) = mpsc::channel();
-    let js_owned = js.to_string();
-    let web_view_owned: ICoreWebView2 = web_view.clone();
-    ExecuteScriptCompletedHandler::wait_for_async_operation(
-        Box::new(move |handler| {
-            let pwstr = pwstr_from_str(&js_owned);
-            unsafe { web_view_owned.ExecuteScript(windows::core::PCWSTR(pwstr.0), &handler) }
-                .map_err(webview2_com::Error::WindowsError)
-        }),
-        Box::new(move |error_code, result_json| {
-            error_code?;
-            let _ = tx.send(result_json);
-            Ok(())
-        }),
+    let js = HSTRING::from(js);
+    run_async(
+        "ExecuteScript",
+        CALL_BUDGET,
+        |tx| {
+            ExecuteScriptCompletedHandler::create(Box::new(move |error, json| {
+                let _ = tx.send(
+                    error
+                        .map(|()| json)
+                        .map_err(|e| failed("ExecuteScript", &e)),
+                );
+                Ok(())
+            }))
+        },
+        |h| unsafe { web_view.ExecuteScript(PCWSTR(js.as_ptr()), h) },
     )
-    .map_err(|e| EngineError::Other(format!("ExecuteScript: {e:?}")))?;
-    let json = rx
-        .recv()
-        .map_err(|_| EngineError::Other("ExecuteScript: channel closed".into()))?;
-    Ok(json)
 }
 
 /// Call a DevTools Protocol method on `web_view` and return its JSON
@@ -57,32 +53,21 @@ pub(super) fn call_cdp(
     method: &str,
     params_json: &str,
 ) -> EngineResult<String> {
-    let (tx, rx) = mpsc::channel();
-    let method_owned = method.to_string();
-    let params_owned = params_json.to_string();
-    let web_view_owned: ICoreWebView2 = web_view.clone();
-    CallDevToolsProtocolMethodCompletedHandler::wait_for_async_operation(
-        Box::new(move |handler| {
-            let m = pwstr_from_str(&method_owned);
-            let p = pwstr_from_str(&params_owned);
-            unsafe {
-                web_view_owned.CallDevToolsProtocolMethod(
-                    windows::core::PCWSTR(m.0),
-                    windows::core::PCWSTR(p.0),
-                    &handler,
-                )
-            }
-            .map_err(webview2_com::Error::WindowsError)
-        }),
-        Box::new(move |error_code, result_json| {
-            error_code?;
-            let _ = tx.send(result_json);
-            Ok(())
-        }),
+    let (m, p) = (HSTRING::from(method), HSTRING::from(params_json));
+    let what = format!("CallDevToolsProtocolMethod({method})");
+    run_async(
+        "CallDevToolsProtocolMethod",
+        CALL_BUDGET,
+        |tx| {
+            CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |error, json| {
+                let _ = tx.send(error.map(|()| json).map_err(|e| failed(&what, &e)));
+                Ok(())
+            }))
+        },
+        |h| unsafe {
+            web_view.CallDevToolsProtocolMethod(PCWSTR(m.as_ptr()), PCWSTR(p.as_ptr()), h)
+        },
     )
-    .map_err(|e| EngineError::Other(format!("CallDevToolsProtocolMethod({method}): {e:?}")))?;
-    rx.recv()
-        .map_err(|_| EngineError::Other("CallDevToolsProtocolMethod: channel closed".into()))
 }
 
 /// A click with another button, count or modifiers, as DevTools input
@@ -179,32 +164,29 @@ pub(super) fn add_init_script(web_view: &ICoreWebView2, js: &str) -> EngineResul
     if NO_WAIT.with(std::cell::Cell::get) {
         let done =
             AddScriptToExecuteOnDocumentCreatedCompletedHandler::create(Box::new(|_, _| Ok(())));
-        let w = pwstr_from_str(js);
-        unsafe { web_view.AddScriptToExecuteOnDocumentCreated(windows::core::PCWSTR(w.0), &done) }
+        let w = HSTRING::from(js);
+        unsafe { web_view.AddScriptToExecuteOnDocumentCreated(PCWSTR(w.as_ptr()), &done) }
             .map_err(|e| EngineError::Other(format!("AddScriptToExecuteOnDocumentCreated: {e}")))?;
         return Ok(String::new());
     }
-    let (tx, rx) = mpsc::channel();
-    let js_owned = js.to_string();
-    let web_view_owned: ICoreWebView2 = web_view.clone();
-    AddScriptToExecuteOnDocumentCreatedCompletedHandler::wait_for_async_operation(
-        Box::new(move |handler| {
-            let pwstr = pwstr_from_str(&js_owned);
-            unsafe {
-                web_view_owned
-                    .AddScriptToExecuteOnDocumentCreated(windows::core::PCWSTR(pwstr.0), &handler)
-            }
-            .map_err(webview2_com::Error::WindowsError)
-        }),
-        Box::new(move |error_code, script_id| {
-            error_code?;
-            let _ = tx.send(script_id);
-            Ok(())
-        }),
+    let js = HSTRING::from(js);
+    run_async(
+        "AddScriptToExecuteOnDocumentCreated",
+        CALL_BUDGET,
+        |tx| {
+            AddScriptToExecuteOnDocumentCreatedCompletedHandler::create(Box::new(
+                move |error, id| {
+                    let _ = tx.send(
+                        error
+                            .map(|()| id)
+                            .map_err(|e| failed("AddScriptToExecuteOnDocumentCreated", &e)),
+                    );
+                    Ok(())
+                },
+            ))
+        },
+        |h| unsafe { web_view.AddScriptToExecuteOnDocumentCreated(PCWSTR(js.as_ptr()), h) },
     )
-    .map_err(|e| EngineError::Other(format!("AddScriptToExecuteOnDocumentCreated: {e:?}")))?;
-    rx.recv()
-        .map_err(|_| EngineError::Other("AddScript: channel closed".into()))
 }
 
 /// Run the inspector install path: subscribe `WebMessageReceived`
