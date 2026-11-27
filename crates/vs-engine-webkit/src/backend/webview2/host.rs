@@ -15,7 +15,7 @@ use webview2_com::{
     WindowCloseRequestedEventHandler,
 };
 use windows::core::{Interface, HSTRING, PWSTR};
-use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::DirectComposition::{
     DCompositionCreateDevice2, IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,
 };
@@ -25,7 +25,7 @@ use crate::engine::{EngineError, EngineResult, PageHandle};
 
 use super::capture::{install_download_capture, install_response_capture};
 use super::script::{add_init_script, install_inspector, without_waiting};
-use super::{new_host_hwnd, Popups, ViewOrigin, W2Page};
+use super::{new_host_hwnd, HostWindow, Popups, ViewOrigin, W2Page};
 
 /// Controller options for an isolated session: InPrivate, with a
 /// profile name derived from `key` so the session's pages share one
@@ -97,7 +97,7 @@ pub(super) fn proxied_user_data_dir(key: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("vibesurfer-intercept-{name}"))
 }
 
-/// Make `comp_controller` (hosted on `parent`) a page: DirectComposition
+/// Make `comp_controller` (hosted on `host`) a page: DirectComposition
 /// wiring, bounds, visibility and focus, the inspector bridge, download
 /// and response capture, and the new-window, close, dialog and frame
 /// handlers. Used for pages `open` creates and for windows a page opens,
@@ -106,7 +106,7 @@ pub(super) fn proxied_user_data_dir(key: &str) -> std::path::PathBuf {
 #[allow(clippy::too_many_lines)]
 pub(super) fn host_view(
     origin: &ViewOrigin,
-    parent: HWND,
+    host: HostWindow,
     comp_controller: ICoreWebView2CompositionController,
     popups: &Popups,
 ) -> EngineResult<W2Page> {
@@ -128,7 +128,7 @@ pub(super) fn host_view(
     };
     let dcomp_target: IDCompositionTarget = unsafe {
         dcomp_device
-            .CreateTargetForHwnd(parent, true)
+            .CreateTargetForHwnd(host.hwnd(), true)
             .map_err(|e| EngineError::Other(format!("CreateTargetForHwnd: {e}")))?
     };
     let dcomp_visual: IDCompositionVisual = unsafe {
@@ -324,7 +324,6 @@ pub(super) fn host_view(
         comp_controller,
         controller,
         web_view,
-        parent_hwnd: parent,
         _dcomp_device: dcomp_device,
         _dcomp_target: dcomp_target,
         _dcomp_visual: dcomp_visual,
@@ -339,6 +338,7 @@ pub(super) fn host_view(
         popups_on,
         me,
         frames,
+        _host: host,
     })
 }
 
@@ -363,7 +363,7 @@ fn spawn_popup(
             let _ = unsafe { deferral.Complete() };
         }
     };
-    let (Ok(parent), Ok(env3)) = (
+    let (Ok(host), Ok(env3)) = (
         new_host_hwnd(),
         origin.environment.cast::<ICoreWebView2Environment3>(),
     ) else {
@@ -379,6 +379,7 @@ fn spawn_popup(
         finish();
         return;
     };
+    let parent = host.hwnd();
     let (origin, args, popups) = (origin.clone(), args.clone(), popups.clone());
     let done = CreateCoreWebView2CompositionControllerCompletedHandler::create(Box::new(
         move |error_code, controller| {
@@ -386,7 +387,7 @@ fn spawn_popup(
                 error_code.map_err(|e| EngineError::Other(format!("popup controller: {e}")))?;
                 let comp = controller
                     .ok_or_else(|| EngineError::Other("popup controller: none".into()))?;
-                let page = without_waiting(|| host_view(&origin, parent, comp, &popups))?;
+                let page = without_waiting(|| host_view(&origin, host, comp, &popups))?;
                 page.popups_on.set(true);
                 unsafe { args.SetNewWindow(&page.web_view) }
                     .map_err(|e| EngineError::Other(format!("SetNewWindow: {e}")))?;

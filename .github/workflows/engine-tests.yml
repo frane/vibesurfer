@@ -106,5 +106,9 @@ jobs:
         with:
           target: ${{ runner.os == 'Linux' && 'x86_64-unknown-linux-gnu' || runner.os == 'Windows' && 'x86_64-pc-windows-msvc' || 'aarch64-apple-darwin' }}
       - uses: Swatinem/rust-cache@v2
+      # Page lifetime on the backend itself: host windows go with their
+      # pages. Sequential, since both tests count process windows.
+      - name: WebView2 backend unit tests
+        run: cargo test -p vs-engine-webkit --lib backend::webview2 -- --test-threads=1
       - name: M6 cell suite (sequential, real WebView2; SEH-traced)
         run: cargo test --test m6 -- --test-threads=1

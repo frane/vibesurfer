@@ -8,6 +8,7 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ### Fixed
 - `vs auth webauthn` works on Linux and Windows. It returned `ENGINE_UNSUPPORTED` there; the virtual authenticator is now added as a document-start script on every engine, and its test runs on all three.
+- Windows: closing a page destroys its hidden host window. Every closed page, and every page that failed to open, left one behind for the daemon's lifetime. Each page now owns its window. Unit test `closing_pages_leaves_no_host_window`, run by the Windows engine-tests job.
 
 ## [0.2.21] - 2026-11-26
 

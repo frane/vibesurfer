@@ -40,7 +40,8 @@ impl Engine for Webview2Backend {
     // handle plumbing.
     #[allow(clippy::too_many_lines)]
     fn open(&mut self, url: &str, store: &DataStore) -> EngineResult<PageHandle> {
-        let parent = self.create_host_hwnd()?;
+        let host = super::new_host_hwnd()?;
+        let parent = host.hwnd();
 
         // 1. Environment. A proxied session needs its own browser
         //    process: proxy flags are browser arguments, and every
@@ -159,7 +160,7 @@ impl Engine for Webview2Backend {
             profile_key: store.key().map(str::to_string),
             proxied: matches!(store, DataStore::Proxied { .. }),
         };
-        let page = host_view(&origin, parent, comp_controller, &self.popups)?;
+        let page = host_view(&origin, host, comp_controller, &self.popups)?;
         let web_view = page.web_view.clone();
 
         // 4. Navigate + wait for NavigationCompleted.

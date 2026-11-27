@@ -28,6 +28,8 @@ mod engine_impl;
 mod host;
 mod input;
 mod script;
+#[cfg(test)]
+mod tests;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -46,7 +48,8 @@ use windows::Win32::Graphics::DirectComposition::{
 };
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, RegisterClassW, HWND_MESSAGE, WINDOW_EX_STYLE, WNDCLASSW, WS_OVERLAPPED,
+    CreateWindowExW, DestroyWindow, RegisterClassW, HWND_MESSAGE, WINDOW_EX_STYLE, WNDCLASSW,
+    WS_OVERLAPPED,
 };
 
 use crate::backend::inspector_bridge::InspectorSlots;
@@ -69,15 +72,11 @@ struct W2Page {
     /// guarantees both interfaces are implemented by the same object.
     controller: ICoreWebView2Controller,
     web_view: ICoreWebView2,
-    /// The page's message-only host window. Never read: `close` does not
-    /// destroy it yet, so a closed page leaves the window behind.
-    #[allow(dead_code)]
-    parent_hwnd: HWND,
     /// DirectComposition device — owns the visual tree the WebView2
     /// renders into. `Commit` was called once at setup; we hold the
     /// device so the visual tree stays alive for the page's lifetime.
     _dcomp_device: IDCompositionDevice,
-    /// Composition target bound to `parent_hwnd`.
+    /// Composition target bound to `host`.
     _dcomp_target: IDCompositionTarget,
     /// Root visual passed to `comp_controller.SetRootVisualTarget`.
     _dcomp_visual: IDCompositionVisual,
@@ -108,6 +107,28 @@ struct W2Page {
     me: std::rc::Rc<std::cell::Cell<Option<PageHandle>>>,
     /// Subframes, for evaluating in one (`webview2_extras`).
     frames: super::webview2_extras::Frames,
+    /// The page's message-only host window. Last, so it is destroyed
+    /// after the composition objects bound to it are released.
+    _host: HostWindow,
+}
+
+/// A page's message-only host window, destroyed when dropped. Every
+/// page owns one (see [`new_host_hwnd`]), so closing a page, or failing
+/// to build one, does not leave a window behind.
+pub(super) struct HostWindow(HWND);
+
+impl HostWindow {
+    fn hwnd(&self) -> HWND {
+        self.0
+    }
+}
+
+impl Drop for HostWindow {
+    fn drop(&mut self) {
+        // SAFETY: the window was created on this thread by
+        // `new_host_hwnd` and is destroyed exactly once, here.
+        let _ = unsafe { DestroyWindow(self.0) };
+    }
 }
 
 /// What a popup's view needs from its opener: the same environment and
@@ -162,10 +183,6 @@ pub struct Webview2Backend {
     /// popup feed, and the page-handle counter.
     popups: Popups,
     captures_dir: Option<PathBuf>,
-    /// Hidden parent HWND used as the root of every WebView2
-    /// controller's host window. Lazily initialized on the first
-    /// `open` call.
-    parent_hwnd: Option<HWND>,
 }
 
 impl Default for Webview2Backend {
@@ -263,7 +280,6 @@ impl Webview2Backend {
             pages: HashMap::new(),
             popups: Popups::default(),
             captures_dir: None,
-            parent_hwnd: None,
         }
     }
 
@@ -301,15 +317,6 @@ impl Webview2Backend {
             id: h.0.to_string(),
         })
     }
-
-    /// A host HWND for a new page (see `new_host_hwnd`).
-    fn create_host_hwnd(&mut self) -> EngineResult<HWND> {
-        let hwnd = new_host_hwnd()?;
-        // Remember the most recent HWND only so `Default::default()`
-        // is satisfied; per-page HWNDs live on `W2Page::parent_hwnd`.
-        self.parent_hwnd = Some(hwnd);
-        Ok(hwnd)
-    }
 }
 
 /// Create a fresh message-only HWND to host a page's WebView2
@@ -317,7 +324,7 @@ impl Webview2Backend {
 /// `CreateTargetForHwnd` on a window that already has a target
 /// (`DCOMPOSITION_ERROR_WINDOW_ALREADY_COMPOSED`), so every page gets its
 /// own HWND under the same shared class.
-fn new_host_hwnd() -> EngineResult<HWND> {
+fn new_host_hwnd() -> EngineResult<HostWindow> {
     {
         // SAFETY: CoInitializeEx is required by the caller per the
         // module docs; we ignore RPC_E_CHANGED_MODE (already
@@ -356,6 +363,6 @@ fn new_host_hwnd() -> EngineResult<HWND> {
             )
         }
         .map_err(|e| EngineError::Other(format!("CreateWindowExW: {e}")))?;
-        Ok(hwnd)
+        Ok(HostWindow(hwnd))
     }
 }
