@@ -31,8 +31,9 @@ between them is documented separately in [`PROTOCOL.md`](PROTOCOL.md).
 - One binary, one subcommand per primitive. Reads `~/.vibesurfer/active-session`
   to find the current session id (override with `--session=<id>`).
 - On invocation, probes the daemon's local socket. If unreachable, spawns
-  `vs serve` (detached), waits up to 2s, prints `! DAEMON_START_FAILED`
-  on timeout. Transport is AF_UNIX (`~/.vibesurfer/daemon.sock`) on Unix
+  `vs serve` (detached, stderr appended to `~/.vibesurfer/daemon.log`) and
+  waits for its socket while it runs, up to 60s. A daemon that exits with
+  an error fails the call at once, with the end of that log. Transport is AF_UNIX (`~/.vibesurfer/daemon.sock`) on Unix
   and a Windows named pipe on Windows; the CLI resolves either from the
   same path.
 - Default output is the line protocol from [`PROTOCOL.md`](PROTOCOL.md).

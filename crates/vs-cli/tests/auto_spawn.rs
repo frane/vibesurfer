@@ -30,12 +30,15 @@ use std::time::Duration;
 
 const VS_BIN: &str = env!("CARGO_BIN_EXE_vs");
 
+// Exits non-zero so the CLI stops waiting at once: a clean exit would
+// read as another daemon holding the lock.
 const FAKE_VS_SCRIPT: &str = r#"#!/usr/bin/env bash
 printf '%s\0' "$@" > "$VS_FAKE_LOG"
+exit 1
 "#;
 
 /// Drop a fake `vs` binary into `dir` that just NUL-joins its argv
-/// to `$VS_FAKE_LOG` and exits 0. Returns the path to the fake.
+/// to `$VS_FAKE_LOG` and exits 1. Returns the path to the fake.
 fn fake_vs_bin(dir: &Path) -> std::path::PathBuf {
     let bin = dir.join("fake-vs");
     std::fs::write(&bin, FAKE_VS_SCRIPT).unwrap();
@@ -123,4 +126,40 @@ fn auto_spawn_skipped_with_no_spawn_flag() {
         !argv_log.exists(),
         "--no-spawn must skip auto-spawn, but the fake was invoked",
     );
+}
+
+/// A daemon that dies at start fails the CLI at once, with the end of
+/// its log, instead of after the whole start budget with no trace.
+#[test]
+fn auto_spawn_reports_a_daemon_that_dies() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let bin = dir.path().join("dying-vs");
+    std::fs::write(
+        &bin,
+        "#!/usr/bin/env bash\necho 'gtk4 init: no display' >&2\nexit 3\n",
+    )
+    .unwrap();
+    let mut perm = std::fs::metadata(&bin).unwrap().permissions();
+    perm.set_mode(0o755);
+    std::fs::set_permissions(&bin, perm).unwrap();
+
+    let started = std::time::Instant::now();
+    let out = Command::new(VS_BIN)
+        .arg(format!("--home={}", home.display()))
+        .arg("status")
+        .env("VS_DAEMON_BIN", &bin)
+        .output()
+        .expect("run vs");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "waited {:?}",
+        started.elapsed()
+    );
+    assert!(stderr.contains("the daemon exited"), "{stderr}");
+    assert!(stderr.contains("gtk4 init: no display"), "{stderr}");
+    assert!(home.join("daemon.log").exists());
 }

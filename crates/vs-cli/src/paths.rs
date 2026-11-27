@@ -59,6 +59,12 @@ impl Paths {
         self.root.join("captures")
     }
 
+    /// Where an auto-spawned daemon's stderr (its log) goes.
+    #[must_use]
+    pub fn daemon_log(&self) -> PathBuf {
+        self.root.join("daemon.log")
+    }
+
     /// Where the daemon writes files pulled out of a page by
     /// `vs download`. Mirrors `vs_daemon::config::Paths::downloads`.
     #[must_use]

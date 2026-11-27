@@ -78,8 +78,9 @@ pub fn connect(cli: &Cli, paths: &Paths) -> Result<Client> {
             extra.push(format!("--home={}", home.display()));
         }
         let extra_refs: Vec<&str> = extra.iter().map(String::as_str).collect();
-        spawn::spawn_daemon(&extra_refs)?;
-        spawn::wait_for_socket(&socket, std::time::Duration::from_secs(10))?;
+        let log = paths.daemon_log();
+        let mut daemon = spawn::spawn_daemon(&extra_refs, &log)?;
+        spawn::wait_for_socket(&socket, &mut daemon, &log, spawn::START_BUDGET)?;
     }
     Client::connect(&socket)
 }
