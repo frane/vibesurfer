@@ -242,6 +242,12 @@ impl WkBackend {
             old.setNavigationDelegate(None);
             old.setUIDelegate(None);
             p.window.setContentView(Some(&web_view));
+            // The window sizes its content view to fill it, which threw
+            // away a `set_viewport` size: the page then laid out at the
+            // window's size. Restore the old view's frame and zoom.
+            web_view.setFrame(old.frame());
+            let zoom: f64 = objc2::msg_send![&*old, pageZoom];
+            let _: () = objc2::msg_send![&*web_view, setPageZoom: zoom];
             p.window.makeFirstResponder(Some(&web_view));
         }
         p.web_view = web_view;

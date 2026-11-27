@@ -634,3 +634,32 @@ fn cell_drop_is_native() {
         );
     }
 }
+
+// An intercept page that moves between a loopback host and another one
+// gets a new web view on macOS (the loopback scheme handler, or none).
+// The new view took the host window's size, not the page's viewport,
+// so the page laid out at 1440x900 after `goto` in a 500x500 viewport.
+// Every engine: the viewport survives the navigation.
+#[test]
+fn cell_viewport_survives_a_goto_between_loopback_and_named_hosts() {
+    for _ in each_available_backend() {
+        let ctx = TestContext::start();
+        assert_ok("session-open", &ctx.vs(&["session-open", "--intercept"]));
+        let r = ctx.vs(&["open", "about:blank"]);
+        assert_ok("open", &r);
+        let page = crate::support::body_first(&r);
+        let r = ctx.vs(&["viewport", &page, "500x500", "--dpr", "1"]);
+        assert_ok("viewport", &r);
+        let named = ctx
+            .url("/form.html")
+            .replace("//127.0.0.1:", "//vs.localhost:");
+        for url in [named, ctx.url("/form.html")] {
+            assert_ok("goto", &ctx.vs(&["goto", &page, &url]));
+            assert_eq!(
+                eval_js(&ctx, &page, "innerWidth + 'x' + innerHeight"),
+                "500x500",
+                "after goto {url}"
+            );
+        }
+    }
+}
