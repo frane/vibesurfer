@@ -6,8 +6,10 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.2.22] - 2026-11-27
+
 ### Changed
-- Linux: with Xvfb installed, the daemon runs page windows on an X display of its own. On the host display they showed on the user's screen, trusted input moved the user's pointer, and on any monitor too small for several 1600x1000 page tiles the windows stacked at one spot, where pages took each other's clicks and hover. The private display is sized for 24 tiles (`VS_XVFB_SCREEN=WxH` to change; about 150 MB, since Xvfb allocates it up front), needs no `DISPLAY`, and gives pure Wayland sessions trusted input without portal consent. It exits with the daemon, also when the daemon is killed. `VS_DISPLAY=host`, or no Xvfb, keeps the host display. The Linux engine job now runs every cell under a 1280x1024 host screen, so `cell_pages_keep_their_own_hover` holds on it.
+- Linux: with Xvfb installed, the daemon runs page windows on an X display of its own. On the host display they showed on the user's screen, trusted input moved the user's pointer, and on any monitor too small for several 1600x1000 page tiles the windows stacked at one spot, where pages took each other's clicks and hover. The private display is sized for 25 tiles (`VS_XVFB_SCREEN=WxH` to change; about 150 MB, since Xvfb allocates it up front), needs no `DISPLAY`, and gives pure Wayland sessions trusted input without portal consent. It exits with the daemon, also when the daemon is killed. `VS_DISPLAY=host`, or no Xvfb, keeps the host display. The Linux engine job now runs every cell under a 1280x1024 host screen, so `cell_pages_keep_their_own_hover` holds on it.
 
 ### Fixed
 - `vs auth webauthn` works on Linux and Windows. It returned `ENGINE_UNSUPPORTED` there; the virtual authenticator is now added as a document-start script on every engine, and its test runs on all three.
