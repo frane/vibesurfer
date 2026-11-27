@@ -22,7 +22,6 @@ use crate::engine::{
 use super::cookies;
 use super::host::host_view;
 use super::input::{point_at, wv2_drag, wv2_move_along_path, wv2_press_release, wv2_wheel};
-use super::launch::{create_controller, create_environment};
 use super::navigation::navigate_and_wait;
 use super::script::{add_init_script, call_cdp, cdp_click, cdp_key_events, execute_script};
 use super::wait::{failed, run_async, CALL_BUDGET};
@@ -33,8 +32,7 @@ impl Engine for Webview2Backend {
         // Environment, then a composition controller on the page's own
         // window, then the view's wiring (`host_view`), then the load.
         let host = super::new_host_hwnd()?;
-        let environment = create_environment(store)?;
-        let controller = create_controller(&environment, store, host.hwnd())?;
+        let (environment, controller) = self.launch(store, host.hwnd())?;
         let origin = ViewOrigin {
             environment,
             profile_key: store.key().map(str::to_string),
@@ -47,6 +45,13 @@ impl Engine for Webview2Backend {
         page.me.set(Some(handle));
         self.pages.insert(handle, page);
         Ok(handle)
+    }
+
+    fn drop_store(&mut self, key: &str) -> EngineResult<()> {
+        // An isolated session's InPrivate profile goes with its last
+        // page; a proxied one also has its own browser process.
+        self.forget_environment(key);
+        Ok(())
     }
 
     fn navigate(&mut self, page: PageHandle, url: &str) -> EngineResult<()> {

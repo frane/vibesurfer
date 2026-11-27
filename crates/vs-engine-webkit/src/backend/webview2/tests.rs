@@ -97,3 +97,27 @@ fn open_on_a_server_that_never_answers_times_out() {
         "the failed page left its window"
     );
 }
+
+#[test]
+fn pages_share_one_environment() {
+    let mut engine = Webview2Backend::new();
+    let started = Instant::now();
+    let a = engine
+        .open("about:blank", &DataStore::Shared)
+        .expect("open");
+    let first = started.elapsed();
+    let again = Instant::now();
+    let b = engine
+        .open("about:blank", &DataStore::Isolated("s1".into()))
+        .expect("open isolated");
+    eprintln!("open: first {first:?}, second {:?}", again.elapsed());
+    assert_eq!(
+        engine.environments.len(),
+        1,
+        "isolation is a profile, not a browser"
+    );
+    engine.close(a).expect("close");
+    engine.close(b).expect("close");
+    engine.drop_store("s1").expect("drop_store");
+    assert_eq!(engine.environments.len(), 1, "the shared environment stays");
+}

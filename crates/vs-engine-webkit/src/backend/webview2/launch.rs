@@ -18,6 +18,43 @@ use crate::engine::{DataStore, EngineError, EngineResult};
 
 use super::host::{isolated_controller_options, proxied_user_data_dir};
 use super::wait::{failed, run_async, SETUP_BUDGET};
+use super::Webview2Backend;
+
+impl Webview2Backend {
+    /// The environment and a new composition controller on `parent` for
+    /// a page of `store`.
+    ///
+    /// Environments are kept: creating one per page made every `open`
+    /// pay for it again, and pages of one user data folder share a
+    /// browser process anyway. Should a kept one fail (its browser
+    /// process is gone), it is replaced once.
+    pub(super) fn launch(
+        &mut self,
+        store: &DataStore,
+        parent: HWND,
+    ) -> EngineResult<(ICoreWebView2Environment, ICoreWebView2CompositionController)> {
+        let key = match store {
+            DataStore::Proxied { key, .. } => Some(key.clone()),
+            _ => None,
+        };
+        if let Some(environment) = self.environments.get(&key).cloned() {
+            if let Ok(controller) = create_controller(&environment, store, parent) {
+                return Ok((environment, controller));
+            }
+            self.environments.remove(&key);
+        }
+        let environment = create_environment(store)?;
+        let controller = create_controller(&environment, store, parent)?;
+        self.environments.insert(key, environment.clone());
+        Ok((environment, controller))
+    }
+
+    /// Release a proxied session's environment, so its browser process
+    /// ends with its last page.
+    pub(super) fn forget_environment(&mut self, key: &str) {
+        self.environments.remove(&Some(key.to_string()));
+    }
+}
 
 /// The environment for a page of `store`.
 ///
@@ -26,7 +63,7 @@ use super::wait::{failed, run_async, SETUP_BUDGET};
 /// must pass the same ones. So it gets a per-session folder under the
 /// temp dir. `<-loopback>` stops Chromium's implicit loopback bypass, so
 /// local test servers are proxied too.
-pub(super) fn create_environment(store: &DataStore) -> EngineResult<ICoreWebView2Environment> {
+fn create_environment(store: &DataStore) -> EngineResult<ICoreWebView2Environment> {
     let proxied = match store {
         DataStore::Proxied {
             key,
@@ -81,7 +118,7 @@ pub(super) fn create_environment(store: &DataStore) -> EngineResult<ICoreWebView
 /// isolated session's pages open in an InPrivate profile named after
 /// the session: pages of the session share it, nothing else does, and
 /// WebView2 deletes its data once the last page using it closes.
-pub(super) fn create_controller(
+fn create_controller(
     environment: &ICoreWebView2Environment,
     store: &DataStore,
     parent: HWND,

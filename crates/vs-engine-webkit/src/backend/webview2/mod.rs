@@ -186,6 +186,10 @@ pub struct Webview2Backend {
     /// popup feed, and the page-handle counter.
     popups: Popups,
     captures_dir: Option<PathBuf>,
+    /// Environments by proxied session (`None`: every page not behind a
+    /// proxy), created once and shared by their pages (see
+    /// `launch::Webview2Backend::launch`).
+    environments: HashMap<Option<String>, ICoreWebView2Environment>,
 }
 
 impl Default for Webview2Backend {
@@ -283,6 +287,7 @@ impl Webview2Backend {
             pages: HashMap::new(),
             popups: Popups::default(),
             captures_dir: None,
+            environments: HashMap::new(),
         }
     }
 
