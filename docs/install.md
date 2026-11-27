@@ -18,7 +18,7 @@ npx vibesurfer open https://example.com
 | PowerShell (Windows) | `irm https://raw.githubusercontent.com/frane/vibesurfer/main/install.ps1 \| iex` |
 | Cargo | `cargo install vibesurfer` |
 
-Linux needs WebKitGTK 6. Windows needs the WebView2 runtime (already on Windows 11, available for Windows 10 from Microsoft). The prebuilt binaries carry libvpx for WebM recordings; building with Cargo needs it installed (`brew install libvpx`; `apt install libvpx-dev libclang-dev`; `vcpkg install libvpx` on Windows with `VPX_LIB_DIR` set).
+Linux needs WebKitGTK 6, and Xvfb is recommended (`apt install xvfb`): with it the daemon runs page windows on a display of its own, so they never show on your screen, trusted input never moves your pointer, and parallel pages keep their own pointer and hover on any monitor. It needs no `DISPLAY`, so it also runs on a server. Without Xvfb, page windows go on the host display. `VS_DISPLAY=host` picks the host display anyway; `VS_XVFB_SCREEN=WxH` sizes the private one (default `8016x5016`, room for 24 pages apart, about 150 MB). Windows needs the WebView2 runtime (already on Windows 11, available for Windows 10 from Microsoft). The prebuilt binaries carry libvpx for WebM recordings; building with Cargo needs it installed (`brew install libvpx`; `apt install libvpx-dev libclang-dev`; `vcpkg install libvpx` on Windows with `VPX_LIB_DIR` set).
 
 ## Wiring it into an agent
 

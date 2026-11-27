@@ -712,3 +712,25 @@ fn cell_view_tracks_a_rewritten_document() {
         );
     }
 }
+
+// `vs serve --stop` stops the running daemon. On Linux and Windows it
+// checked the instance lock first, found the daemon holding it, and
+// exited "already running" without stopping anything.
+#[test]
+fn cell_serve_stop_stops_the_daemon() {
+    for _ in crate::support::each_available_backend() {
+        let home = tempfile::tempdir().unwrap();
+        let mut daemon = crate::support::spawn_daemon(home.path());
+        crate::support::assert_ok("status", &crate::support::vs(home.path(), &["status"]));
+        let r = crate::support::vs(home.path(), &["serve", "--stop"]);
+        assert!(
+            !r.stderr.contains("already running"),
+            "serve --stop did not reach the daemon:\n{}",
+            r.stderr
+        );
+        assert!(
+            daemon.exits_within(std::time::Duration::from_secs(15)),
+            "the daemon kept running after serve --stop"
+        );
+    }
+}

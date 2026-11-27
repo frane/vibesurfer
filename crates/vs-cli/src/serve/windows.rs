@@ -27,12 +27,14 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     install_panic_hook();
     install_seh_handler();
     args.paths.ensure_root().context("ensure ~/.vibesurfer")?;
-    let Some(_instance) = instance_or_exit(&args.paths)? else {
-        return Ok(());
-    };
+    // `--stop` targets the running daemon, so it must not wait on the
+    // instance lock that daemon holds: it exited "already running".
     if args.stop {
         return run_stop(&args.paths);
     }
+    let Some(_instance) = instance_or_exit(&args.paths)? else {
+        return Ok(());
+    };
 
     // SAFETY: required first call on this thread before any
     // WebView2 COM API. RPC_E_CHANGED_MODE on second call is fine.

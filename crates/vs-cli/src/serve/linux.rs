@@ -18,11 +18,20 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     init_tracing();
     install_panic_hook();
     args.paths.ensure_root().context("ensure ~/.vibesurfer")?;
+    // `--stop` targets the running daemon, so it must not wait on the
+    // instance lock that daemon holds: it exited "already running".
+    if args.stop {
+        return run_stop(&args.paths);
+    }
     let Some(_instance) = instance_or_exit(&args.paths)? else {
         return Ok(());
     };
-    if args.stop {
-        return run_stop(&args.paths);
+
+    // Page windows on a display of their own when Xvfb is installed
+    // (see `xvfb`). Set up before GTK and before any thread starts.
+    let private_display = super::xvfb::choose();
+    if let Some(d) = &private_display {
+        super::xvfb::use_display(d);
     }
 
     // GTK init must happen on the OS main thread, before any WebView.

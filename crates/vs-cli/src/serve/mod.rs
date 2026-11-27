@@ -24,6 +24,8 @@ mod linux;
 mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
+#[cfg(target_os = "linux")]
+mod xvfb;
 
 use anyhow::{Context as _, Result};
 use vs_daemon::config::Paths as DaemonPaths;

@@ -70,6 +70,19 @@ impl DaemonGuard {
         &self.home
     }
 
+    /// Whether the daemon exits within `budget`, without being told to.
+    #[allow(dead_code)]
+    pub fn exits_within(&mut self, budget: Duration) -> bool {
+        let deadline = std::time::Instant::now() + budget;
+        while std::time::Instant::now() < deadline {
+            if matches!(self.child.try_wait(), Ok(Some(_))) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    }
+
     /// Send SIGTERM and report whether the daemon exited by itself
     /// within `budget`.
     #[cfg(unix)]

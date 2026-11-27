@@ -7,7 +7,7 @@ Anti-bot systems (Cloudflare, hCaptcha, reCAPTCHA, DataDome) check `event.isTrus
 Clicks, cursor moves, drags, wheel turns and typing are native OS input on every engine, so every event carries `isTrusted = true`, as from a real cursor and keyboard:
 
 - **macOS**: `NSEvent` mouse and key events on the `WKWebView`.
-- **Linux**: XTest over `x11rb` (X11, Xwayland), or the RemoteDesktop portal under pure Wayland.
+- **Linux**: XTest over `x11rb` on the daemon's private Xvfb display when Xvfb is installed, whatever the session type. Without it, XTest on the host X11 or Xwayland display, or the RemoteDesktop portal under pure Wayland.
 - **Windows**: `SendMouseInput` on a WebView2 composition controller; keys through the DevTools protocol, since WebView2's visual hosting has no keyboard injection of its own.
 
 That covers `vs act click` on a ref (all engines since 0.2.21) and the coordinate commands `vs click-at`, `vs hover-at`, `vs move-to`, `vs drag`, `vs wheel` and `vs type`. In `human` mode a click is preceded by a Bezier path from the last cursor position with Fitts-law arrival timing, so the pointer reaches the target the way a hand does. `vs type` sends the full keydown, beforeinput, input sequence, which is why DraftJS and ProseMirror editors accept it where `act fill` does not.

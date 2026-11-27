@@ -6,6 +6,9 @@ All notable changes to vibesurfer are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Linux: with Xvfb installed, the daemon runs page windows on an X display of its own. On the host display they showed on the user's screen, trusted input moved the user's pointer, and on any monitor too small for several 1600x1000 page tiles the windows stacked at one spot, where pages took each other's clicks and hover. The private display is sized for 24 tiles (`VS_XVFB_SCREEN=WxH` to change; about 150 MB, since Xvfb allocates it up front), needs no `DISPLAY`, and gives pure Wayland sessions trusted input without portal consent. It exits with the daemon, also when the daemon is killed. `VS_DISPLAY=host`, or no Xvfb, keeps the host display. The Linux engine job now runs every cell under a 1280x1024 host screen, so `cell_pages_keep_their_own_hover` holds on it.
+
 ### Fixed
 - `vs auth webauthn` works on Linux and Windows. It returned `ENGINE_UNSUPPORTED` there; the virtual authenticator is now added as a document-start script on every engine, and its test runs on all three.
 - Windows: closing a page destroys its hidden host window. Every closed page, and every page that failed to open, left one behind for the daemon's lifetime. Each page now owns its window. Unit test `closing_pages_leaves_no_host_window`, run by the Windows engine-tests job.
@@ -13,6 +16,7 @@ All notable changes to vibesurfer are recorded here. The format follows
 - Windows: every script run leaked a copy of its source (the `view` snapshot script each time), and so did each `goto` URL and prompt answer. Strings passed to WebView2 are now freed.
 - Windows: `open` created a new WebView2 environment for every page. Pages now share one (a proxied session keeps its own, released when the session closes), so an open no longer pays to set up the browser again. With several test files opening pages at once this was the difference between a goto taking under a second and 26s. Unit test `pages_share_one_environment`.
 - macOS: an intercept page lost its viewport when `goto` moved it between a loopback host and a named one. That move swaps the page's web view (see the loopback scheme handler), and the new view took the size of its host window, so a page set to 500x500 laid out at the screen's size. The new view now keeps the old one's frame and zoom. Playwright's `should return bounding box` spec failed on it most runs. Cell `cell_viewport_survives_a_goto_between_loopback_and_named_hosts`.
+- Linux and Windows: `vs serve --stop` stopped nothing. It checked the instance lock first, found the running daemon holding it, and exited with "already running". Cell `cell_serve_stop_stops_the_daemon`.
 - A daemon started by `vs` logged nowhere, and `vs` gave up on it after 10s. A cold start on a CI runner took longer, and a daemon that crashed at start left no trace. Its stderr now goes to `~/.vibesurfer/daemon.log`; `vs` waits for it while it runs (up to 60s) and, if it exits with an error, fails at once with the end of the log. Test `auto_spawn_reports_a_daemon_that_dies`.
 
 ## [0.2.21] - 2026-11-26
